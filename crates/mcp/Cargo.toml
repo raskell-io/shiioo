@@ -24,6 +24,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = "0.1"
 tokio-util = { workspace = true, features = ["codec"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = "2.5"
 
 # MCP protocol (JSON-RPC over stdio)
 # For now we'll implement the basic protocol ourselves

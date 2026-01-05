@@ -29,13 +29,24 @@ async fn main() -> Result<()> {
     let event_log = Arc::new(JsonlEventLog::new(data_path.join("events"))?);
     let index_store = Arc::new(RedbIndexStore::new(data_path.join("index.redb"))?);
 
+    // Get repository root (current directory by default)
+    let repo_root = std::env::current_dir()?;
+
     // Create tool registry
     let mut registry = ToolRegistry::new();
 
     // Register Tier 0 tools (read-only)
+
+    // Context tools
     registry.register(Arc::new(ContextGetTool::new(index_store.clone())));
     registry.register(Arc::new(ContextSearchTool::new(index_store.clone())));
     registry.register(Arc::new(ContextEventsTool::new(event_log.clone())));
+
+    // Repository tools
+    registry.register(Arc::new(RepoReadTool::new(repo_root)));
+
+    // Web tools
+    registry.register(Arc::new(WebFetchTool::new()));
 
     tracing::info!("Registered {} tools", registry.list_schemas().len());
 
