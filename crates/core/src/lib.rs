@@ -16,5 +16,6 @@ pub mod metrics;
 pub mod analytics;
 pub mod tenant;
 pub mod cluster;
+pub mod secrets;
 
 pub use types::*;

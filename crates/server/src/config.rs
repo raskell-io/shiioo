@@ -8,6 +8,7 @@ use shiioo_core::metrics::MetricsCollector;
 use shiioo_core::scheduler::RoutineScheduler;
 use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore, TenantStorage};
 use shiioo_core::cluster::NodeId;
+use shiioo_core::secrets::SecretManager;
 use shiioo_core::tenant::TenantManager;
 use shiioo_core::workflow::WorkflowExecutor;
 use std::path::PathBuf;
@@ -110,6 +111,7 @@ pub struct AppState {
     pub tenant_manager: Arc<TenantManager>,
     pub tenant_storage: Arc<TenantStorage>,
     pub cluster_manager: Arc<ClusterManager>,
+    pub secret_manager: Arc<SecretManager>,
 }
 
 impl AppState {
@@ -153,6 +155,11 @@ impl AppState {
         let local_node_id = NodeId::generate();
         let cluster_manager = Arc::new(ClusterManager::new(local_node_id, 30)); // 30 sec heartbeat timeout
 
+        // Phase 8: Secret management
+        // TODO: Load encryption key from environment or config file
+        let encryption_key = b"shiioo-default-secret-key-change-me-in-production!";
+        let secret_manager = Arc::new(SecretManager::new(encryption_key));
+
         Ok(Self {
             blob_store,
             event_log,
@@ -166,6 +173,7 @@ impl AppState {
             tenant_manager,
             tenant_storage,
             cluster_manager,
+            secret_manager,
         })
     }
 }

@@ -67,5 +67,8 @@ cron = "0.13"
 # Directory walking
 walkdir = "2.4"
 
+# Encoding
+base64 = "0.22"
+
 # MCP
 # Note: Will need to add proper MCP protocol dependencies when building that module

@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 7 Complete ✅)
+## Current Status (Phase 8 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -136,6 +136,19 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Leader election** - automatic leader selection with lease-based renewal
   - **Cluster health** - track node status and leader availability
   - **Full API** for tenant and cluster management
+
+- ✅ **Phase 8**: Advanced features
+  - **Secret management** - encrypted storage with rotation policies
+  - **Secret types** - API keys, database passwords, private keys, OAuth credentials
+  - **Secret rotation** - automatic tracking with configurable intervals and grace periods
+  - **Secret versioning** - complete version history with deprecation support
+  - **Parallel-for-each** - execute same step for multiple items in parallel
+  - **Conditional branches** - if/else workflow logic based on runtime conditions
+  - **Dynamic DAG generation** - generate workflow steps at runtime
+  - **Loop constructs** - repeat steps until condition met with safety limits
+  - **Workflow versioning** - track and manage workflow schema versions
+  - **Condition evaluator** - simple expression parser for runtime decisions
+  - **Full API** for secret management and advanced workflow patterns
 
 ### API Endpoints
 **Workflow Management:**
@@ -238,12 +251,23 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `GET /api/cluster/leader` - Get current leader node
   - `GET /api/cluster/health` - Get cluster health status
 
+**Secret Management (Phase 8):**
+  - `GET /api/secrets` - List all secrets (without values)
+  - `GET /api/secrets/{secret_id}` - Get secret metadata
+  - `POST /api/secrets` - Create a new secret
+  - `PUT /api/secrets/{secret_id}` - Update secret metadata
+  - `DELETE /api/secrets/{secret_id}` - Delete a secret
+  - `GET /api/secrets/{secret_id}/value` - Get decrypted secret value
+  - `POST /api/secrets/{secret_id}/rotate` - Rotate a secret (create new version)
+  - `GET /api/secrets/{secret_id}/versions` - Get secret version history
+  - `GET /api/secrets/rotation/needed` - Get secrets needing rotation
+
 ### Coming Next
-- 🚧 **Phase 8**: Advanced features
-  - Secret management and credential rotation
-  - Advanced workflow patterns (parallel-for-each, dynamic DAG)
-  - Workflow versioning and migration
-  - Cross-region replication
+- 🚧 **Phase 9**: Enhanced security and compliance
+  - Audit logging with tamper-proof storage
+  - RBAC with fine-grained permissions
+  - Compliance reporting (SOC2, GDPR, HIPAA)
+  - Security scanning and vulnerability detection
 
 ## Quick Start
 

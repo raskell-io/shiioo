@@ -159,6 +159,7 @@ impl RoutineScheduler {
                     }
                     Err(e) => {
                         tracing::error!("Failed to execute routine {}: {}", routine.name, e);
+                        let error_msg = format!("{}", e);
                         let execution = RoutineExecution {
                             id: uuid::Uuid::new_v4().to_string(),
                             routine_id: routine_id_for_task.clone(),
@@ -166,7 +167,7 @@ impl RoutineScheduler {
                             scheduled_at,
                             executed_at,
                             status: RunStatus::Failed,
-                            error: Some(e.to_string()),
+                            error: Some(error_msg),
                         };
                         executions.lock().unwrap().push(execution);
                     }

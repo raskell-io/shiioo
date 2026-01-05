@@ -2,9 +2,8 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::events::Event;
-use crate::tenant::{TenantId, TenantContext};
-use super::{BlobStore, EventLogStore, IndexStore, FilesystemBlobStore, JsonlEventLog, RedbIndexStore};
+use crate::tenant::TenantId;
+use super::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore};
 
 /// Tenant-scoped blob storage
 pub struct TenantBlobStore {

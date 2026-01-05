@@ -1187,6 +1187,173 @@ pub struct HealthStatusResponse {
 }
 
 // ============================================================================
+// Phase 8: Advanced Features - Secret Management
+// ============================================================================
+
+use shiioo_core::secrets::{Secret, SecretId, SecretType, RotationPolicy};
+
+/// Create a new secret
+pub async fn create_secret(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSecretRequest>,
+) -> ApiResult<Json<Secret>> {
+    let secret = state.secret_manager.create_secret(
+        req.name,
+        req.description,
+        req.secret_type,
+        req.value,
+        req.rotation_policy,
+        req.tags.unwrap_or_default(),
+    )?;
+
+    Ok(Json(secret))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateSecretRequest {
+    pub name: String,
+    pub description: String,
+    pub secret_type: SecretType,
+    pub value: String,
+    pub rotation_policy: Option<RotationPolicy>,
+    pub tags: Option<std::collections::HashMap<String, String>>,
+}
+
+/// List all secrets (without values)
+pub async fn list_secrets(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListSecretsResponse>> {
+    let secrets = state.secret_manager.list_secrets();
+    Ok(Json(ListSecretsResponse { secrets }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListSecretsResponse {
+    pub secrets: Vec<Secret>,
+}
+
+/// Get secret metadata (without value)
+pub async fn get_secret(
+    State(state): State<Arc<AppState>>,
+    Path(secret_id): Path<String>,
+) -> ApiResult<Json<Secret>> {
+    let secret_id = SecretId::new(secret_id);
+
+    let secret = state
+        .secret_manager
+        .get_secret(&secret_id)
+        .ok_or_else(|| anyhow::anyhow!("Secret not found"))?;
+
+    Ok(Json(secret))
+}
+
+/// Get decrypted secret value
+pub async fn get_secret_value(
+    State(state): State<Arc<AppState>>,
+    Path(secret_id): Path<String>,
+) -> ApiResult<Json<SecretValueResponse>> {
+    let secret_id = SecretId::new(secret_id);
+
+    let value = state.secret_manager.get_secret_value(&secret_id)?;
+
+    Ok(Json(SecretValueResponse { value }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecretValueResponse {
+    pub value: String,
+}
+
+/// Rotate a secret (create new version)
+pub async fn rotate_secret(
+    State(state): State<Arc<AppState>>,
+    Path(secret_id): Path<String>,
+    Json(req): Json<RotateSecretRequest>,
+) -> ApiResult<Json<Secret>> {
+    let secret_id = SecretId::new(secret_id);
+
+    let secret = state.secret_manager.rotate_secret(&secret_id, req.new_value)?;
+
+    Ok(Json(secret))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RotateSecretRequest {
+    pub new_value: String,
+}
+
+/// Delete a secret
+pub async fn delete_secret(
+    State(state): State<Arc<AppState>>,
+    Path(secret_id): Path<String>,
+) -> ApiResult<Json<DeleteSecretResponse>> {
+    let secret_id = SecretId::new(secret_id);
+
+    state.secret_manager.delete_secret(&secret_id)?;
+
+    Ok(Json(DeleteSecretResponse {
+        message: format!("Secret {} deleted successfully", secret_id.0),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteSecretResponse {
+    pub message: String,
+}
+
+/// Update secret metadata
+pub async fn update_secret_metadata(
+    State(state): State<Arc<AppState>>,
+    Path(secret_id): Path<String>,
+    Json(req): Json<UpdateSecretMetadataRequest>,
+) -> ApiResult<Json<Secret>> {
+    let secret_id = SecretId::new(secret_id);
+
+    let secret = state.secret_manager.update_secret_metadata(
+        &secret_id,
+        req.name,
+        req.description,
+        req.rotation_policy,
+        req.tags,
+    )?;
+
+    Ok(Json(secret))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateSecretMetadataRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub rotation_policy: Option<RotationPolicy>,
+    pub tags: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Get secret version history
+pub async fn get_secret_versions(
+    State(state): State<Arc<AppState>>,
+    Path(secret_id): Path<String>,
+) -> ApiResult<Json<SecretVersionsResponse>> {
+    let secret_id = SecretId::new(secret_id);
+
+    let versions = state.secret_manager.get_secret_versions(&secret_id);
+
+    Ok(Json(SecretVersionsResponse { versions }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecretVersionsResponse {
+    pub versions: Vec<shiioo_core::secrets::SecretVersion>,
+}
+
+/// Get secrets needing rotation
+pub async fn get_secrets_needing_rotation(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListSecretsResponse>> {
+    let secrets = state.secret_manager.get_secrets_needing_rotation();
+    Ok(Json(ListSecretsResponse { secrets }))
+}
+
+// ============================================================================
 // Phase 7: Multi-tenancy & High Availability
 // ============================================================================
 
