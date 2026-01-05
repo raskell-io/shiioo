@@ -307,7 +307,19 @@ Blobs (prompts, responses, patches, artifacts) are stored by SHA-256 hash:
 
 ## License
 
-MIT OR Apache-2.0
+Business Source License 1.1
+
+Shiioo is licensed under the [Business Source License 1.1](LICENSE). This allows you to:
+- Use Shiioo for internal production workflows
+- Deploy Shiioo to execute your own organization's workflows and jobs
+- Build workflow platforms with abstraction layers on top of Shiioo
+
+The license **does not** permit running a public managed service where third parties can register and execute their own workflows through Shiioo's APIs.
+
+**Change Date:** 4 years after each release
+**Change License:** Apache License, Version 2.0
+
+After the Change Date, Shiioo automatically becomes Apache 2.0 licensed.
 
 ---
 
