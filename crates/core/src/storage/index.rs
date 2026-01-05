@@ -1,6 +1,8 @@
 use crate::types::{
-    CapacitySource, CapacitySourceId, CapacityUsage, OrgId, Organization, PolicyId, PolicySpec,
-    ProcessTemplate, RoleId, RoleSpec, Run, RunId, RunStatus, TemplateId,
+    Approval, ApprovalBoard, ApprovalBoardId, ApprovalId, CapacitySource, CapacitySourceId,
+    CapacityUsage, ConfigChange, ConfigChangeId, OrgId, Organization, PolicyId, PolicySpec,
+    ProcessTemplate, RoleId, RoleSpec, Routine, RoutineExecution, RoutineId, Run, RunId,
+    RunStatus, TemplateId,
 };
 use anyhow::{Context, Result};
 use redb::{Database, ReadableTable, TableDefinition};
@@ -14,6 +16,11 @@ const ORGS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("organizat
 const TEMPLATES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("templates");
 const CAPACITY_SOURCES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("capacity_sources");
 const CAPACITY_USAGE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("capacity_usage");
+const ROUTINES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("routines");
+const ROUTINE_EXECUTIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("routine_executions");
+const APPROVAL_BOARDS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("approval_boards");
+const APPROVALS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("approvals");
+const CONFIG_CHANGES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("config_changes");
 
 /// Index store for fast queries using redb
 #[derive(Clone)]
@@ -54,6 +61,21 @@ impl RedbIndexStore {
             let _capacity_usage_table = write_txn
                 .open_table(CAPACITY_USAGE_TABLE)
                 .context("Failed to open capacity usage table")?;
+            let _routines_table = write_txn
+                .open_table(ROUTINES_TABLE)
+                .context("Failed to open routines table")?;
+            let _routine_executions_table = write_txn
+                .open_table(ROUTINE_EXECUTIONS_TABLE)
+                .context("Failed to open routine executions table")?;
+            let _approval_boards_table = write_txn
+                .open_table(APPROVAL_BOARDS_TABLE)
+                .context("Failed to open approval boards table")?;
+            let _approvals_table = write_txn
+                .open_table(APPROVALS_TABLE)
+                .context("Failed to open approvals table")?;
+            let _config_changes_table = write_txn
+                .open_table(CONFIG_CHANGES_TABLE)
+                .context("Failed to open config changes table")?;
         }
         write_txn.commit().context("Failed to commit transaction")?;
 
@@ -510,6 +532,284 @@ impl RedbIndexStore {
         usage_records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
         Ok(usage_records)
+    }
+
+    /// Store a routine
+    pub fn store_routine(&self, routine: &Routine) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ROUTINES_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &routine.id.0;
+            let value = serde_json::to_vec(routine).context("Failed to serialize routine")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert routine")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get a routine by ID
+    pub fn get_routine(&self, routine_id: &RoutineId) -> Result<Option<Routine>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ROUTINES_TABLE).context("Failed to open table")?;
+
+        let value = table.get(routine_id.0.as_str()).context("Failed to get routine")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let routine: Routine = serde_json::from_slice(bytes).context("Failed to deserialize routine")?;
+                Ok(Some(routine))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all routines
+    pub fn list_routines(&self) -> Result<Vec<Routine>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ROUTINES_TABLE).context("Failed to open table")?;
+
+        let mut routines = Vec::new();
+        for item in table.iter().context("Failed to iterate routines")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let routine: Routine = serde_json::from_slice(value.value())
+                .context("Failed to deserialize routine")?;
+            routines.push(routine);
+        }
+
+        Ok(routines)
+    }
+
+    /// Delete a routine
+    pub fn delete_routine(&self, routine_id: &RoutineId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ROUTINES_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(routine_id.0.as_str())
+                .context("Failed to delete routine")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Store routine execution
+    pub fn store_routine_execution(&self, execution: &RoutineExecution) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ROUTINE_EXECUTIONS_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &execution.id;
+            let value = serde_json::to_vec(execution).context("Failed to serialize execution")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert execution")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// List routine executions
+    pub fn list_routine_executions(&self) -> Result<Vec<RoutineExecution>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ROUTINE_EXECUTIONS_TABLE).context("Failed to open table")?;
+
+        let mut executions = Vec::new();
+        for item in table.iter().context("Failed to iterate executions")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let execution: RoutineExecution = serde_json::from_slice(value.value())
+                .context("Failed to deserialize execution")?;
+            executions.push(execution);
+        }
+
+        executions.sort_by(|a, b| b.executed_at.cmp(&a.executed_at));
+        Ok(executions)
+    }
+
+    /// Store approval board
+    pub fn store_approval_board(&self, board: &ApprovalBoard) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(APPROVAL_BOARDS_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &board.id.0;
+            let value = serde_json::to_vec(board).context("Failed to serialize board")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert board")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get approval board by ID
+    pub fn get_approval_board(&self, board_id: &ApprovalBoardId) -> Result<Option<ApprovalBoard>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(APPROVAL_BOARDS_TABLE).context("Failed to open table")?;
+
+        let value = table.get(board_id.0.as_str()).context("Failed to get board")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let board: ApprovalBoard = serde_json::from_slice(bytes).context("Failed to deserialize board")?;
+                Ok(Some(board))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all approval boards
+    pub fn list_approval_boards(&self) -> Result<Vec<ApprovalBoard>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(APPROVAL_BOARDS_TABLE).context("Failed to open table")?;
+
+        let mut boards = Vec::new();
+        for item in table.iter().context("Failed to iterate boards")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let board: ApprovalBoard = serde_json::from_slice(value.value())
+                .context("Failed to deserialize board")?;
+            boards.push(board);
+        }
+
+        Ok(boards)
+    }
+
+    /// Delete approval board
+    pub fn delete_approval_board(&self, board_id: &ApprovalBoardId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(APPROVAL_BOARDS_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(board_id.0.as_str())
+                .context("Failed to delete board")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Store approval
+    pub fn store_approval(&self, approval: &Approval) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(APPROVALS_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &approval.id.0;
+            let value = serde_json::to_vec(approval).context("Failed to serialize approval")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert approval")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get approval by ID
+    pub fn get_approval(&self, approval_id: &ApprovalId) -> Result<Option<Approval>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(APPROVALS_TABLE).context("Failed to open table")?;
+
+        let value = table.get(approval_id.0.as_str()).context("Failed to get approval")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let approval: Approval = serde_json::from_slice(bytes).context("Failed to deserialize approval")?;
+                Ok(Some(approval))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all approvals
+    pub fn list_approvals(&self) -> Result<Vec<Approval>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(APPROVALS_TABLE).context("Failed to open table")?;
+
+        let mut approvals = Vec::new();
+        for item in table.iter().context("Failed to iterate approvals")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let approval: Approval = serde_json::from_slice(value.value())
+                .context("Failed to deserialize approval")?;
+            approvals.push(approval);
+        }
+
+        approvals.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(approvals)
+    }
+
+    /// Store config change
+    pub fn store_config_change(&self, change: &ConfigChange) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(CONFIG_CHANGES_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &change.id.0;
+            let value = serde_json::to_vec(change).context("Failed to serialize change")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert change")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get config change by ID
+    pub fn get_config_change(&self, change_id: &ConfigChangeId) -> Result<Option<ConfigChange>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(CONFIG_CHANGES_TABLE).context("Failed to open table")?;
+
+        let value = table.get(change_id.0.as_str()).context("Failed to get change")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let change: ConfigChange = serde_json::from_slice(bytes).context("Failed to deserialize change")?;
+                Ok(Some(change))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all config changes
+    pub fn list_config_changes(&self) -> Result<Vec<ConfigChange>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(CONFIG_CHANGES_TABLE).context("Failed to open table")?;
+
+        let mut changes = Vec::new();
+        for item in table.iter().context("Failed to iterate changes")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let change: ConfigChange = serde_json::from_slice(value.value())
+                .context("Failed to deserialize change")?;
+            changes.push(change);
+        }
+
+        changes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(changes)
     }
 }
 

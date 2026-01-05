@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 4 Complete ✅)
+## Current Status (Phase 5 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -101,6 +101,18 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Persistent storage** - capacity sources and usage history in redb
   - **Full API** for capacity management and cost reporting
 
+- ✅ **Phase 5**: Automation & governance
+  - **Cron scheduler** - recurring workflows with simplified cron expression parser
+  - **Routine management** - enable/disable, execution history tracking
+  - **Approval boards** - multi-person approval workflows with quorum rules
+  - **Quorum rules** - Unanimous, Majority, MinCount, Percentage
+  - **Config change management** - propose, approve, and apply configuration changes
+  - **Voting system** - Approve, Reject, Abstain with automatic status resolution
+  - **Governance workflow** - separation of duties for critical changes
+  - **Audit trail** - all approvals and changes logged with timestamps
+  - **Persistent storage** - routines, boards, approvals, and changes in redb
+  - **Full API** for routine, approval, and config change management
+
 ### API Endpoints
 **Workflow Management:**
   - `GET /api/health` - Health check
@@ -145,8 +157,45 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `GET /api/capacity/usage` - List capacity usage records
   - `GET /api/capacity/cost` - Get cost summary (total cost, tokens, requests)
 
+**Routine Management (Phase 5):**
+  - `GET /api/routines` - List all routines
+  - `GET /api/routines/{routine_id}` - Get routine details
+  - `POST /api/routines` - Create a routine
+  - `DELETE /api/routines/{routine_id}` - Delete a routine
+  - `POST /api/routines/{routine_id}/enable` - Enable a routine
+  - `POST /api/routines/{routine_id}/disable` - Disable a routine
+  - `GET /api/routines/{routine_id}/executions` - Get execution history
+
+**Approval Board Management (Phase 5):**
+  - `GET /api/approval-boards` - List all approval boards
+  - `GET /api/approval-boards/{board_id}` - Get board details
+  - `POST /api/approval-boards` - Create an approval board
+  - `DELETE /api/approval-boards/{board_id}` - Delete an approval board
+
+**Approval Management (Phase 5):**
+  - `GET /api/approvals` - List all approvals
+  - `GET /api/approvals/{approval_id}` - Get approval details
+  - `POST /api/approvals/{approval_id}/vote` - Cast a vote
+
+**Config Change Management (Phase 5):**
+  - `GET /api/config-changes` - List all config changes
+  - `GET /api/config-changes/{change_id}` - Get change details
+  - `POST /api/config-changes` - Propose a config change
+  - `POST /api/config-changes/{change_id}/apply` - Apply an approved change
+  - `POST /api/config-changes/{change_id}/reject` - Reject a change
+
 ### Coming Next
-- 🚧 **Phase 5**: Recurring routines + approval boards
+- 🚧 **Phase 6**: Real-time monitoring & observability
+  - Metrics and monitoring dashboard
+  - Real-time workflow status updates via WebSocket
+  - Performance analytics and bottleneck detection
+  - Agent interaction tracing
+
+- 🚧 **Phase 7**: Multi-tenancy & high availability
+  - Multi-tenant isolation
+  - Distributed execution across multiple nodes
+  - Leader election and consensus
+  - Cross-region replication
 
 ## Quick Start
 

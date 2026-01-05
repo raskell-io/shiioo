@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use shiioo_core::approval::ApprovalManager;
+use shiioo_core::config_change::ConfigChangeManager;
+use shiioo_core::scheduler::RoutineScheduler;
 use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore};
 use shiioo_core::workflow::WorkflowExecutor;
 use std::path::PathBuf;
@@ -94,6 +97,9 @@ pub struct AppState {
     pub event_log: Arc<JsonlEventLog>,
     pub index_store: Arc<RedbIndexStore>,
     pub workflow_executor: Arc<WorkflowExecutor>,
+    pub routine_scheduler: Arc<RoutineScheduler>,
+    pub approval_manager: Arc<ApprovalManager>,
+    pub config_change_manager: Arc<ConfigChangeManager>,
 }
 
 impl AppState {
@@ -117,11 +123,19 @@ impl AppState {
             index_store.clone(),
         ));
 
+        // Phase 5: Routine scheduler, approval boards, and config changes
+        let approval_manager = Arc::new(ApprovalManager::new());
+        let config_change_manager = Arc::new(ConfigChangeManager::new(approval_manager.clone()));
+        let routine_scheduler = Arc::new(RoutineScheduler::new(workflow_executor.clone()));
+
         Ok(Self {
             blob_store,
             event_log,
             index_store,
             workflow_executor,
+            routine_scheduler,
+            approval_manager,
+            config_change_manager,
         })
     }
 }

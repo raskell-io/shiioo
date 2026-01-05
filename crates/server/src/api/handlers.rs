@@ -9,11 +9,12 @@ use shiioo_core::{
     claude_compiler::ClaudeCompiler,
     events::EventLog,
     organization::OrganizationManager,
-    storage::IndexStore,
     template::TemplateProcessor,
     types::{
-        CapacitySource, CapacitySourceId, Job, OrgId, Organization, PolicyId, PolicySpec,
-        ProcessTemplate, RoleId, RoleSpec, Run, RunId, TemplateId, TemplateInstance, WorkflowSpec,
+        ApprovalBoard, ApprovalBoardId, ApprovalId, CapacitySource, CapacitySourceId,
+        ConfigChange, ConfigChangeId, ConfigChangeType, Job, OrgId, Organization, PersonId,
+        PolicyId, PolicySpec, ProcessTemplate, Routine, RoutineId, RoutineSchedule, RoleId,
+        RoleSpec, Run, RunId, TemplateId, TemplateInstance, VoteDecision, WorkflowSpec,
     },
 };
 use std::sync::Arc;
@@ -607,4 +608,422 @@ pub struct CapacityCostResponse {
     pub total_tokens: u32,
     pub total_requests: u32,
     pub record_count: usize,
+}
+
+// === Routine Management Endpoints (Phase 5) ===
+
+/// List all routines
+pub async fn list_routines(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListRoutinesResponse>> {
+    let routines = state.routine_scheduler.list_routines();
+    Ok(Json(ListRoutinesResponse { routines }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListRoutinesResponse {
+    pub routines: Vec<Routine>,
+}
+
+/// Get a specific routine
+pub async fn get_routine(
+    State(state): State<Arc<AppState>>,
+    Path(routine_id): Path<String>,
+) -> ApiResult<Json<Routine>> {
+    let routine_id = RoutineId::new(routine_id);
+
+    let routine = state
+        .routine_scheduler
+        .get_routine(&routine_id)
+        .ok_or_else(|| anyhow::anyhow!("Routine not found"))?;
+
+    Ok(Json(routine))
+}
+
+/// Create a routine
+pub async fn create_routine(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateRoutineRequest>,
+) -> ApiResult<Json<CreateRoutineResponse>> {
+    let routine = Routine {
+        id: RoutineId::new(uuid::Uuid::new_v4().to_string()),
+        name: req.name,
+        description: req.description,
+        schedule: req.schedule,
+        workflow: req.workflow,
+        enabled: req.enabled.unwrap_or(false),
+        last_run: None,
+        next_run: chrono::Utc::now(),
+        created_at: chrono::Utc::now(),
+        created_by: req.created_by.unwrap_or_else(|| "system".to_string()),
+        updated_at: chrono::Utc::now(),
+    };
+
+    state.routine_scheduler.register_routine(routine.clone())?;
+
+    tracing::info!("Created routine: {} ({})", routine.name, routine.id.0);
+
+    Ok(Json(CreateRoutineResponse {
+        routine_id: routine.id.0.clone(),
+        message: "Routine created successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRoutineRequest {
+    pub name: String,
+    pub description: String,
+    pub schedule: RoutineSchedule,
+    pub workflow: WorkflowSpec,
+    pub enabled: Option<bool>,
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRoutineResponse {
+    pub routine_id: String,
+    pub message: String,
+}
+
+/// Delete a routine
+pub async fn delete_routine(
+    State(state): State<Arc<AppState>>,
+    Path(routine_id): Path<String>,
+) -> ApiResult<Json<DeleteRoutineResponse>> {
+    let routine_id = RoutineId::new(routine_id);
+
+    state.routine_scheduler.unregister_routine(&routine_id)?;
+
+    tracing::info!("Deleted routine: {}", routine_id.0);
+
+    Ok(Json(DeleteRoutineResponse {
+        message: "Routine deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteRoutineResponse {
+    pub message: String,
+}
+
+/// Enable a routine
+pub async fn enable_routine(
+    State(state): State<Arc<AppState>>,
+    Path(routine_id): Path<String>,
+) -> ApiResult<Json<EnableRoutineResponse>> {
+    let routine_id = RoutineId::new(routine_id);
+
+    state.routine_scheduler.enable_routine(&routine_id)?;
+
+    tracing::info!("Enabled routine: {}", routine_id.0);
+
+    Ok(Json(EnableRoutineResponse {
+        message: "Routine enabled successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EnableRoutineResponse {
+    pub message: String,
+}
+
+/// Disable a routine
+pub async fn disable_routine(
+    State(state): State<Arc<AppState>>,
+    Path(routine_id): Path<String>,
+) -> ApiResult<Json<DisableRoutineResponse>> {
+    let routine_id = RoutineId::new(routine_id);
+
+    state.routine_scheduler.disable_routine(&routine_id)?;
+
+    tracing::info!("Disabled routine: {}", routine_id.0);
+
+    Ok(Json(DisableRoutineResponse {
+        message: "Routine disabled successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DisableRoutineResponse {
+    pub message: String,
+}
+
+/// Get execution history for a routine
+pub async fn get_routine_executions(
+    State(state): State<Arc<AppState>>,
+    Path(routine_id): Path<String>,
+) -> ApiResult<Json<GetRoutineExecutionsResponse>> {
+    let routine_id = RoutineId::new(routine_id);
+
+    let executions = state.routine_scheduler.get_executions(&routine_id);
+
+    Ok(Json(GetRoutineExecutionsResponse { executions }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetRoutineExecutionsResponse {
+    pub executions: Vec<shiioo_core::types::RoutineExecution>,
+}
+
+// === Approval Board Management Endpoints (Phase 5) ===
+
+/// List all approval boards
+pub async fn list_approval_boards(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListApprovalBoardsResponse>> {
+    let boards = state.approval_manager.list_boards();
+    Ok(Json(ListApprovalBoardsResponse { boards }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListApprovalBoardsResponse {
+    pub boards: Vec<ApprovalBoard>,
+}
+
+/// Get a specific approval board
+pub async fn get_approval_board(
+    State(state): State<Arc<AppState>>,
+    Path(board_id): Path<String>,
+) -> ApiResult<Json<ApprovalBoard>> {
+    let board_id = ApprovalBoardId::new(board_id);
+
+    let board = state
+        .approval_manager
+        .get_board(&board_id)
+        .ok_or_else(|| anyhow::anyhow!("Approval board not found"))?;
+
+    Ok(Json(board))
+}
+
+/// Create an approval board
+pub async fn create_approval_board(
+    State(state): State<Arc<AppState>>,
+    Json(board): Json<ApprovalBoard>,
+) -> ApiResult<Json<CreateApprovalBoardResponse>> {
+    state.approval_manager.register_board(board.clone())?;
+
+    tracing::info!("Created approval board: {} ({})", board.name, board.id.0);
+
+    Ok(Json(CreateApprovalBoardResponse {
+        board_id: board.id.0.clone(),
+        message: "Approval board created successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateApprovalBoardResponse {
+    pub board_id: String,
+    pub message: String,
+}
+
+/// Delete an approval board
+pub async fn delete_approval_board(
+    State(state): State<Arc<AppState>>,
+    Path(board_id): Path<String>,
+) -> ApiResult<Json<DeleteApprovalBoardResponse>> {
+    let board_id = ApprovalBoardId::new(board_id);
+
+    state.approval_manager.delete_board(&board_id)?;
+
+    tracing::info!("Deleted approval board: {}", board_id.0);
+
+    Ok(Json(DeleteApprovalBoardResponse {
+        message: "Approval board deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteApprovalBoardResponse {
+    pub message: String,
+}
+
+// === Approval Management Endpoints (Phase 5) ===
+
+/// List all approvals
+pub async fn list_approvals(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListApprovalsResponse>> {
+    let approvals = state.approval_manager.list_approvals();
+    Ok(Json(ListApprovalsResponse { approvals }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListApprovalsResponse {
+    pub approvals: Vec<shiioo_core::types::Approval>,
+}
+
+/// Get a specific approval
+pub async fn get_approval(
+    State(state): State<Arc<AppState>>,
+    Path(approval_id): Path<String>,
+) -> ApiResult<Json<shiioo_core::types::Approval>> {
+    let approval_id = ApprovalId::new(approval_id);
+
+    let approval = state
+        .approval_manager
+        .get_approval(&approval_id)
+        .ok_or_else(|| anyhow::anyhow!("Approval not found"))?;
+
+    Ok(Json(approval))
+}
+
+/// Cast a vote on an approval
+pub async fn cast_vote(
+    State(state): State<Arc<AppState>>,
+    Path(approval_id): Path<String>,
+    Json(req): Json<CastVoteRequest>,
+) -> ApiResult<Json<CastVoteResponse>> {
+    let approval_id = ApprovalId::new(approval_id);
+    let voter_id = req.voter_id.clone();
+
+    state
+        .approval_manager
+        .cast_vote(&approval_id, req.voter_id, req.decision, req.comment)?;
+
+    tracing::info!(
+        "Vote cast on approval {}: {:?} by {}",
+        approval_id.0,
+        req.decision,
+        voter_id.0
+    );
+
+    Ok(Json(CastVoteResponse {
+        message: "Vote cast successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CastVoteRequest {
+    pub voter_id: PersonId,
+    pub decision: VoteDecision,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CastVoteResponse {
+    pub message: String,
+}
+
+// === Config Change Management Endpoints (Phase 5) ===
+
+/// List all config changes
+pub async fn list_config_changes(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListConfigChangesResponse>> {
+    let changes = state.config_change_manager.list_changes();
+    Ok(Json(ListConfigChangesResponse { changes }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListConfigChangesResponse {
+    pub changes: Vec<ConfigChange>,
+}
+
+/// Get a specific config change
+pub async fn get_config_change(
+    State(state): State<Arc<AppState>>,
+    Path(change_id): Path<String>,
+) -> ApiResult<Json<ConfigChange>> {
+    let change_id = ConfigChangeId::new(change_id);
+
+    let change = state
+        .config_change_manager
+        .get_change(&change_id)
+        .ok_or_else(|| anyhow::anyhow!("Config change not found"))?;
+
+    Ok(Json(change))
+}
+
+/// Propose a config change
+pub async fn propose_config_change(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProposeConfigChangeRequest>,
+) -> ApiResult<Json<ProposeConfigChangeResponse>> {
+    let change = state.config_change_manager.propose_change(
+        req.change_type,
+        req.description,
+        req.before,
+        req.after,
+        req.proposed_by,
+        req.approval_board,
+    )?;
+
+    tracing::info!(
+        "Proposed config change: {} ({})",
+        change.description,
+        change.id.0
+    );
+
+    Ok(Json(ProposeConfigChangeResponse {
+        change_id: change.id.0.clone(),
+        approval_id: change.approval_id.as_ref().map(|id| id.0.clone()),
+        message: "Config change proposed successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProposeConfigChangeRequest {
+    pub change_type: ConfigChangeType,
+    pub description: String,
+    pub before: Option<String>,
+    pub after: String,
+    pub proposed_by: String,
+    pub approval_board: Option<ApprovalBoardId>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProposeConfigChangeResponse {
+    pub change_id: String,
+    pub approval_id: Option<String>,
+    pub message: String,
+}
+
+/// Apply a config change
+pub async fn apply_config_change(
+    State(state): State<Arc<AppState>>,
+    Path(change_id): Path<String>,
+) -> ApiResult<Json<ApplyConfigChangeResponse>> {
+    let change_id = ConfigChangeId::new(change_id);
+
+    state.config_change_manager.apply_change(&change_id)?;
+
+    tracing::info!("Applied config change: {}", change_id.0);
+
+    Ok(Json(ApplyConfigChangeResponse {
+        message: "Config change applied successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApplyConfigChangeResponse {
+    pub message: String,
+}
+
+/// Reject a config change
+pub async fn reject_config_change(
+    State(state): State<Arc<AppState>>,
+    Path(change_id): Path<String>,
+    Json(req): Json<RejectConfigChangeRequest>,
+) -> ApiResult<Json<RejectConfigChangeResponse>> {
+    let change_id = ConfigChangeId::new(change_id);
+
+    state
+        .config_change_manager
+        .reject_change(&change_id, req.reason)?;
+
+    tracing::info!("Rejected config change: {}", change_id.0);
+
+    Ok(Json(RejectConfigChangeResponse {
+        message: "Config change rejected successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RejectConfigChangeRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RejectConfigChangeResponse {
+    pub message: String,
 }

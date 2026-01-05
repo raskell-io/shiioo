@@ -9,5 +9,8 @@ pub mod organization;
 pub mod template;
 pub mod claude_compiler;
 pub mod capacity;
+pub mod scheduler;
+pub mod approval;
+pub mod config_change;
 
 pub use types::*;

@@ -117,24 +117,37 @@ pub struct Job {
     pub created_by: String,
 }
 
-/// A recurring routine with a schedule
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Routine {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub workflow: WorkflowSpec,
-    pub schedule: CronSchedule,
-    pub created_at: DateTime<Utc>,
-    pub created_by: String,
-    pub enabled: bool,
+/// Unique identifier for a routine
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RoutineId(pub String);
+
+impl RoutineId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
 }
 
-/// Cron-like schedule specification
+/// Recurring workflow with cron schedule
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CronSchedule {
-    pub expression: String,
-    pub timezone: Option<String>,
+pub struct Routine {
+    pub id: RoutineId,
+    pub name: String,
+    pub description: String,
+    pub schedule: RoutineSchedule,
+    pub workflow: WorkflowSpec,
+    pub enabled: bool,
+    pub last_run: Option<DateTime<Utc>>,
+    pub next_run: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Cron schedule configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutineSchedule {
+    pub cron: String, // Cron expression (e.g., "0 0 * * *" for daily at midnight)
+    pub timezone: String, // IANA timezone (e.g., "America/New_York")
 }
 
 /// Specification for a workflow (DAG of steps)
@@ -554,4 +567,152 @@ pub enum LlmError {
     ServiceUnavailable,
     TimeoutExceeded,
     Other { message: String },
+}
+
+// === Phase 5: Routines + Approval Boards ===
+
+/// Record of a routine execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutineExecution {
+    pub id: String,
+    pub routine_id: RoutineId,
+    pub run_id: RunId,
+    pub scheduled_at: DateTime<Utc>,
+    pub executed_at: DateTime<Utc>,
+    pub status: RunStatus,
+    pub error: Option<String>,
+}
+
+/// Unique identifier for an approval board
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ApprovalBoardId(pub String);
+
+impl ApprovalBoardId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Approval board with quorum rules
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalBoard {
+    pub id: ApprovalBoardId,
+    pub name: String,
+    pub description: String,
+    pub approvers: Vec<PersonId>, // People who can approve
+    pub quorum_rule: QuorumRule,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Quorum rules for approval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuorumRule {
+    Unanimous, // All approvers must approve
+    Majority,  // More than 50% must approve
+    MinCount { min: u32 }, // At least N approvers
+    Percentage { percent: u8 }, // At least X% of approvers (0-100)
+}
+
+/// Unique identifier for an approval
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ApprovalId(pub String);
+
+impl ApprovalId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Pending approval request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: ApprovalId,
+    pub board_id: ApprovalBoardId,
+    pub subject: ApprovalSubject,
+    pub status: ApprovalStatus,
+    pub votes: Vec<ApprovalVote>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// What is being approved
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSubject {
+    ConfigChange { change_id: ConfigChangeId },
+    WorkflowRun { run_id: RunId },
+    PolicyChange { policy_id: PolicyId },
+    RoleChange { role_id: RoleId },
+    Custom { subject_type: String, subject_id: String },
+}
+
+/// Individual vote on an approval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalVote {
+    pub voter: PersonId,
+    pub vote: VoteDecision,
+    pub comment: Option<String>,
+    pub voted_at: DateTime<Utc>,
+}
+
+/// Vote decision
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoteDecision {
+    Approve,
+    Reject,
+    Abstain,
+}
+
+/// Unique identifier for a config change
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ConfigChangeId(pub String);
+
+impl ConfigChangeId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Proposed configuration change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigChange {
+    pub id: ConfigChangeId,
+    pub change_type: ConfigChangeType,
+    pub description: String,
+    pub proposed_by: String,
+    pub approval_id: Option<ApprovalId>, // If approval is required
+    pub status: ConfigChangeStatus,
+    pub before: Option<String>, // JSON snapshot before change
+    pub after: String, // JSON of proposed change
+    pub applied_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Type of configuration change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigChangeType {
+    Role,
+    Policy,
+    Organization,
+    Template,
+    CapacitySource,
+    Routine,
+    ApprovalBoard,
+}
+
+/// Status of a config change
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigChangeStatus {
+    Proposed,
+    PendingApproval,
+    Approved,
+    Rejected,
+    Applied,
+    Failed,
 }
