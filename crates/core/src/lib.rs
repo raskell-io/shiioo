@@ -12,5 +12,7 @@ pub mod capacity;
 pub mod scheduler;
 pub mod approval;
 pub mod config_change;
+pub mod metrics;
+pub mod analytics;
 
 pub use types::*;

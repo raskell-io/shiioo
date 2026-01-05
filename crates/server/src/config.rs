@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
 use shiioo_core::config_change::ConfigChangeManager;
+use shiioo_core::metrics::MetricsCollector;
 use shiioo_core::scheduler::RoutineScheduler;
 use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore};
 use shiioo_core::workflow::WorkflowExecutor;
@@ -100,6 +102,8 @@ pub struct AppState {
     pub routine_scheduler: Arc<RoutineScheduler>,
     pub approval_manager: Arc<ApprovalManager>,
     pub config_change_manager: Arc<ConfigChangeManager>,
+    pub metrics: Arc<MetricsCollector>,
+    pub analytics: Arc<PerformanceAnalytics>,
 }
 
 impl AppState {
@@ -128,6 +132,10 @@ impl AppState {
         let config_change_manager = Arc::new(ConfigChangeManager::new(approval_manager.clone()));
         let routine_scheduler = Arc::new(RoutineScheduler::new(workflow_executor.clone()));
 
+        // Phase 6: Observability - metrics and analytics
+        let metrics = Arc::new(MetricsCollector::new());
+        let analytics = Arc::new(PerformanceAnalytics::new());
+
         Ok(Self {
             blob_store,
             event_log,
@@ -136,6 +144,8 @@ impl AppState {
             routine_scheduler,
             approval_manager,
             config_change_manager,
+            metrics,
+            analytics,
         })
     }
 }

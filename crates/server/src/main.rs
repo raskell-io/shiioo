@@ -5,6 +5,7 @@ use std::path::PathBuf;
 mod api;
 mod config;
 mod ui;
+mod websocket;
 
 use config::ServerConfig;
 

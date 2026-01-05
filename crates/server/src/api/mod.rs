@@ -93,6 +93,17 @@ fn create_router(state: AppState) -> Router {
         .route("/api/config-changes/{change_id}", get(handlers::get_config_change))
         .route("/api/config-changes/{change_id}/apply", post(handlers::apply_config_change))
         .route("/api/config-changes/{change_id}/reject", post(handlers::reject_config_change))
+        // Observability (Phase 6)
+        .route("/api/metrics", get(handlers::get_metrics))
+        .route("/api/analytics/workflows", get(handlers::get_workflow_analytics))
+        .route("/api/analytics/workflows/{workflow_id}", get(handlers::get_workflow_analytics_by_id))
+        .route("/api/analytics/steps", get(handlers::get_step_analytics))
+        .route("/api/analytics/traces", get(handlers::get_execution_traces))
+        .route("/api/analytics/traces/{run_id}", get(handlers::get_execution_trace))
+        .route("/api/analytics/bottlenecks/{workflow_id}", get(handlers::get_bottleneck_analysis))
+        .route("/api/health/status", get(handlers::get_health_status))
+        // WebSocket for real-time updates
+        .route("/api/ws", get(crate::websocket::ws_handler))
         // UI routes
         .fallback(ui::serve_ui)
         // Middleware

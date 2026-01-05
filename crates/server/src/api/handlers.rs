@@ -1027,3 +1027,161 @@ pub struct RejectConfigChangeRequest {
 pub struct RejectConfigChangeResponse {
     pub message: String,
 }
+
+// === Observability Endpoints (Phase 6) ===
+
+/// Get all metrics
+pub async fn get_metrics(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<MetricsResponse>> {
+    let counters = state.metrics.get_counters();
+    let gauges = state.metrics.get_gauges();
+    let histograms = state.metrics.get_histograms();
+
+    Ok(Json(MetricsResponse {
+        counters,
+        gauges,
+        histograms,
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MetricsResponse {
+    pub counters: Vec<shiioo_core::metrics::Counter>,
+    pub gauges: Vec<shiioo_core::metrics::Gauge>,
+    pub histograms: Vec<shiioo_core::metrics::Histogram>,
+}
+
+/// Get workflow analytics
+pub async fn get_workflow_analytics(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<WorkflowAnalyticsResponse>> {
+    let stats = state.analytics.get_all_workflow_stats();
+    Ok(Json(WorkflowAnalyticsResponse { workflows: stats }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkflowAnalyticsResponse {
+    pub workflows: Vec<shiioo_core::analytics::WorkflowStats>,
+}
+
+/// Get specific workflow analytics
+pub async fn get_workflow_analytics_by_id(
+    State(state): State<Arc<AppState>>,
+    Path(workflow_id): Path<String>,
+) -> ApiResult<Json<shiioo_core::analytics::WorkflowStats>> {
+    let stats = state
+        .analytics
+        .get_workflow_stats(&workflow_id)
+        .ok_or_else(|| anyhow::anyhow!("Workflow stats not found"))?;
+
+    Ok(Json(stats))
+}
+
+/// Get step analytics
+pub async fn get_step_analytics(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<StepAnalyticsResponse>> {
+    let stats = state.analytics.get_all_step_stats();
+    Ok(Json(StepAnalyticsResponse { steps: stats }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StepAnalyticsResponse {
+    pub steps: Vec<shiioo_core::analytics::StepStats>,
+}
+
+/// Get execution traces
+pub async fn get_execution_traces(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ExecutionTracesResponse>> {
+    let traces = state.analytics.get_recent_traces(50);
+    Ok(Json(ExecutionTracesResponse { traces }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExecutionTracesResponse {
+    pub traces: Vec<shiioo_core::analytics::ExecutionTrace>,
+}
+
+/// Get specific execution trace
+pub async fn get_execution_trace(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> ApiResult<Json<shiioo_core::analytics::ExecutionTrace>> {
+    let run_id = RunId(
+        run_id
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid run ID"))?,
+    );
+
+    let trace = state
+        .analytics
+        .get_trace(&run_id)
+        .ok_or_else(|| anyhow::anyhow!("Execution trace not found"))?;
+
+    Ok(Json(trace))
+}
+
+/// Get bottleneck analysis for a workflow
+pub async fn get_bottleneck_analysis(
+    State(state): State<Arc<AppState>>,
+    Path(workflow_id): Path<String>,
+) -> ApiResult<Json<shiioo_core::analytics::BottleneckReport>> {
+    let report = state
+        .analytics
+        .detect_bottlenecks(&workflow_id)
+        .ok_or_else(|| anyhow::anyhow!("Bottleneck analysis not available for this workflow"))?;
+
+    Ok(Json(report))
+}
+
+/// Get system health status
+pub async fn get_health_status(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<HealthStatusResponse>> {
+    let routines = state.routine_scheduler.list_routines();
+    let approvals = state.approval_manager.list_approvals();
+    let workflow_stats = state.analytics.get_all_workflow_stats();
+
+    let active_routines = routines.iter().filter(|r| r.enabled).count();
+    let pending_approvals = approvals
+        .iter()
+        .filter(|a| matches!(a.status, shiioo_core::types::ApprovalStatus::Pending))
+        .count();
+
+    let total_workflow_executions: u64 = workflow_stats.iter().map(|w| w.execution_count).sum();
+    let successful_executions: u64 = workflow_stats.iter().map(|w| w.success_count).sum();
+    let failed_executions: u64 = workflow_stats.iter().map(|w| w.failure_count).sum();
+
+    let success_rate = if total_workflow_executions > 0 {
+        (successful_executions as f64 / total_workflow_executions as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    Ok(Json(HealthStatusResponse {
+        status: "healthy".to_string(),
+        uptime_secs: 0, // TODO: Track actual uptime
+        active_routines,
+        total_routines: routines.len(),
+        pending_approvals,
+        total_workflow_executions,
+        successful_executions,
+        failed_executions,
+        success_rate,
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HealthStatusResponse {
+    pub status: String,
+    pub uptime_secs: u64,
+    pub active_routines: usize,
+    pub total_routines: usize,
+    pub pending_approvals: usize,
+    pub total_workflow_executions: u64,
+    pub successful_executions: u64,
+    pub failed_executions: u64,
+    pub success_rate: f64,
+}

@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 5 Complete ✅)
+## Current Status (Phase 6 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -112,6 +112,18 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Audit trail** - all approvals and changes logged with timestamps
   - **Persistent storage** - routines, boards, approvals, and changes in redb
   - **Full API** for routine, approval, and config change management
+
+- ✅ **Phase 6**: Real-time monitoring & observability
+  - **Metrics collection** - Prometheus-style counters, gauges, and histograms
+  - **Performance analytics** - workflow and step execution tracking with statistics
+  - **Percentile tracking** - p50, p95, p99 latency measurements
+  - **Execution tracing** - detailed step-by-step execution logs
+  - **Bottleneck detection** - automatic identification of slow steps
+  - **WebSocket support** - real-time updates for workflow status and system health
+  - **Health monitoring** - system-wide health status and success rates
+  - **In-memory metrics** - fast access to current system state
+  - **Step retry tracking** - monitor failure and retry patterns
+  - **Full API** for metrics, analytics, traces, and bottleneck analysis
 
 ### API Endpoints
 **Workflow Management:**
@@ -184,13 +196,18 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `POST /api/config-changes/{change_id}/apply` - Apply an approved change
   - `POST /api/config-changes/{change_id}/reject` - Reject a change
 
-### Coming Next
-- 🚧 **Phase 6**: Real-time monitoring & observability
-  - Metrics and monitoring dashboard
-  - Real-time workflow status updates via WebSocket
-  - Performance analytics and bottleneck detection
-  - Agent interaction tracing
+**Observability (Phase 6):**
+  - `GET /api/metrics` - Get all metrics (counters, gauges, histograms)
+  - `GET /api/analytics/workflows` - List workflow statistics
+  - `GET /api/analytics/workflows/{workflow_id}` - Get specific workflow stats
+  - `GET /api/analytics/steps` - List step statistics
+  - `GET /api/analytics/traces` - Get recent execution traces
+  - `GET /api/analytics/traces/{run_id}` - Get specific execution trace
+  - `GET /api/analytics/bottlenecks/{workflow_id}` - Analyze workflow bottlenecks
+  - `GET /api/health/status` - Get system health status
+  - `GET /api/ws` - WebSocket endpoint for real-time updates
 
+### Coming Next
 - 🚧 **Phase 7**: Multi-tenancy & high availability
   - Multi-tenant isolation
   - Distributed execution across multiple nodes
