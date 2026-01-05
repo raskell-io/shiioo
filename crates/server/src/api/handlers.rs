@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use shiioo_core::{
     events::EventLog,
     storage::IndexStore,
-    types::{Job, Run, RunId, WorkflowSpec},
+    types::{Job, PolicyId, PolicySpec, RoleId, RoleSpec, Run, RunId, WorkflowSpec},
 };
 use std::sync::Arc;
 
@@ -122,5 +122,149 @@ pub struct CreateJobResponse {
     pub job_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
+    pub message: String,
+}
+
+// === Role Management Endpoints ===
+
+/// List all roles
+pub async fn list_roles(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListRolesResponse>> {
+    let roles = state.index_store.list_roles()?;
+    Ok(Json(ListRolesResponse { roles }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListRolesResponse {
+    pub roles: Vec<RoleSpec>,
+}
+
+/// Get a specific role
+pub async fn get_role(
+    State(state): State<Arc<AppState>>,
+    Path(role_id): Path<String>,
+) -> ApiResult<Json<RoleSpec>> {
+    let role_id = RoleId::new(role_id);
+
+    let role = state
+        .index_store
+        .get_role(&role_id)?
+        .ok_or_else(|| anyhow::anyhow!("Role not found"))?;
+
+    Ok(Json(role))
+}
+
+/// Create or update a role
+pub async fn create_role(
+    State(state): State<Arc<AppState>>,
+    Json(role): Json<RoleSpec>,
+) -> ApiResult<Json<CreateRoleResponse>> {
+    state.index_store.store_role(&role)?;
+
+    tracing::info!("Created/updated role: {} ({})", role.name, role.id.0);
+
+    Ok(Json(CreateRoleResponse {
+        role_id: role.id.0.clone(),
+        message: "Role created/updated successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRoleResponse {
+    pub role_id: String,
+    pub message: String,
+}
+
+/// Delete a role
+pub async fn delete_role(
+    State(state): State<Arc<AppState>>,
+    Path(role_id): Path<String>,
+) -> ApiResult<Json<DeleteRoleResponse>> {
+    let role_id = RoleId::new(role_id);
+
+    state.index_store.delete_role(&role_id)?;
+
+    tracing::info!("Deleted role: {}", role_id.0);
+
+    Ok(Json(DeleteRoleResponse {
+        message: "Role deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteRoleResponse {
+    pub message: String,
+}
+
+// === Policy Management Endpoints ===
+
+/// List all policies
+pub async fn list_policies(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListPoliciesResponse>> {
+    let policies = state.index_store.list_policies()?;
+    Ok(Json(ListPoliciesResponse { policies }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListPoliciesResponse {
+    pub policies: Vec<PolicySpec>,
+}
+
+/// Get a specific policy
+pub async fn get_policy(
+    State(state): State<Arc<AppState>>,
+    Path(policy_id): Path<String>,
+) -> ApiResult<Json<PolicySpec>> {
+    let policy_id = PolicyId(policy_id);
+
+    let policy = state
+        .index_store
+        .get_policy(&policy_id)?
+        .ok_or_else(|| anyhow::anyhow!("Policy not found"))?;
+
+    Ok(Json(policy))
+}
+
+/// Create or update a policy
+pub async fn create_policy(
+    State(state): State<Arc<AppState>>,
+    Json(policy): Json<PolicySpec>,
+) -> ApiResult<Json<CreatePolicyResponse>> {
+    state.index_store.store_policy(&policy)?;
+
+    tracing::info!("Created/updated policy: {} ({})", policy.name, policy.id.0);
+
+    Ok(Json(CreatePolicyResponse {
+        policy_id: policy.id.0.clone(),
+        message: "Policy created/updated successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreatePolicyResponse {
+    pub policy_id: String,
+    pub message: String,
+}
+
+/// Delete a policy
+pub async fn delete_policy(
+    State(state): State<Arc<AppState>>,
+    Path(policy_id): Path<String>,
+) -> ApiResult<Json<DeletePolicyResponse>> {
+    let policy_id = PolicyId(policy_id);
+
+    state.index_store.delete_policy(&policy_id)?;
+
+    tracing::info!("Deleted policy: {}", policy_id.0);
+
+    Ok(Json(DeletePolicyResponse {
+        message: "Policy deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeletePolicyResponse {
     pub message: String,
 }

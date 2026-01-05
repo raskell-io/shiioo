@@ -1,10 +1,11 @@
 use crate::types::{StepId, StepSpec, WorkflowSpec};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Topo;
 use std::collections::HashMap;
 
 /// DAG representation of a workflow
+#[derive(Debug)]
 pub struct WorkflowDag {
     graph: DiGraph<StepSpec, ()>,
     step_indices: HashMap<StepId, NodeIndex>,
@@ -174,8 +175,7 @@ mod tests {
                 create_test_step("step4", "Step 4"),
             ],
             dependencies: [
-                (StepId::new("step3"), vec![StepId::new("step1")]),
-                (StepId::new("step3"), vec![StepId::new("step2")]),
+                (StepId::new("step3"), vec![StepId::new("step1"), StepId::new("step2")]),
                 (StepId::new("step4"), vec![StepId::new("step3")]),
             ]
             .iter()

@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 1 Complete ✅)
+## Current Status (Phase 2 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -68,15 +68,39 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Content-addressed artifact storage** for prompts/responses
   - **Full API integration** - jobs execute end-to-end
 
+- ✅ **Phase 2**: MCP tools + policy enforcement
+  - **MCP server** with JSON-RPC 2.0 over stdio
+  - **Tool registry** with tiered security (Tier 0-2)
+  - **5 MCP tools**: context_get, context_search, context_events, repo_read, web_fetch
+  - **Policy engine** for governance and authorization
+  - **Role-based access control** with tool allowlists
+  - **Budget tracking** - daily token and cost limits per role
+  - **Approval requirements** - tool-level and tier-level
+  - **Policy rules** - deny paths, domain allowlists, approval rules
+  - **Persistent storage** for roles and policies in redb
+  - **Full API** for role and policy management
+
 ### API Endpoints
+**Workflow Management:**
   - `GET /api/health` - Health check
   - `GET /api/runs` - List all runs
   - `GET /api/runs/{run_id}` - Get run details
   - `GET /api/runs/{run_id}/events` - Get run events
   - `POST /api/jobs` - Create and execute a job
 
+**Role Management:**
+  - `GET /api/roles` - List all roles
+  - `GET /api/roles/{role_id}` - Get role details
+  - `POST /api/roles` - Create or update a role
+  - `DELETE /api/roles/{role_id}` - Delete a role
+
+**Policy Management:**
+  - `GET /api/policies` - List all policies
+  - `GET /api/policies/{policy_id}` - Get policy details
+  - `POST /api/policies` - Create or update a policy
+  - `DELETE /api/policies/{policy_id}` - Delete a policy
+
 ### Coming Next
-- 🚧 **Phase 2**: MCP tools + policy enforcement
 - 🚧 **Phase 3**: Org chart + roles + `.claude/` compiler
 - 🚧 **Phase 4**: Capacity broker for rate limit resilience
 - 🚧 **Phase 5**: Recurring routines + approval boards
@@ -258,11 +282,13 @@ RUST_LOG=debug cargo run
 - Cancellation support ✅
 - Full event logging ✅
 
-### Phase 2 — MCP tools + policy
-- MCP server over stdio
-- Tool registry
-- Policy engine for tool authorization
-- Approval gates
+### ✅ Phase 2 — MCP tools + policy (Complete)
+- MCP server over stdio ✅
+- Tool registry ✅
+- Policy engine for tool authorization ✅
+- Approval gates ✅
+- Role-based access control ✅
+- Budget tracking ✅
 
 ### Phase 3 — Org + roles + GitOps
 - Role specifications
@@ -323,4 +349,6 @@ After the Change Date, Shiioo automatically becomes Apache 2.0 licensed.
 
 ---
 
-**Status**: Phase 1 complete. Workflows execute end-to-end with DAG dependencies, retry logic, and full event sourcing. Ready for Phase 2 (MCP tools & policy engine).
+**Status**: Phase 2 complete. Workflows execute end-to-end with DAG dependencies, retry logic, full event sourcing, role-based access control, and policy enforcement. Ready for Phase 3 (Org chart & `.claude/` compiler).
+
+See [POLICY_EXAMPLES.md](POLICY_EXAMPLES.md) for detailed examples of using the policy engine.

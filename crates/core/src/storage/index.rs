@@ -1,10 +1,12 @@
-use crate::types::{Run, RunId, RunStatus};
+use crate::types::{PolicyId, PolicySpec, RoleId, RoleSpec, Run, RunId, RunStatus};
 use anyhow::{Context, Result};
 use redb::{Database, ReadableTable, TableDefinition};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 const RUNS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("runs");
+const ROLES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("roles");
+const POLICIES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("policies");
 
 /// Index store for fast queries using redb
 #[derive(Clone)]
@@ -24,9 +26,15 @@ impl RedbIndexStore {
         // Initialize tables
         let write_txn = db.begin_write().context("Failed to begin write transaction")?;
         {
-            let _table = write_txn
+            let _runs_table = write_txn
                 .open_table(RUNS_TABLE)
                 .context("Failed to open runs table")?;
+            let _roles_table = write_txn
+                .open_table(ROLES_TABLE)
+                .context("Failed to open roles table")?;
+            let _policies_table = write_txn
+                .open_table(POLICIES_TABLE)
+                .context("Failed to open policies table")?;
         }
         write_txn.commit().context("Failed to commit transaction")?;
 
@@ -104,6 +112,142 @@ impl RedbIndexStore {
         }
 
         self.index_run(&run)
+    }
+
+    /// Store a role
+    pub fn store_role(&self, role: &RoleSpec) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ROLES_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &role.id.0;
+            let value = serde_json::to_vec(role).context("Failed to serialize role")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert role")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get a role by ID
+    pub fn get_role(&self, role_id: &RoleId) -> Result<Option<RoleSpec>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ROLES_TABLE).context("Failed to open table")?;
+
+        let value = table.get(role_id.0.as_str()).context("Failed to get role")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let role: RoleSpec = serde_json::from_slice(bytes).context("Failed to deserialize role")?;
+                Ok(Some(role))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all roles
+    pub fn list_roles(&self) -> Result<Vec<RoleSpec>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ROLES_TABLE).context("Failed to open table")?;
+
+        let mut roles = Vec::new();
+        for item in table.iter().context("Failed to iterate roles")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let role: RoleSpec = serde_json::from_slice(value.value())
+                .context("Failed to deserialize role")?;
+            roles.push(role);
+        }
+
+        Ok(roles)
+    }
+
+    /// Delete a role
+    pub fn delete_role(&self, role_id: &RoleId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ROLES_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(role_id.0.as_str())
+                .context("Failed to delete role")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Store a policy
+    pub fn store_policy(&self, policy: &PolicySpec) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(POLICIES_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &policy.id.0;
+            let value = serde_json::to_vec(policy).context("Failed to serialize policy")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert policy")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get a policy by ID
+    pub fn get_policy(&self, policy_id: &PolicyId) -> Result<Option<PolicySpec>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(POLICIES_TABLE).context("Failed to open table")?;
+
+        let value = table.get(policy_id.0.as_str()).context("Failed to get policy")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let policy: PolicySpec = serde_json::from_slice(bytes).context("Failed to deserialize policy")?;
+                Ok(Some(policy))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all policies
+    pub fn list_policies(&self) -> Result<Vec<PolicySpec>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(POLICIES_TABLE).context("Failed to open table")?;
+
+        let mut policies = Vec::new();
+        for item in table.iter().context("Failed to iterate policies")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let policy: PolicySpec = serde_json::from_slice(value.value())
+                .context("Failed to deserialize policy")?;
+            policies.push(policy);
+        }
+
+        Ok(policies)
+    }
+
+    /// Delete a policy
+    pub fn delete_policy(&self, policy_id: &PolicyId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(POLICIES_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(policy_id.0.as_str())
+                .context("Failed to delete policy")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
     }
 }
 

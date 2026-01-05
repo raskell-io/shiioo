@@ -1,7 +1,7 @@
 use crate::events::{Event, EventLog, EventType, MessageDirection};
 use crate::storage::BlobStore;
-use crate::types::{BlobHash, RetryPolicy, RunId, StepAction, StepId, StepSpec, StepStatus};
-use anyhow::{anyhow, Context, Result};
+use crate::types::{BlobHash, RunId, StepAction, StepId, StepSpec, StepStatus};
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use std::sync::Arc;
 use std::time::Duration;

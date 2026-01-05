@@ -145,7 +145,7 @@ impl WorkflowExecutor {
         run_id: RunId,
         dag: &WorkflowDag,
         workflow: &WorkflowSpec,
-        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Vec<StepExecution>> {
         let mut completed_steps: HashSet<StepId> = HashSet::new();
         let mut failed_steps: HashSet<StepId> = HashSet::new();

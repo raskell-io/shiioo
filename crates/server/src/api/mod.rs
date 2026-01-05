@@ -5,7 +5,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,16 @@ fn create_router(state: AppState) -> Router {
         .route("/api/runs/{run_id}", get(handlers::get_run))
         .route("/api/runs/{run_id}/events", get(handlers::get_run_events))
         .route("/api/jobs", post(handlers::create_job))
+        // Role management
+        .route("/api/roles", get(handlers::list_roles))
+        .route("/api/roles", post(handlers::create_role))
+        .route("/api/roles/{role_id}", get(handlers::get_role))
+        .route("/api/roles/{role_id}", delete(handlers::delete_role))
+        // Policy management
+        .route("/api/policies", get(handlers::list_policies))
+        .route("/api/policies", post(handlers::create_policy))
+        .route("/api/policies/{policy_id}", get(handlers::get_policy))
+        .route("/api/policies/{policy_id}", delete(handlers::delete_policy))
         // UI routes
         .fallback(ui::serve_ui)
         // Middleware
