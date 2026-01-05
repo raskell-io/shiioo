@@ -12,8 +12,8 @@ use shiioo_core::{
     storage::IndexStore,
     template::TemplateProcessor,
     types::{
-        Job, OrgId, Organization, PolicyId, PolicySpec, ProcessTemplate, RoleId, RoleSpec, Run,
-        RunId, TemplateId, TemplateInstance, WorkflowSpec,
+        CapacitySource, CapacitySourceId, Job, OrgId, Organization, PolicyId, PolicySpec,
+        ProcessTemplate, RoleId, RoleSpec, Run, RunId, TemplateId, TemplateInstance, WorkflowSpec,
     },
 };
 use std::sync::Arc;
@@ -491,4 +491,120 @@ pub struct CompileClaudeConfigResponse {
     pub config: shiioo_core::types::ClaudeConfig,
     pub readme: String,
     pub message: String,
+}
+
+// === Capacity Management Endpoints ===
+
+/// List all capacity sources
+pub async fn list_capacity_sources(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListCapacitySourcesResponse>> {
+    let sources = state.index_store.list_capacity_sources()?;
+    Ok(Json(ListCapacitySourcesResponse { sources }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListCapacitySourcesResponse {
+    pub sources: Vec<CapacitySource>,
+}
+
+/// Get a specific capacity source
+pub async fn get_capacity_source(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<String>,
+) -> ApiResult<Json<CapacitySource>> {
+    let source_id = CapacitySourceId::new(source_id);
+
+    let source = state
+        .index_store
+        .get_capacity_source(&source_id)?
+        .ok_or_else(|| anyhow::anyhow!("Capacity source not found"))?;
+
+    Ok(Json(source))
+}
+
+/// Create or update a capacity source
+pub async fn create_capacity_source(
+    State(state): State<Arc<AppState>>,
+    Json(source): Json<CapacitySource>,
+) -> ApiResult<Json<CreateCapacitySourceResponse>> {
+    state.index_store.store_capacity_source(&source)?;
+
+    tracing::info!(
+        "Created/updated capacity source: {} ({})",
+        source.name,
+        source.id.0
+    );
+
+    Ok(Json(CreateCapacitySourceResponse {
+        source_id: source.id.0.clone(),
+        message: "Capacity source created/updated successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateCapacitySourceResponse {
+    pub source_id: String,
+    pub message: String,
+}
+
+/// Delete a capacity source
+pub async fn delete_capacity_source(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<String>,
+) -> ApiResult<Json<DeleteCapacitySourceResponse>> {
+    let source_id = CapacitySourceId::new(source_id);
+
+    state.index_store.delete_capacity_source(&source_id)?;
+
+    tracing::info!("Deleted capacity source: {}", source_id.0);
+
+    Ok(Json(DeleteCapacitySourceResponse {
+        message: "Capacity source deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteCapacitySourceResponse {
+    pub message: String,
+}
+
+/// List capacity usage records
+pub async fn list_capacity_usage(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListCapacityUsageResponse>> {
+    let usage = state.index_store.list_capacity_usage()?;
+    Ok(Json(ListCapacityUsageResponse { usage }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListCapacityUsageResponse {
+    pub usage: Vec<shiioo_core::types::CapacityUsage>,
+}
+
+/// Get capacity cost summary
+pub async fn get_capacity_cost(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<CapacityCostResponse>> {
+    let usage = state.index_store.list_capacity_usage()?;
+
+    // Calculate total cost and usage by source
+    let total_cost: f64 = usage.iter().map(|u| u.cost).sum();
+    let total_tokens: u32 = usage.iter().map(|u| u.total_tokens).sum();
+    let total_requests: u32 = usage.iter().map(|u| u.request_count).sum();
+
+    Ok(Json(CapacityCostResponse {
+        total_cost,
+        total_tokens,
+        total_requests,
+        record_count: usage.len(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CapacityCostResponse {
+    pub total_cost: f64,
+    pub total_tokens: u32,
+    pub total_requests: u32,
+    pub record_count: usize,
 }

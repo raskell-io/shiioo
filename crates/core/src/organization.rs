@@ -1,6 +1,6 @@
 // Organization management
 
-use crate::types::{Organization, OrgId, Person, PersonId, Team, TeamId};
+use crate::types::{Organization, Person, PersonId, Team, TeamId};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -166,7 +166,7 @@ impl OrganizationManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{OrgChart, RoleId};
+    use crate::types::{OrgChart, OrgId, RoleId};
     use chrono::Utc;
 
     fn create_test_org() -> Organization {

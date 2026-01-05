@@ -1,7 +1,7 @@
 // Process template system for reusable workflows
 
 use crate::types::{
-    ProcessTemplate, StepAction, StepSpec, TemplateId, TemplateInstance, TemplateParameter,
+    ProcessTemplate, StepAction, TemplateId, TemplateInstance, TemplateParameter,
     TemplateParameterType, WorkflowSpec,
 };
 use anyhow::{Context, Result};
@@ -148,7 +148,7 @@ impl TemplateProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{RoleId, StepId};
+    use crate::types::{RoleId, StepId, StepSpec};
     use chrono::Utc;
 
     #[test]

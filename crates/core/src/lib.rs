@@ -8,5 +8,6 @@ pub mod policy;
 pub mod organization;
 pub mod template;
 pub mod claude_compiler;
+pub mod capacity;
 
 pub use types::*;

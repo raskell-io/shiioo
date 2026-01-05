@@ -63,6 +63,13 @@ fn create_router(state: AppState) -> Router {
         .route("/api/templates/{template_id}/instantiate", post(handlers::instantiate_template))
         // Claude config compiler
         .route("/api/claude/compile/{role_id}", get(handlers::compile_claude_config))
+        // Capacity management
+        .route("/api/capacity/sources", get(handlers::list_capacity_sources))
+        .route("/api/capacity/sources", post(handlers::create_capacity_source))
+        .route("/api/capacity/sources/{source_id}", get(handlers::get_capacity_source))
+        .route("/api/capacity/sources/{source_id}", delete(handlers::delete_capacity_source))
+        .route("/api/capacity/usage", get(handlers::list_capacity_usage))
+        .route("/api/capacity/cost", get(handlers::get_capacity_cost))
         // UI routes
         .fallback(ui::serve_ui)
         // Middleware

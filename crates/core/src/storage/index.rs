@@ -1,6 +1,6 @@
 use crate::types::{
-    OrgId, Organization, PolicyId, PolicySpec, ProcessTemplate, RoleId, RoleSpec, Run, RunId,
-    RunStatus, TemplateId,
+    CapacitySource, CapacitySourceId, CapacityUsage, OrgId, Organization, PolicyId, PolicySpec,
+    ProcessTemplate, RoleId, RoleSpec, Run, RunId, RunStatus, TemplateId,
 };
 use anyhow::{Context, Result};
 use redb::{Database, ReadableTable, TableDefinition};
@@ -12,6 +12,8 @@ const ROLES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("roles");
 const POLICIES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("policies");
 const ORGS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("organizations");
 const TEMPLATES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("templates");
+const CAPACITY_SOURCES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("capacity_sources");
+const CAPACITY_USAGE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("capacity_usage");
 
 /// Index store for fast queries using redb
 #[derive(Clone)]
@@ -46,6 +48,12 @@ impl RedbIndexStore {
             let _templates_table = write_txn
                 .open_table(TEMPLATES_TABLE)
                 .context("Failed to open templates table")?;
+            let _capacity_sources_table = write_txn
+                .open_table(CAPACITY_SOURCES_TABLE)
+                .context("Failed to open capacity sources table")?;
+            let _capacity_usage_table = write_txn
+                .open_table(CAPACITY_USAGE_TABLE)
+                .context("Failed to open capacity usage table")?;
         }
         write_txn.commit().context("Failed to commit transaction")?;
 
@@ -395,6 +403,113 @@ impl RedbIndexStore {
         }
         write_txn.commit().context("Failed to commit")?;
         Ok(())
+    }
+
+    /// Store a capacity source
+    pub fn store_capacity_source(&self, source: &CapacitySource) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(CAPACITY_SOURCES_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &source.id.0;
+            let value = serde_json::to_vec(source).context("Failed to serialize capacity source")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert capacity source")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get a capacity source by ID
+    pub fn get_capacity_source(&self, source_id: &CapacitySourceId) -> Result<Option<CapacitySource>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(CAPACITY_SOURCES_TABLE).context("Failed to open table")?;
+
+        let value = table.get(source_id.0.as_str()).context("Failed to get capacity source")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let source: CapacitySource = serde_json::from_slice(bytes)
+                    .context("Failed to deserialize capacity source")?;
+                Ok(Some(source))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all capacity sources
+    pub fn list_capacity_sources(&self) -> Result<Vec<CapacitySource>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(CAPACITY_SOURCES_TABLE).context("Failed to open table")?;
+
+        let mut sources = Vec::new();
+        for item in table.iter().context("Failed to iterate capacity sources")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let source: CapacitySource = serde_json::from_slice(value.value())
+                .context("Failed to deserialize capacity source")?;
+            sources.push(source);
+        }
+
+        Ok(sources)
+    }
+
+    /// Delete a capacity source
+    pub fn delete_capacity_source(&self, source_id: &CapacitySourceId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(CAPACITY_SOURCES_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(source_id.0.as_str())
+                .context("Failed to delete capacity source")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Store capacity usage record
+    pub fn store_capacity_usage(&self, usage: &CapacityUsage) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(CAPACITY_USAGE_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &usage.id;
+            let value = serde_json::to_vec(usage).context("Failed to serialize capacity usage")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert capacity usage")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// List all capacity usage records
+    pub fn list_capacity_usage(&self) -> Result<Vec<CapacityUsage>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(CAPACITY_USAGE_TABLE).context("Failed to open table")?;
+
+        let mut usage_records = Vec::new();
+        for item in table.iter().context("Failed to iterate capacity usage")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let usage: CapacityUsage = serde_json::from_slice(value.value())
+                .context("Failed to deserialize capacity usage")?;
+            usage_records.push(usage);
+        }
+
+        // Sort by timestamp descending (most recent first)
+        usage_records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+        Ok(usage_records)
     }
 }
 

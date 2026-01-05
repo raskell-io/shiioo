@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 3 Complete ✅)
+## Current Status (Phase 4 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -90,6 +90,17 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Org queries** - management chain, team members, approval permissions
   - **Full API** for orgs, templates, and config compilation
 
+- ✅ **Phase 4**: Capacity broker
+  - **Multi-source capacity pooling** - support multiple API keys/providers
+  - **Automatic source selection** - priority-based routing with fallback
+  - **Rate limit handling** - per-minute, per-day limits with rolling windows
+  - **Exponential backoff** - automatic retry with configurable backoff
+  - **Priority queue system** - high-priority workflows get capacity first
+  - **Cost tracking** - real-time token usage and cost monitoring
+  - **Provider support** - Anthropic, OpenAI, Azure, custom endpoints
+  - **Persistent storage** - capacity sources and usage history in redb
+  - **Full API** for capacity management and cost reporting
+
 ### API Endpoints
 **Workflow Management:**
   - `GET /api/health` - Health check
@@ -126,8 +137,15 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 **Claude Config Compiler:**
   - `GET /api/claude/compile/{role_id}` - Generate Claude config for role
 
+**Capacity Management:**
+  - `GET /api/capacity/sources` - List all capacity sources
+  - `GET /api/capacity/sources/{source_id}` - Get capacity source details
+  - `POST /api/capacity/sources` - Create or update a capacity source
+  - `DELETE /api/capacity/sources/{source_id}` - Delete a capacity source
+  - `GET /api/capacity/usage` - List capacity usage records
+  - `GET /api/capacity/cost` - Get cost summary (total cost, tokens, requests)
+
 ### Coming Next
-- 🚧 **Phase 4**: Capacity broker for rate limit resilience
 - 🚧 **Phase 5**: Recurring routines + approval boards
 
 ## Quick Start
@@ -323,11 +341,11 @@ RUST_LOG=debug cargo run
 - Template instantiation ✅
 - GitOps-friendly config ✅
 
-### Phase 4 — Capacity broker
-- Multi-source capacity pooling
-- Rate limit handling with backoff
-- Priority queues
-- Cost tracking
+### ✅ Phase 4 — Capacity broker (Complete)
+- Multi-source capacity pooling ✅
+- Rate limit handling with backoff ✅
+- Priority queues ✅
+- Cost tracking ✅
 
 ### Phase 5 — Routines + boards
 - Cron scheduler
@@ -376,13 +394,17 @@ After the Change Date, Shiioo automatically becomes Apache 2.0 licensed.
 
 ---
 
-**Status**: Phase 3 complete. Full enterprise orchestration with:
+**Status**: Phase 4 complete. Production-ready enterprise orchestration with:
 - DAG workflow execution with dependencies, retry, event sourcing
 - Role-based access control and policy enforcement
 - Organization management with teams, people, reporting structure
 - Process templates for reusable workflows
 - Claude config compiler for GitOps-friendly agent deployment
+- Multi-source capacity pooling with rate limit handling
+- Priority queues and automatic failover
+- Real-time cost tracking and usage monitoring
 
 See documentation:
 - [POLICY_EXAMPLES.md](POLICY_EXAMPLES.md) - Policy engine and governance
 - [PHASE3_EXAMPLES.md](PHASE3_EXAMPLES.md) - Org management, templates, Claude compiler
+- [PHASE4_EXAMPLES.md](PHASE4_EXAMPLES.md) - Capacity broker, rate limits, cost tracking

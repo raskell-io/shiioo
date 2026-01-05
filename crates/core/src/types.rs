@@ -429,3 +429,129 @@ pub struct ClaudeSettings {
     pub temperature: Option<f64>,
     pub model: Option<String>,
 }
+
+// === Phase 4: Capacity Broker ===
+
+/// Unique identifier for a capacity source
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CapacitySourceId(pub String);
+
+impl CapacitySourceId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// LLM capacity source (API key, provider, model)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapacitySource {
+    pub id: CapacitySourceId,
+    pub name: String,
+    pub provider: LlmProvider,
+    pub api_key_hash: String, // SHA-256 hash of API key (not plaintext)
+    pub model: String,
+    pub rate_limits: RateLimits,
+    pub cost_per_token: CostPerToken,
+    pub priority: u8, // 0-255, higher = preferred
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// LLM provider type
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProvider {
+    Anthropic,
+    OpenAI,
+    Azure,
+    Custom { endpoint: String },
+}
+
+/// Rate limits for a capacity source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimits {
+    pub requests_per_minute: u32,
+    pub tokens_per_minute: u32,
+    pub tokens_per_day: Option<u32>,
+}
+
+/// Cost per token (per 1M tokens)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostPerToken {
+    pub input_cost: f64,  // Cost per 1M input tokens (USD)
+    pub output_cost: f64, // Cost per 1M output tokens (USD)
+}
+
+/// Usage tracking for a capacity source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapacityUsage {
+    pub id: String, // Unique ID for this usage record
+    pub source_id: CapacitySourceId,
+    pub timestamp: DateTime<Utc>,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub total_tokens: u32,
+    pub cost: f64,
+    pub request_count: u32,
+    pub run_id: Option<RunId>,
+    pub step_id: Option<StepId>,
+}
+
+/// Rate limit state for a capacity source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitState {
+    pub source_id: CapacitySourceId,
+    pub window_start: DateTime<Utc>,
+    pub requests_in_window: u32,
+    pub tokens_in_window: u32,
+    pub daily_tokens: u32,
+    pub daily_reset_at: DateTime<Utc>,
+    pub next_available: Option<DateTime<Utc>>, // When this source can be used again
+    pub backoff_until: Option<DateTime<Utc>>, // Exponential backoff end time
+}
+
+/// Priority request in the queue
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriorityRequest {
+    pub id: String,
+    pub priority: u8, // 0-255, higher = more urgent
+    pub run_id: RunId,
+    pub step_id: StepId,
+    pub role: RoleId,
+    pub prompt: String,
+    pub max_tokens: u32,
+    pub created_at: DateTime<Utc>,
+    pub attempts: u32,
+}
+
+/// LLM request sent to a capacity source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmRequest {
+    pub prompt: String,
+    pub max_tokens: u32,
+    pub temperature: Option<f64>,
+    pub model: Option<String>, // Override source model if needed
+}
+
+/// LLM response from a capacity source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmResponse {
+    pub text: String,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cost: f64,
+    pub model: String,
+    pub source_id: CapacitySourceId,
+}
+
+/// Error from LLM API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LlmError {
+    RateLimited { retry_after: Option<u64> }, // Seconds until retry
+    InvalidRequest { message: String },
+    AuthenticationFailed,
+    ServiceUnavailable,
+    TimeoutExceeded,
+    Other { message: String },
+}
