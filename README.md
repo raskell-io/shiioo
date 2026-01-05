@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 2 Complete ✅)
+## Current Status (Phase 3 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -80,6 +80,16 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Persistent storage** for roles and policies in redb
   - **Full API** for role and policy management
 
+- ✅ **Phase 3**: Organization & templates
+  - **Organization management** - teams, people, org chart, reporting structure
+  - **Organization validation** - cycle detection, referential integrity
+  - **Process templates** - reusable workflow patterns with parameters
+  - **Template instantiation** - parameter replacement and validation
+  - **Claude config compiler** - generate `.claude/config.json` from org setup
+  - **GitOps-friendly** - JSON/YAML org config, version-controlled
+  - **Org queries** - management chain, team members, approval permissions
+  - **Full API** for orgs, templates, and config compilation
+
 ### API Endpoints
 **Workflow Management:**
   - `GET /api/health` - Health check
@@ -100,8 +110,23 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `POST /api/policies` - Create or update a policy
   - `DELETE /api/policies/{policy_id}` - Delete a policy
 
+**Organization Management:**
+  - `GET /api/organizations` - List all organizations
+  - `GET /api/organizations/{org_id}` - Get organization details
+  - `POST /api/organizations` - Create or update an organization
+  - `DELETE /api/organizations/{org_id}` - Delete an organization
+
+**Template Management:**
+  - `GET /api/templates` - List all templates
+  - `GET /api/templates/{template_id}` - Get template details
+  - `POST /api/templates` - Create or update a template
+  - `DELETE /api/templates/{template_id}` - Delete a template
+  - `POST /api/templates/{template_id}/instantiate` - Instantiate template
+
+**Claude Config Compiler:**
+  - `GET /api/claude/compile/{role_id}` - Generate Claude config for role
+
 ### Coming Next
-- 🚧 **Phase 3**: Org chart + roles + `.claude/` compiler
 - 🚧 **Phase 4**: Capacity broker for rate limit resilience
 - 🚧 **Phase 5**: Recurring routines + approval boards
 
@@ -290,11 +315,13 @@ RUST_LOG=debug cargo run
 - Role-based access control ✅
 - Budget tracking ✅
 
-### Phase 3 — Org + roles + GitOps
-- Role specifications
-- Process templates
-- `.claude/` compiler (generate settings from org config)
-- Governance workflows
+### ✅ Phase 3 — Org + roles + GitOps (Complete)
+- Organization management ✅
+- Team and person hierarchy ✅
+- Process templates ✅
+- `.claude/` compiler (generate settings from org config) ✅
+- Template instantiation ✅
+- GitOps-friendly config ✅
 
 ### Phase 4 — Capacity broker
 - Multi-source capacity pooling
@@ -349,6 +376,13 @@ After the Change Date, Shiioo automatically becomes Apache 2.0 licensed.
 
 ---
 
-**Status**: Phase 2 complete. Workflows execute end-to-end with DAG dependencies, retry logic, full event sourcing, role-based access control, and policy enforcement. Ready for Phase 3 (Org chart & `.claude/` compiler).
+**Status**: Phase 3 complete. Full enterprise orchestration with:
+- DAG workflow execution with dependencies, retry, event sourcing
+- Role-based access control and policy enforcement
+- Organization management with teams, people, reporting structure
+- Process templates for reusable workflows
+- Claude config compiler for GitOps-friendly agent deployment
 
-See [POLICY_EXAMPLES.md](POLICY_EXAMPLES.md) for detailed examples of using the policy engine.
+See documentation:
+- [POLICY_EXAMPLES.md](POLICY_EXAMPLES.md) - Policy engine and governance
+- [PHASE3_EXAMPLES.md](PHASE3_EXAMPLES.md) - Org management, templates, Claude compiler

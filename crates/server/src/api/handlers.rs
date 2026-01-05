@@ -6,9 +6,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shiioo_core::{
+    claude_compiler::ClaudeCompiler,
     events::EventLog,
+    organization::OrganizationManager,
     storage::IndexStore,
-    types::{Job, PolicyId, PolicySpec, RoleId, RoleSpec, Run, RunId, WorkflowSpec},
+    template::TemplateProcessor,
+    types::{
+        Job, OrgId, Organization, PolicyId, PolicySpec, ProcessTemplate, RoleId, RoleSpec, Run,
+        RunId, TemplateId, TemplateInstance, WorkflowSpec,
+    },
 };
 use std::sync::Arc;
 
@@ -266,5 +272,223 @@ pub async fn delete_policy(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeletePolicyResponse {
+    pub message: String,
+}
+
+// === Organization Management Endpoints ===
+
+/// List all organizations
+pub async fn list_organizations(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListOrganizationsResponse>> {
+    let orgs = state.index_store.list_organizations()?;
+    Ok(Json(ListOrganizationsResponse { organizations: orgs }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListOrganizationsResponse {
+    pub organizations: Vec<Organization>,
+}
+
+/// Get a specific organization
+pub async fn get_organization(
+    State(state): State<Arc<AppState>>,
+    Path(org_id): Path<String>,
+) -> ApiResult<Json<Organization>> {
+    let org_id = OrgId::new(org_id);
+
+    let org = state
+        .index_store
+        .get_organization(&org_id)?
+        .ok_or_else(|| anyhow::anyhow!("Organization not found"))?;
+
+    Ok(Json(org))
+}
+
+/// Create or update an organization
+pub async fn create_organization(
+    State(state): State<Arc<AppState>>,
+    Json(org): Json<Organization>,
+) -> ApiResult<Json<CreateOrganizationResponse>> {
+    // Validate organization structure
+    OrganizationManager::new(org.clone())?;
+
+    state.index_store.store_organization(&org)?;
+
+    tracing::info!("Created/updated organization: {} ({})", org.name, org.id.0);
+
+    Ok(Json(CreateOrganizationResponse {
+        org_id: org.id.0.clone(),
+        message: "Organization created/updated successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateOrganizationResponse {
+    pub org_id: String,
+    pub message: String,
+}
+
+/// Delete an organization
+pub async fn delete_organization(
+    State(state): State<Arc<AppState>>,
+    Path(org_id): Path<String>,
+) -> ApiResult<Json<DeleteOrganizationResponse>> {
+    let org_id = OrgId::new(org_id);
+
+    state.index_store.delete_organization(&org_id)?;
+
+    tracing::info!("Deleted organization: {}", org_id.0);
+
+    Ok(Json(DeleteOrganizationResponse {
+        message: "Organization deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteOrganizationResponse {
+    pub message: String,
+}
+
+// === Template Management Endpoints ===
+
+/// List all templates
+pub async fn list_templates(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListTemplatesResponse>> {
+    let templates = state.index_store.list_templates()?;
+    Ok(Json(ListTemplatesResponse { templates }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListTemplatesResponse {
+    pub templates: Vec<ProcessTemplate>,
+}
+
+/// Get a specific template
+pub async fn get_template(
+    State(state): State<Arc<AppState>>,
+    Path(template_id): Path<String>,
+) -> ApiResult<Json<ProcessTemplate>> {
+    let template_id = TemplateId::new(template_id);
+
+    let template = state
+        .index_store
+        .get_template(&template_id)?
+        .ok_or_else(|| anyhow::anyhow!("Template not found"))?;
+
+    Ok(Json(template))
+}
+
+/// Create or update a template
+pub async fn create_template(
+    State(state): State<Arc<AppState>>,
+    Json(template): Json<ProcessTemplate>,
+) -> ApiResult<Json<CreateTemplateResponse>> {
+    state.index_store.store_template(&template)?;
+
+    tracing::info!(
+        "Created/updated template: {} ({})",
+        template.name,
+        template.id.0
+    );
+
+    Ok(Json(CreateTemplateResponse {
+        template_id: template.id.0.clone(),
+        message: "Template created/updated successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateTemplateResponse {
+    pub template_id: String,
+    pub message: String,
+}
+
+/// Delete a template
+pub async fn delete_template(
+    State(state): State<Arc<AppState>>,
+    Path(template_id): Path<String>,
+) -> ApiResult<Json<DeleteTemplateResponse>> {
+    let template_id = TemplateId::new(template_id);
+
+    state.index_store.delete_template(&template_id)?;
+
+    tracing::info!("Deleted template: {}", template_id.0);
+
+    Ok(Json(DeleteTemplateResponse {
+        message: "Template deleted successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteTemplateResponse {
+    pub message: String,
+}
+
+/// Instantiate a template
+pub async fn instantiate_template(
+    State(state): State<Arc<AppState>>,
+    Path(template_id): Path<String>,
+    Json(instance): Json<TemplateInstance>,
+) -> ApiResult<Json<InstantiateTemplateResponse>> {
+    let template_id = TemplateId::new(template_id);
+
+    let template = state
+        .index_store
+        .get_template(&template_id)?
+        .ok_or_else(|| anyhow::anyhow!("Template not found"))?;
+
+    let workflow = TemplateProcessor::instantiate(&template, &instance)?;
+
+    tracing::info!("Instantiated template: {}", template.name);
+
+    Ok(Json(InstantiateTemplateResponse {
+        workflow,
+        message: "Template instantiated successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InstantiateTemplateResponse {
+    pub workflow: WorkflowSpec,
+    pub message: String,
+}
+
+// === Claude Config Compiler Endpoint ===
+
+/// Generate Claude configuration for a role
+pub async fn compile_claude_config(
+    State(state): State<Arc<AppState>>,
+    Path(role_id): Path<String>,
+) -> ApiResult<Json<CompileClaudeConfigResponse>> {
+    let role_id = RoleId::new(role_id);
+
+    // Get organization (assume first one for MVP)
+    let orgs = state.index_store.list_organizations()?;
+    let org = orgs
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No organization configured"))?;
+
+    // Get all roles and policies
+    let roles = state.index_store.list_roles()?;
+    let policies = state.index_store.list_policies()?;
+
+    // Compile configuration
+    let compiler = ClaudeCompiler::new(org.clone(), roles, policies);
+    let config = compiler.compile_for_role(&role_id)?;
+    let readme = compiler.generate_readme(&role_id)?;
+
+    Ok(Json(CompileClaudeConfigResponse {
+        config,
+        readme,
+        message: "Claude configuration compiled successfully".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CompileClaudeConfigResponse {
+    pub config: shiioo_core::types::ClaudeConfig,
+    pub readme: String,
     pub message: String,
 }

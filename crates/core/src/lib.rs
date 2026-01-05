@@ -5,5 +5,8 @@ pub mod storage;
 pub mod events;
 pub mod workflow;
 pub mod policy;
+pub mod organization;
+pub mod template;
+pub mod claude_compiler;
 
 pub use types::*;

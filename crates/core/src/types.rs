@@ -267,3 +267,165 @@ pub struct ConfigDiff {
     pub policies_modified: Vec<PolicySpec>,
     pub policies_removed: Vec<PolicyId>,
 }
+
+// === Phase 3: Organization & Templates ===
+
+/// Unique identifier for an organization
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OrgId(pub String);
+
+impl OrgId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Unique identifier for a team
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TeamId(pub String);
+
+impl TeamId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Unique identifier for a person in the organization
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PersonId(pub String);
+
+impl PersonId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Unique identifier for a process template
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TemplateId(pub String);
+
+impl TemplateId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Organization definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Organization {
+    pub id: OrgId,
+    pub name: String,
+    pub description: String,
+    pub teams: Vec<Team>,
+    pub people: Vec<Person>,
+    pub org_chart: OrgChart,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Team within an organization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Team {
+    pub id: TeamId,
+    pub name: String,
+    pub description: String,
+    pub lead: Option<PersonId>,
+    pub members: Vec<PersonId>,
+    pub parent_team: Option<TeamId>,
+}
+
+/// Person in the organization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Person {
+    pub id: PersonId,
+    pub name: String,
+    pub email: String,
+    pub role: RoleId,
+    pub team: TeamId,
+    pub reports_to: Option<PersonId>,
+    pub can_approve: Vec<String>, // List of approval types this person can approve
+}
+
+/// Organizational chart structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrgChart {
+    pub root_team: TeamId,
+    pub reporting_structure: HashMap<PersonId, PersonId>, // person -> manager
+}
+
+/// Process template for reusable workflows
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessTemplate {
+    pub id: TemplateId,
+    pub name: String,
+    pub description: String,
+    pub category: String, // e.g., "code_review", "deployment", "analysis"
+    pub parameters: Vec<TemplateParameter>,
+    pub workflow_template: WorkflowSpec,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+}
+
+/// Parameter for a process template
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateParameter {
+    pub name: String,
+    pub description: String,
+    pub param_type: TemplateParameterType,
+    pub default_value: Option<String>,
+    pub required: bool,
+}
+
+/// Type of template parameter
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateParameterType {
+    String,
+    Number,
+    Boolean,
+    RoleId,
+    TeamId,
+    PersonId,
+}
+
+/// Instantiation of a template with specific parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateInstance {
+    pub template_id: TemplateId,
+    pub parameters: HashMap<String, String>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+}
+
+/// Claude Code configuration (for .claude/config.json generation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeConfig {
+    pub mcp_servers: HashMap<String, McpServerConfig>,
+    pub tools: Vec<ToolConfig>,
+    pub settings: ClaudeSettings,
+}
+
+/// MCP server configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+}
+
+/// Tool configuration for Claude
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub tier: u8,
+    pub requires_approval: bool,
+}
+
+/// Claude settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeSettings {
+    pub max_tokens: Option<u64>,
+    pub temperature: Option<f64>,
+    pub model: Option<String>,
+}

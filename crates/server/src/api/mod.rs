@@ -50,6 +50,19 @@ fn create_router(state: AppState) -> Router {
         .route("/api/policies", post(handlers::create_policy))
         .route("/api/policies/{policy_id}", get(handlers::get_policy))
         .route("/api/policies/{policy_id}", delete(handlers::delete_policy))
+        // Organization management
+        .route("/api/organizations", get(handlers::list_organizations))
+        .route("/api/organizations", post(handlers::create_organization))
+        .route("/api/organizations/{org_id}", get(handlers::get_organization))
+        .route("/api/organizations/{org_id}", delete(handlers::delete_organization))
+        // Template management
+        .route("/api/templates", get(handlers::list_templates))
+        .route("/api/templates", post(handlers::create_template))
+        .route("/api/templates/{template_id}", get(handlers::get_template))
+        .route("/api/templates/{template_id}", delete(handlers::delete_template))
+        .route("/api/templates/{template_id}/instantiate", post(handlers::instantiate_template))
+        // Claude config compiler
+        .route("/api/claude/compile/{role_id}", get(handlers::compile_claude_config))
         // UI routes
         .fallback(ui::serve_ui)
         // Middleware

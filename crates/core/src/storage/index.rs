@@ -1,4 +1,7 @@
-use crate::types::{PolicyId, PolicySpec, RoleId, RoleSpec, Run, RunId, RunStatus};
+use crate::types::{
+    OrgId, Organization, PolicyId, PolicySpec, ProcessTemplate, RoleId, RoleSpec, Run, RunId,
+    RunStatus, TemplateId,
+};
 use anyhow::{Context, Result};
 use redb::{Database, ReadableTable, TableDefinition};
 use std::path::PathBuf;
@@ -7,6 +10,8 @@ use std::sync::Arc;
 const RUNS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("runs");
 const ROLES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("roles");
 const POLICIES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("policies");
+const ORGS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("organizations");
+const TEMPLATES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("templates");
 
 /// Index store for fast queries using redb
 #[derive(Clone)]
@@ -35,6 +40,12 @@ impl RedbIndexStore {
             let _policies_table = write_txn
                 .open_table(POLICIES_TABLE)
                 .context("Failed to open policies table")?;
+            let _orgs_table = write_txn
+                .open_table(ORGS_TABLE)
+                .context("Failed to open orgs table")?;
+            let _templates_table = write_txn
+                .open_table(TEMPLATES_TABLE)
+                .context("Failed to open templates table")?;
         }
         write_txn.commit().context("Failed to commit transaction")?;
 
@@ -245,6 +256,142 @@ impl RedbIndexStore {
             table
                 .remove(policy_id.0.as_str())
                 .context("Failed to delete policy")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Store an organization
+    pub fn store_organization(&self, org: &Organization) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ORGS_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &org.id.0;
+            let value = serde_json::to_vec(org).context("Failed to serialize organization")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert organization")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get an organization by ID
+    pub fn get_organization(&self, org_id: &OrgId) -> Result<Option<Organization>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ORGS_TABLE).context("Failed to open table")?;
+
+        let value = table.get(org_id.0.as_str()).context("Failed to get organization")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let org: Organization = serde_json::from_slice(bytes).context("Failed to deserialize organization")?;
+                Ok(Some(org))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all organizations
+    pub fn list_organizations(&self) -> Result<Vec<Organization>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(ORGS_TABLE).context("Failed to open table")?;
+
+        let mut orgs = Vec::new();
+        for item in table.iter().context("Failed to iterate organizations")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let org: Organization = serde_json::from_slice(value.value())
+                .context("Failed to deserialize organization")?;
+            orgs.push(org);
+        }
+
+        Ok(orgs)
+    }
+
+    /// Delete an organization
+    pub fn delete_organization(&self, org_id: &OrgId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(ORGS_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(org_id.0.as_str())
+                .context("Failed to delete organization")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Store a process template
+    pub fn store_template(&self, template: &ProcessTemplate) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(TEMPLATES_TABLE)
+                .context("Failed to open table")?;
+
+            let key = &template.id.0;
+            let value = serde_json::to_vec(template).context("Failed to serialize template")?;
+
+            table
+                .insert(key.as_str(), value.as_slice())
+                .context("Failed to insert template")?;
+        }
+        write_txn.commit().context("Failed to commit")?;
+        Ok(())
+    }
+
+    /// Get a template by ID
+    pub fn get_template(&self, template_id: &TemplateId) -> Result<Option<ProcessTemplate>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(TEMPLATES_TABLE).context("Failed to open table")?;
+
+        let value = table.get(template_id.0.as_str()).context("Failed to get template")?;
+
+        match value {
+            Some(guard) => {
+                let bytes = guard.value();
+                let template: ProcessTemplate = serde_json::from_slice(bytes).context("Failed to deserialize template")?;
+                Ok(Some(template))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List all templates
+    pub fn list_templates(&self) -> Result<Vec<ProcessTemplate>> {
+        let read_txn = self.db.begin_read().context("Failed to begin read")?;
+        let table = read_txn.open_table(TEMPLATES_TABLE).context("Failed to open table")?;
+
+        let mut templates = Vec::new();
+        for item in table.iter().context("Failed to iterate templates")? {
+            let (_key, value) = item.context("Failed to read item")?;
+            let template: ProcessTemplate = serde_json::from_slice(value.value())
+                .context("Failed to deserialize template")?;
+            templates.push(template);
+        }
+
+        Ok(templates)
+    }
+
+    /// Delete a template
+    pub fn delete_template(&self, template_id: &TemplateId) -> Result<()> {
+        let write_txn = self.db.begin_write().context("Failed to begin write")?;
+        {
+            let mut table = write_txn
+                .open_table(TEMPLATES_TABLE)
+                .context("Failed to open table")?;
+
+            table
+                .remove(template_id.0.as_str())
+                .context("Failed to delete template")?;
         }
         write_txn.commit().context("Failed to commit")?;
         Ok(())
