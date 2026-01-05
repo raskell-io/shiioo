@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shiioo - Virtual Company OS</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 48px;
+            max-width: 800px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            font-size: 3em;
+            margin-bottom: 16px;
+            color: #333;
+        }
+        .subtitle {
+            font-size: 1.25em;
+            color: #666;
+            margin-bottom: 32px;
+        }
+        .status {
+            background: #f0f9ff;
+            border-left: 4px solid #0ea5e9;
+            padding: 16px;
+            margin-bottom: 24px;
+            border-radius: 4px;
+        }
+        .status h2 {
+            font-size: 1.1em;
+            color: #0c4a6e;
+            margin-bottom: 8px;
+        }
+        .status p {
+            color: #075985;
+        }
+        .section {
+            margin-top: 32px;
+        }
+        .section h3 {
+            font-size: 1.5em;
+            margin-bottom: 16px;
+            color: #333;
+        }
+        .feature-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        .feature-list li {
+            padding: 8px 0;
+            color: #555;
+        }
+        .feature-list li:before {
+            content: "✓ ";
+            color: #22c55e;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        .api-link {
+            display: inline-block;
+            margin-top: 24px;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .api-link:hover {
+            background: #5568d3;
+        }
+        code {
+            background: #f1f5f9;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏢 Shiioo</h1>
+        <div class="subtitle">Virtual Company OS - Agentic Enterprise Orchestrator</div>
+
+        <div class="status">
+            <h2>✅ Server Running</h2>
+            <p>The Shiioo API server is operational. The web UI is under construction.</p>
+        </div>
+
+        <div class="section">
+            <h3>Available Now</h3>
+            <ul class="feature-list">
+                <li>RESTful API for workflow management</li>
+                <li>Event-sourced persistence with blob storage</li>
+                <li>Content-addressed artifact storage</li>
+                <li>Transparent, replayable event logs</li>
+                <li>Fast indexing with redb</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>Coming Soon</h3>
+            <ul class="feature-list">
+                <li>DAG-based workflow execution engine</li>
+                <li>MCP tool integration</li>
+                <li>Policy engine and governance</li>
+                <li>CEO Console web interface</li>
+                <li>Capacity pooling and rate limit resilience</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>API Endpoints</h3>
+            <p>Try these endpoints:</p>
+            <ul style="margin-top: 12px; list-style: none;">
+                <li><code>GET /api/health</code> - Health check</li>
+                <li><code>GET /api/runs</code> - List all runs</li>
+                <li><code>GET /api/runs/:id</code> - Get run details</li>
+                <li><code>GET /api/runs/:id/events</code> - Get run events</li>
+                <li><code>POST /api/jobs</code> - Create a new job</li>
+            </ul>
+        </div>
+
+        <a href="/api/health" class="api-link">Check API Health →</a>
+    </div>
+</body>
+</html>

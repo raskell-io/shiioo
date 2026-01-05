@@ -1,0 +1,27 @@
+[package]
+name = "shiioo-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Local crates
+shiioo-core = { path = "../core" }
+
+# Workspace dependencies
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+
+# MCP protocol (JSON-RPC over stdio)
+# For now we'll implement the basic protocol ourselves
+# Later we can depend on an official MCP SDK if one emerges
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/server",
+    "crates/mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Raskell Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/raskell-io/shiioo"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+tokio-util = "0.7"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUIDs
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# HTTP/API (server)
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+
+# Embedded DB
+redb = "2.3"
+
+# Blob storage
+object_store = { version = "0.11", features = ["aws", "http"] }
+bytes = "1.9"
+
+# Graph algorithms (DAG execution)
+petgraph = "0.6"
+
+# Configuration
+toml = "0.8"
+
+# Compression (for event logs)
+flate2 = "1.0"
+
+# Hashing (content-addressed storage)
+sha2 = "0.10"
+hex = "0.4"
+
+# Cron scheduling
+cron = "0.13"
+
+# MCP
+# Note: Will need to add proper MCP protocol dependencies when building that module
