@@ -2,9 +2,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
+use shiioo_core::audit::AuditLog;
 use shiioo_core::cluster::ClusterManager;
+use shiioo_core::compliance::{ComplianceChecker, SecurityScanner};
 use shiioo_core::config_change::ConfigChangeManager;
 use shiioo_core::metrics::MetricsCollector;
+use shiioo_core::rbac::RbacManager;
 use shiioo_core::scheduler::RoutineScheduler;
 use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore, TenantStorage};
 use shiioo_core::cluster::NodeId;
@@ -112,6 +115,10 @@ pub struct AppState {
     pub tenant_storage: Arc<TenantStorage>,
     pub cluster_manager: Arc<ClusterManager>,
     pub secret_manager: Arc<SecretManager>,
+    pub audit_log: Arc<AuditLog>,
+    pub rbac_manager: Arc<RbacManager>,
+    pub compliance_checker: Arc<ComplianceChecker>,
+    pub security_scanner: Arc<SecurityScanner>,
 }
 
 impl AppState {
@@ -160,6 +167,22 @@ impl AppState {
         let encryption_key = b"shiioo-default-secret-key-change-me-in-production!";
         let secret_manager = Arc::new(SecretManager::new(encryption_key));
 
+        // Phase 9: Security and compliance
+        let audit_log = Arc::new(AuditLog::new());
+        let rbac_manager = Arc::new(RbacManager::new());
+
+        // Initialize system roles
+        for role in shiioo_core::rbac::create_system_roles() {
+            rbac_manager.register_role(role)
+                .context("Failed to register system role")?;
+        }
+
+        let compliance_checker = Arc::new(ComplianceChecker::new(
+            (*audit_log).clone(),
+            (*rbac_manager).clone(),
+        ));
+        let security_scanner = Arc::new(SecurityScanner::new((*audit_log).clone()));
+
         Ok(Self {
             blob_store,
             event_log,
@@ -174,6 +197,10 @@ impl AppState {
             tenant_storage,
             cluster_manager,
             secret_manager,
+            audit_log,
+            rbac_manager,
+            compliance_checker,
+            security_scanner,
         })
     }
 }

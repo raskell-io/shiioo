@@ -17,5 +17,8 @@ pub mod analytics;
 pub mod tenant;
 pub mod cluster;
 pub mod secrets;
+pub mod audit;
+pub mod rbac;
+pub mod compliance;
 
 pub use types::*;

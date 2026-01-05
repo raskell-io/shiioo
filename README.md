@@ -150,6 +150,21 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Condition evaluator** - simple expression parser for runtime decisions
   - **Full API** for secret management and advanced workflow patterns
 
+- ✅ **Phase 9**: Enhanced security & compliance
+  - **Tamper-proof audit logging** - blockchain-style chain with SHA256 verification
+  - **Audit event categories** - Authentication, Authorization, DataAccess, Security, Compliance
+  - **Audit statistics** - event counts by category, severity, user, and tenant
+  - **Chain integrity verification** - detect tampering with hash chain validation
+  - **RBAC system** - fine-grained permissions (Resource x Action x ResourceID)
+  - **System roles** - admin, workflow_manager, secret_manager, auditor, viewer
+  - **Permission checking** - wildcard support for Resource::All and Action::All
+  - **SOC2 compliance** - CC6.1, CC6.2, CC7.2, CC7.3 requirement checks
+  - **GDPR compliance** - Article 5, 17, 30, 32, 33 requirement checks
+  - **Compliance reporting** - automated evidence collection and finding tracking
+  - **Security scanning** - brute force, privilege escalation, data exfiltration detection
+  - **Permission middleware** - authorization enforcement for API endpoints
+  - **Full API** for audit logs, RBAC, compliance reports, and security scans
+
 ### API Endpoints
 **Workflow Management:**
   - `GET /api/health` - Health check
@@ -262,12 +277,29 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `GET /api/secrets/{secret_id}/versions` - Get secret version history
   - `GET /api/secrets/rotation/needed` - Get secrets needing rotation
 
+**Audit Logging (Phase 9):**
+  - `GET /api/audit/entries` - List audit log entries (filter by category, user, time)
+  - `GET /api/audit/statistics` - Get audit event statistics
+  - `GET /api/audit/verify-chain` - Verify audit log chain integrity
+
+**RBAC (Phase 9):**
+  - `GET /api/rbac/roles` - List all RBAC roles
+  - `GET /api/rbac/roles/{role_id}` - Get role details with permissions
+  - `POST /api/rbac/roles` - Create a custom role
+  - `POST /api/rbac/assign-role` - Assign role to user
+  - `POST /api/rbac/check-permission` - Check if user has specific permission
+
+**Compliance & Security (Phase 9):**
+  - `POST /api/compliance/report` - Generate compliance report (SOC2, GDPR, etc.)
+  - `POST /api/security/scan` - Run security vulnerability scan
+
 ### Coming Next
-- 🚧 **Phase 9**: Enhanced security and compliance
-  - Audit logging with tamper-proof storage
-  - RBAC with fine-grained permissions
-  - Compliance reporting (SOC2, GDPR, HIPAA)
-  - Security scanning and vulnerability detection
+- 🚧 **Phase 10**: UI & Developer Experience
+  - Interactive web dashboard for workflow visualization
+  - Real-time workflow execution monitoring
+  - GraphQL API for flexible data querying
+  - Enhanced MCP tools with streaming support
+  - SDK for building custom workflow integrations
 
 ## Quick Start
 

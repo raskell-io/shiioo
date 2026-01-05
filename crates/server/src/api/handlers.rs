@@ -1679,3 +1679,252 @@ pub struct ClusterHealthResponse {
     pub has_leader: bool,
     pub leader_id: Option<String>,
 }
+
+// ============================================================================
+// Phase 9: Security & Compliance Handlers
+// ============================================================================
+
+/// List audit log entries
+pub async fn list_audit_entries(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<AuditQueryParams>,
+) -> ApiResult<Json<Vec<shiioo_core::audit::AuditEntry>>> {
+    let entries = if let Some(category) = params.category {
+        state.audit_log.filter_by_category(category)
+    } else if let Some(user_id) = params.user_id {
+        state.audit_log.list_by_user(&user_id)
+    } else if let (Some(start), Some(end)) = (params.start_time, params.end_time) {
+        state.audit_log.filter_by_time_range(start, end)
+    } else {
+        state.audit_log.list_all()
+    };
+
+    Ok(Json(entries))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuditQueryParams {
+    pub category: Option<shiioo_core::audit::AuditCategory>,
+    pub user_id: Option<String>,
+    pub start_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub end_time: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Get audit log statistics
+pub async fn get_audit_statistics(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<shiioo_core::audit::AuditStatistics>> {
+    let stats = state.audit_log.get_statistics();
+    Ok(Json(stats))
+}
+
+/// Verify audit log chain integrity
+pub async fn verify_audit_chain(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<AuditChainVerification>> {
+    let is_valid = state.audit_log.verify_chain();
+    Ok(Json(AuditChainVerification {
+        is_valid,
+        message: if is_valid {
+            "Audit log chain integrity verified".to_string()
+        } else {
+            "Audit log chain integrity check failed".to_string()
+        },
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditChainVerification {
+    pub is_valid: bool,
+    pub message: String,
+}
+
+/// List RBAC roles
+pub async fn list_rbac_roles(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<Vec<shiioo_core::rbac::RbacRole>>> {
+    let roles = state.rbac_manager.list_roles();
+    Ok(Json(roles))
+}
+
+/// Get RBAC role
+pub async fn get_rbac_role(
+    State(state): State<Arc<AppState>>,
+    Path(role_id): Path<String>,
+) -> ApiResult<Json<shiioo_core::rbac::RbacRole>> {
+    let role = state
+        .rbac_manager
+        .get_role(&role_id)
+        .ok_or_else(|| anyhow::anyhow!("Role not found: {}", role_id))?;
+
+    Ok(Json(role))
+}
+
+/// Create RBAC role
+pub async fn create_rbac_role(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CreateRbacRoleRequest>,
+) -> ApiResult<Json<shiioo_core::rbac::RbacRole>> {
+    let role = shiioo_core::rbac::RbacRole::new(
+        request.id,
+        request.name,
+        request.description,
+    );
+
+    state.rbac_manager.register_role(role.clone())?;
+
+    // Log audit event
+    state.audit_log.log(
+        shiioo_core::audit::AuditCategory::Authorization,
+        shiioo_core::audit::AuditSeverity::Info,
+        shiioo_core::audit::AuditAction::RoleAssigned {
+            user_id: "system".to_string(),
+            role: role.id.clone(),
+        },
+        Some("system".to_string()),
+        None,
+        None,
+    );
+
+    Ok(Json(role))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRbacRoleRequest {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// Assign role to user
+pub async fn assign_user_role(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<AssignRoleRequest>,
+) -> ApiResult<Json<SuccessResponse>> {
+    state
+        .rbac_manager
+        .assign_role(&request.user_id, &request.role_id)?;
+
+    // Log audit event
+    state.audit_log.log(
+        shiioo_core::audit::AuditCategory::Authorization,
+        shiioo_core::audit::AuditSeverity::Info,
+        shiioo_core::audit::AuditAction::RoleAssigned {
+            user_id: request.user_id.clone(),
+            role: request.role_id.clone(),
+        },
+        Some(request.user_id.clone()),
+        None,
+        None,
+    );
+
+    Ok(Json(SuccessResponse {
+        success: true,
+        message: format!("Role {} assigned to user {}", request.role_id, request.user_id),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AssignRoleRequest {
+    pub user_id: String,
+    pub role_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SuccessResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Check user permission
+pub async fn check_user_permission(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CheckPermissionRequest>,
+) -> ApiResult<Json<PermissionCheckResponse>> {
+    let permission = shiioo_core::rbac::Permission::new(
+        request.resource,
+        request.action,
+    );
+
+    let has_permission = state
+        .rbac_manager
+        .check_permission(&request.user_id, &permission);
+
+    Ok(Json(PermissionCheckResponse {
+        has_permission,
+        user_id: request.user_id,
+        resource: request.resource,
+        action: request.action,
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CheckPermissionRequest {
+    pub user_id: String,
+    pub resource: shiioo_core::rbac::Resource,
+    pub action: shiioo_core::rbac::Action,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PermissionCheckResponse {
+    pub has_permission: bool,
+    pub user_id: String,
+    pub resource: shiioo_core::rbac::Resource,
+    pub action: shiioo_core::rbac::Action,
+}
+
+/// Generate compliance report
+pub async fn generate_compliance_report(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ComplianceReportRequest>,
+) -> ApiResult<Json<shiioo_core::compliance::ComplianceReport>> {
+    let report = state.compliance_checker.generate_report(
+        request.framework,
+        request.period_start,
+        request.period_end,
+    );
+
+    // Log audit event
+    state.audit_log.log(
+        shiioo_core::audit::AuditCategory::ComplianceEvent,
+        shiioo_core::audit::AuditSeverity::Info,
+        shiioo_core::audit::AuditAction::ComplianceCheckCompleted {
+            check_id: report.id.clone(),
+            passed: report.summary.non_compliant == 0,
+        },
+        Some("system".to_string()),
+        None,
+        None,
+    );
+
+    Ok(Json(report))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ComplianceReportRequest {
+    pub framework: shiioo_core::compliance::ComplianceFramework,
+    pub period_start: chrono::DateTime<chrono::Utc>,
+    pub period_end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Run security scan
+pub async fn run_security_scan(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<shiioo_core::compliance::SecurityScanReport>> {
+    let report = state.security_scanner.scan();
+
+    // Log audit event
+    state.audit_log.log(
+        shiioo_core::audit::AuditCategory::SecurityEvent,
+        shiioo_core::audit::AuditSeverity::Info,
+        shiioo_core::audit::AuditAction::SecurityScanCompleted {
+            scan_id: report.scan_id.clone(),
+            findings_count: report.findings.len(),
+        },
+        Some("system".to_string()),
+        None,
+        None,
+    );
+
+    Ok(Json(report))
+}
