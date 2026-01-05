@@ -2,10 +2,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
+use shiioo_core::cluster::ClusterManager;
 use shiioo_core::config_change::ConfigChangeManager;
 use shiioo_core::metrics::MetricsCollector;
 use shiioo_core::scheduler::RoutineScheduler;
-use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore};
+use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore, TenantStorage};
+use shiioo_core::cluster::NodeId;
+use shiioo_core::tenant::TenantManager;
 use shiioo_core::workflow::WorkflowExecutor;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -104,6 +107,9 @@ pub struct AppState {
     pub config_change_manager: Arc<ConfigChangeManager>,
     pub metrics: Arc<MetricsCollector>,
     pub analytics: Arc<PerformanceAnalytics>,
+    pub tenant_manager: Arc<TenantManager>,
+    pub tenant_storage: Arc<TenantStorage>,
+    pub cluster_manager: Arc<ClusterManager>,
 }
 
 impl AppState {
@@ -136,6 +142,17 @@ impl AppState {
         let metrics = Arc::new(MetricsCollector::new());
         let analytics = Arc::new(PerformanceAnalytics::new());
 
+        // Phase 7: Multi-tenancy and high availability
+        let tenant_manager = Arc::new(TenantManager::new());
+        let tenant_storage = Arc::new(
+            TenantStorage::new(config.data_dir.clone())
+                .context("Failed to create tenant storage")?,
+        );
+
+        // Generate a unique node ID for this server instance
+        let local_node_id = NodeId::generate();
+        let cluster_manager = Arc::new(ClusterManager::new(local_node_id, 30)); // 30 sec heartbeat timeout
+
         Ok(Self {
             blob_store,
             event_log,
@@ -146,6 +163,9 @@ impl AppState {
             config_change_manager,
             metrics,
             analytics,
+            tenant_manager,
+            tenant_storage,
+            cluster_manager,
         })
     }
 }

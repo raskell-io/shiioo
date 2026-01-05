@@ -1185,3 +1185,330 @@ pub struct HealthStatusResponse {
     pub failed_executions: u64,
     pub success_rate: f64,
 }
+
+// ============================================================================
+// Phase 7: Multi-tenancy & High Availability
+// ============================================================================
+
+use shiioo_core::{
+    tenant::{Tenant, TenantId, TenantQuota, TenantSettings, TenantStatus, QuotaResource},
+    cluster::{ClusterNode, NodeId, NodeStatus, NodeRole},
+};
+
+/// Register a new tenant
+pub async fn register_tenant(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterTenantRequest>,
+) -> ApiResult<Json<Tenant>> {
+    let tenant = Tenant {
+        id: TenantId::generate(),
+        name: req.name.clone(),
+        description: req.description.clone(),
+        status: TenantStatus::Active,
+        quota: req.quota.unwrap_or_default(),
+        settings: req.settings.unwrap_or_default(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    state.tenant_manager.register_tenant(tenant.clone())?;
+
+    // Initialize tenant storage
+    state.tenant_storage.initialize_tenant(&tenant.id)?;
+
+    tracing::info!("Registered tenant: {} ({})", tenant.name, tenant.id.0);
+
+    Ok(Json(tenant))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterTenantRequest {
+    pub name: String,
+    pub description: String,
+    pub quota: Option<TenantQuota>,
+    pub settings: Option<TenantSettings>,
+}
+
+/// List all tenants
+pub async fn list_tenants(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListTenantsResponse>> {
+    let tenants = state.tenant_manager.list_tenants();
+    Ok(Json(ListTenantsResponse { tenants }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListTenantsResponse {
+    pub tenants: Vec<Tenant>,
+}
+
+/// Get a specific tenant
+pub async fn get_tenant(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<String>,
+) -> ApiResult<Json<Tenant>> {
+    let tenant_id = TenantId::new(tenant_id);
+
+    let tenant = state
+        .tenant_manager
+        .get_tenant(&tenant_id)
+        .ok_or_else(|| anyhow::anyhow!("Tenant not found"))?;
+
+    Ok(Json(tenant))
+}
+
+/// Update tenant
+pub async fn update_tenant(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<String>,
+    Json(req): Json<UpdateTenantRequest>,
+) -> ApiResult<Json<Tenant>> {
+    let tenant_id = TenantId::new(tenant_id);
+
+    let mut tenant = state
+        .tenant_manager
+        .get_tenant(&tenant_id)
+        .ok_or_else(|| anyhow::anyhow!("Tenant not found"))?;
+
+    if let Some(name) = req.name {
+        tenant.name = name;
+    }
+    if let Some(description) = req.description {
+        tenant.description = description;
+    }
+    if let Some(quota) = req.quota {
+        tenant.quota = quota;
+    }
+    if let Some(settings) = req.settings {
+        tenant.settings = settings;
+    }
+
+    tenant.updated_at = chrono::Utc::now();
+
+    state.tenant_manager.update_tenant(tenant.clone())?;
+
+    tracing::info!("Updated tenant: {}", tenant_id.0);
+
+    Ok(Json(tenant))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateTenantRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub quota: Option<TenantQuota>,
+    pub settings: Option<TenantSettings>,
+}
+
+/// Delete tenant
+pub async fn delete_tenant(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<String>,
+) -> ApiResult<Json<DeleteTenantResponse>> {
+    let tenant_id = TenantId::new(tenant_id);
+
+    // Delete tenant data
+    state.tenant_storage.delete_tenant_data(&tenant_id)?;
+
+    // Remove tenant from manager
+    state.tenant_manager.delete_tenant(&tenant_id)?;
+
+    tracing::info!("Deleted tenant: {}", tenant_id.0);
+
+    Ok(Json(DeleteTenantResponse {
+        message: format!("Tenant {} deleted successfully", tenant_id.0),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteTenantResponse {
+    pub message: String,
+}
+
+/// Suspend tenant
+pub async fn suspend_tenant(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<String>,
+) -> ApiResult<Json<Tenant>> {
+    let tenant_id = TenantId::new(tenant_id);
+
+    state.tenant_manager.suspend_tenant(&tenant_id)?;
+
+    let tenant = state
+        .tenant_manager
+        .get_tenant(&tenant_id)
+        .ok_or_else(|| anyhow::anyhow!("Tenant not found"))?;
+
+    tracing::info!("Suspended tenant: {}", tenant_id.0);
+
+    Ok(Json(tenant))
+}
+
+/// Activate tenant
+pub async fn activate_tenant(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<String>,
+) -> ApiResult<Json<Tenant>> {
+    let tenant_id = TenantId::new(tenant_id);
+
+    state.tenant_manager.activate_tenant(&tenant_id)?;
+
+    let tenant = state
+        .tenant_manager
+        .get_tenant(&tenant_id)
+        .ok_or_else(|| anyhow::anyhow!("Tenant not found"))?;
+
+    tracing::info!("Activated tenant: {}", tenant_id.0);
+
+    Ok(Json(tenant))
+}
+
+/// Get tenant storage statistics
+pub async fn get_tenant_storage_stats(
+    State(state): State<Arc<AppState>>,
+    Path(tenant_id): Path<String>,
+) -> ApiResult<Json<shiioo_core::storage::TenantStorageStats>> {
+    let tenant_id = TenantId::new(tenant_id);
+
+    let stats = state.tenant_storage.tenant_stats(&tenant_id)?;
+
+    Ok(Json(stats))
+}
+
+/// Register cluster node
+pub async fn register_cluster_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterNodeRequest>,
+) -> ApiResult<Json<ClusterNode>> {
+    let node = ClusterNode {
+        id: NodeId::generate(),
+        address: req.address.clone(),
+        region: req.region.clone(),
+        status: NodeStatus::Healthy,
+        role: NodeRole::Follower,
+        last_heartbeat: chrono::Utc::now(),
+        started_at: chrono::Utc::now(),
+        metadata: req.metadata.unwrap_or_default(),
+    };
+
+    state.cluster_manager.register_node(node.clone())?;
+
+    tracing::info!("Registered cluster node: {} at {}", node.id.0, node.address);
+
+    Ok(Json(node))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterNodeRequest {
+    pub address: String,
+    pub region: Option<String>,
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+/// List cluster nodes
+pub async fn list_cluster_nodes(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ListNodesResponse>> {
+    let nodes = state.cluster_manager.list_nodes();
+    Ok(Json(ListNodesResponse { nodes }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListNodesResponse {
+    pub nodes: Vec<ClusterNode>,
+}
+
+/// Get cluster node
+pub async fn get_cluster_node(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> ApiResult<Json<ClusterNode>> {
+    let node_id = NodeId::new(node_id);
+
+    let node = state
+        .cluster_manager
+        .get_node(&node_id)
+        .ok_or_else(|| anyhow::anyhow!("Node not found"))?;
+
+    Ok(Json(node))
+}
+
+/// Send heartbeat for a node
+pub async fn node_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> ApiResult<Json<HeartbeatResponse>> {
+    let node_id = NodeId::new(node_id);
+
+    state.cluster_manager.heartbeat(&node_id)?;
+
+    tracing::debug!("Heartbeat received from node: {}", node_id.0);
+
+    Ok(Json(HeartbeatResponse {
+        message: "Heartbeat acknowledged".to_string(),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HeartbeatResponse {
+    pub message: String,
+}
+
+/// Remove cluster node
+pub async fn remove_cluster_node(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> ApiResult<Json<RemoveNodeResponse>> {
+    let node_id = NodeId::new(node_id);
+
+    state.cluster_manager.remove_node(&node_id)?;
+
+    tracing::info!("Removed cluster node: {}", node_id.0);
+
+    Ok(Json(RemoveNodeResponse {
+        message: format!("Node {} removed successfully", node_id.0),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RemoveNodeResponse {
+    pub message: String,
+}
+
+/// Get current leader node
+pub async fn get_cluster_leader(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<LeaderResponse>> {
+    let leader = state.cluster_manager.get_leader();
+
+    Ok(Json(LeaderResponse { leader }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LeaderResponse {
+    pub leader: Option<ClusterNode>,
+}
+
+/// Get cluster health
+pub async fn get_cluster_health(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<ClusterHealthResponse>> {
+    let total_nodes = state.cluster_manager.cluster_size();
+    let healthy_nodes = state.cluster_manager.healthy_node_count();
+    let leader = state.cluster_manager.get_leader();
+
+    Ok(Json(ClusterHealthResponse {
+        total_nodes,
+        healthy_nodes,
+        has_leader: leader.is_some(),
+        leader_id: leader.map(|l| l.id.0),
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClusterHealthResponse {
+    pub total_nodes: usize,
+    pub healthy_nodes: usize,
+    pub has_leader: bool,
+    pub leader_id: Option<String>,
+}

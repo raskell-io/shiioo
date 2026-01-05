@@ -104,6 +104,23 @@ fn create_router(state: AppState) -> Router {
         .route("/api/health/status", get(handlers::get_health_status))
         // WebSocket for real-time updates
         .route("/api/ws", get(crate::websocket::ws_handler))
+        // Multi-tenancy (Phase 7)
+        .route("/api/tenants", get(handlers::list_tenants))
+        .route("/api/tenants", post(handlers::register_tenant))
+        .route("/api/tenants/{tenant_id}", get(handlers::get_tenant))
+        .route("/api/tenants/{tenant_id}", axum::routing::put(handlers::update_tenant))
+        .route("/api/tenants/{tenant_id}", delete(handlers::delete_tenant))
+        .route("/api/tenants/{tenant_id}/suspend", post(handlers::suspend_tenant))
+        .route("/api/tenants/{tenant_id}/activate", post(handlers::activate_tenant))
+        .route("/api/tenants/{tenant_id}/storage-stats", get(handlers::get_tenant_storage_stats))
+        // Cluster management (Phase 7)
+        .route("/api/cluster/nodes", get(handlers::list_cluster_nodes))
+        .route("/api/cluster/nodes", post(handlers::register_cluster_node))
+        .route("/api/cluster/nodes/{node_id}", get(handlers::get_cluster_node))
+        .route("/api/cluster/nodes/{node_id}", delete(handlers::remove_cluster_node))
+        .route("/api/cluster/nodes/{node_id}/heartbeat", post(handlers::node_heartbeat))
+        .route("/api/cluster/leader", get(handlers::get_cluster_leader))
+        .route("/api/cluster/health", get(handlers::get_cluster_health))
         // UI routes
         .fallback(ui::serve_ui)
         // Middleware

@@ -14,5 +14,7 @@ pub mod approval;
 pub mod config_change;
 pub mod metrics;
 pub mod analytics;
+pub mod tenant;
+pub mod cluster;
 
 pub use types::*;

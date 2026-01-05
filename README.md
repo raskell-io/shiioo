@@ -42,7 +42,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 6 Complete ✅)
+## Current Status (Phase 7 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -124,6 +124,18 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **In-memory metrics** - fast access to current system state
   - **Step retry tracking** - monitor failure and retry patterns
   - **Full API** for metrics, analytics, traces, and bottleneck analysis
+
+- ✅ **Phase 7**: Multi-tenancy & high availability
+  - **Multi-tenant isolation** - separate storage and resource quotas per tenant
+  - **Tenant management** - register, suspend, activate, and delete tenants
+  - **Resource quotas** - configurable limits for workflows, routines, storage, and API calls
+  - **Tenant-scoped storage** - isolated blob storage, event logs, and indexes
+  - **Cluster management** - register and monitor cluster nodes
+  - **Node heartbeat** - automatic health tracking with configurable timeout
+  - **Distributed locking** - TTL-based locks for cluster-wide coordination
+  - **Leader election** - automatic leader selection with lease-based renewal
+  - **Cluster health** - track node status and leader availability
+  - **Full API** for tenant and cluster management
 
 ### API Endpoints
 **Workflow Management:**
@@ -207,11 +219,30 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `GET /api/health/status` - Get system health status
   - `GET /api/ws` - WebSocket endpoint for real-time updates
 
+**Multi-Tenancy (Phase 7):**
+  - `GET /api/tenants` - List all tenants
+  - `GET /api/tenants/{tenant_id}` - Get tenant details
+  - `POST /api/tenants` - Register a new tenant
+  - `PUT /api/tenants/{tenant_id}` - Update tenant
+  - `DELETE /api/tenants/{tenant_id}` - Delete tenant
+  - `POST /api/tenants/{tenant_id}/suspend` - Suspend tenant
+  - `POST /api/tenants/{tenant_id}/activate` - Activate tenant
+  - `GET /api/tenants/{tenant_id}/storage-stats` - Get storage statistics
+
+**Cluster Management (Phase 7):**
+  - `GET /api/cluster/nodes` - List all cluster nodes
+  - `GET /api/cluster/nodes/{node_id}` - Get node details
+  - `POST /api/cluster/nodes` - Register a cluster node
+  - `DELETE /api/cluster/nodes/{node_id}` - Remove node from cluster
+  - `POST /api/cluster/nodes/{node_id}/heartbeat` - Send node heartbeat
+  - `GET /api/cluster/leader` - Get current leader node
+  - `GET /api/cluster/health` - Get cluster health status
+
 ### Coming Next
-- 🚧 **Phase 7**: Multi-tenancy & high availability
-  - Multi-tenant isolation
-  - Distributed execution across multiple nodes
-  - Leader election and consensus
+- 🚧 **Phase 8**: Advanced features
+  - Secret management and credential rotation
+  - Advanced workflow patterns (parallel-for-each, dynamic DAG)
+  - Workflow versioning and migration
   - Cross-region replication
 
 ## Quick Start
