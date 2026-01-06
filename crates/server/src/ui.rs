@@ -11,19 +11,43 @@ struct UiAssets;
 
 #[derive(RustEmbed)]
 #[folder = "static"]
-#[prefix = "/"]
 struct StaticAssets;
 
 /// Serve the dashboard (Phase 10)
 pub async fn serve_dashboard() -> Response {
+    // Debug: List all embedded files
+    tracing::debug!("StaticAssets embedded files:");
+    for file in StaticAssets::iter() {
+        tracing::debug!("  - {}", file);
+    }
+
+    // Try embedded assets first
     if let Some(content) = StaticAssets::get("dashboard.html") {
+        tracing::info!("✅ Serving dashboard from embedded assets");
         return serve_file("dashboard.html", content.data.as_ref());
     }
 
-    // Fallback if dashboard not found
+    tracing::warn!("⚠️  Dashboard not found in embedded assets, trying filesystem fallback");
+
+    // Fallback: try to read from filesystem (development mode)
+    let dashboard_paths = [
+        "crates/server/static/dashboard.html",
+        "static/dashboard.html",
+        "./static/dashboard.html",
+    ];
+
+    for path in &dashboard_paths {
+        if let Ok(content) = std::fs::read(path) {
+            tracing::info!("✅ Serving dashboard from filesystem: {}", path);
+            return serve_file("dashboard.html", &content);
+        }
+    }
+
+    // Last resort: dashboard not found
+    tracing::error!("❌ Dashboard not found in embedded assets or filesystem");
     (
         StatusCode::NOT_FOUND,
-        Html("<h1>Dashboard not found</h1>"),
+        Html("<h1>Dashboard not found</h1><p>Tried embedded assets and filesystem fallback</p>"),
     )
         .into_response()
 }
