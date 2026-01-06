@@ -203,6 +203,7 @@ impl AuditEntry {
 }
 
 /// Tamper-proof audit log manager
+#[derive(Clone)]
 pub struct AuditLog {
     entries: Arc<Mutex<Vec<AuditEntry>>>,
     last_hash: Arc<Mutex<Option<String>>>,

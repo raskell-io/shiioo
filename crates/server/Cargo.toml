@@ -36,5 +36,10 @@ rust-embed = "8.5"
 mime_guess = "2.0"
 futures = "0.3"
 
+# GraphQL support (Phase 10)
+async-graphql = { version = "7.0", features = ["chrono", "uuid"] }
+async-graphql-axum = "7.0"
+async-stream = "0.3"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

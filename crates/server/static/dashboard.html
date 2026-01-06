@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shiioo Dashboard - Virtual Company OS</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border: #334155;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            background: var(--bg-card-hover);
+            font-size: 0.875rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--primary);
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .metric-change {
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+
+        .metric-change.positive {
+            color: var(--success);
+        }
+
+        .metric-change.negative {
+            color: var(--danger);
+        }
+
+        .section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            border: none;
+            background: var(--primary);
+            color: white;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card-hover);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th {
+            text-align: left;
+            padding: 0.75rem;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .table tr:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .status-pill {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-running {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+
+        .status-completed {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+
+        .status-failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .status-pending {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }
+
+        .chart-container {
+            height: 200px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-around;
+            gap: 0.5rem;
+            padding: 1rem 0;
+        }
+
+        .chart-bar {
+            flex: 1;
+            background: var(--primary);
+            border-radius: 0.25rem 0.25rem 0 0;
+            transition: height 0.3s ease;
+            position: relative;
+        }
+
+        .chart-bar:hover {
+            background: var(--primary-dark);
+        }
+
+        .chart-bar-label {
+            position: absolute;
+            bottom: -1.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            border: 3px solid var(--border);
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: border-color 0.2s, color 0.2s;
+            color: var(--text-secondary);
+        }
+
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">🚀 Shiioo</div>
+        <div class="status-badge">
+            <div class="status-dot"></div>
+            <span id="connection-status">Connected</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Metrics Overview -->
+        <div class="metrics-grid" id="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-label">Total Runs</div>
+                <div class="metric-value" id="total-runs">0</div>
+                <div class="metric-change positive" id="runs-change">--</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Success Rate</div>
+                <div class="metric-value" id="success-rate">0%</div>
+                <div class="metric-change" id="rate-change">--</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Avg Duration</div>
+                <div class="metric-value" id="avg-duration">0ms</div>
+                <div class="metric-change" id="duration-change">--</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Active Tenants</div>
+                <div class="metric-value" id="active-tenants">0</div>
+                <div class="metric-change" id="tenants-change">--</div>
+            </div>
+        </div>
+
+        <!-- System Health -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title">System Health</div>
+                <button class="btn btn-secondary" onclick="refreshHealth()">Refresh</button>
+            </div>
+            <div id="health-content">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Loading health status...
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Runs -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title">Recent Workflow Runs</div>
+                <button class="btn" onclick="refreshRuns()">Refresh</button>
+            </div>
+            <div id="runs-content">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Loading runs...
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit Log -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title">Audit Log</div>
+                <button class="btn btn-secondary" onclick="refreshAuditLog()">Refresh</button>
+            </div>
+            <div class="tabs">
+                <div class="tab active" onclick="filterAudit('all')">All Events</div>
+                <div class="tab" onclick="filterAudit('Authentication')">Authentication</div>
+                <div class="tab" onclick="filterAudit('Authorization')">Authorization</div>
+                <div class="tab" onclick="filterAudit('SecurityEvent')">Security</div>
+            </div>
+            <div id="audit-content">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Loading audit log...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // GraphQL API endpoint
+        const GRAPHQL_ENDPOINT = '/api/graphql';
+        const WS_ENDPOINT = window.location.protocol === 'https:'
+            ? `wss://${window.location.host}/api/graphql/ws`
+            : `ws://${window.location.host}/api/graphql/ws`;
+
+        let wsConnection = null;
+        let currentAuditFilter = 'all';
+
+        // GraphQL query helper
+        async function graphql(query, variables = {}) {
+            const response = await fetch(GRAPHQL_ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ query, variables }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const result = await response.json();
+            if (result.errors) {
+                throw new Error(result.errors[0].message);
+            }
+
+            return result.data;
+        }
+
+        // Fetch metrics
+        async function fetchMetrics() {
+            try {
+                const data = await graphql(`
+                    query {
+                        metricsSummary {
+                            totalRuns
+                            successfulRuns
+                            failedRuns
+                            avgDurationMs
+                        }
+                    }
+                `);
+
+                const metrics = data.metricsSummary;
+                document.getElementById('total-runs').textContent = metrics.totalRuns;
+
+                const successRate = metrics.totalRuns > 0
+                    ? ((metrics.successfulRuns / metrics.totalRuns) * 100).toFixed(1)
+                    : 0;
+                document.getElementById('success-rate').textContent = `${successRate}%`;
+
+                document.getElementById('avg-duration').textContent = `${Math.round(metrics.avgDurationMs)}ms`;
+            } catch (error) {
+                console.error('Error fetching metrics:', error);
+            }
+        }
+
+        // Fetch system health
+        async function refreshHealth() {
+            try {
+                const data = await graphql(`
+                    query {
+                        systemHealth {
+                            overallStatus
+                            totalRuns
+                            successfulRuns
+                            failedRuns
+                            successRate
+                        }
+                    }
+                `);
+
+                const health = data.systemHealth;
+                const statusClass = health.overallStatus === 'Healthy' ? 'success' :
+                                   health.overallStatus === 'Degraded' ? 'warning' : 'danger';
+
+                document.getElementById('health-content').innerHTML = `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                        <div>
+                            <div class="metric-label">Overall Status</div>
+                            <div class="status-pill status-${health.overallStatus.toLowerCase()}">${health.overallStatus}</div>
+                        </div>
+                        <div>
+                            <div class="metric-label">Success Rate</div>
+                            <div style="font-size: 1.5rem; font-weight: 600;">${health.successRate.toFixed(1)}%</div>
+                        </div>
+                        <div>
+                            <div class="metric-label">Total / Success / Failed</div>
+                            <div style="font-size: 1.5rem; font-weight: 600;">
+                                ${health.totalRuns} / ${health.successfulRuns} / ${health.failedRuns}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error fetching health:', error);
+                document.getElementById('health-content').innerHTML = `
+                    <div class="empty-state">Failed to load health status</div>
+                `;
+            }
+        }
+
+        // Fetch recent runs
+        async function refreshRuns() {
+            try {
+                const data = await graphql(`
+                    query {
+                        runs(limit: 10) {
+                            id
+                            workflowId
+                            status
+                            startedAt
+                            completedAt
+                        }
+                    }
+                `);
+
+                if (data.runs.length === 0) {
+                    document.getElementById('runs-content').innerHTML = `
+                        <div class="empty-state">No workflow runs found</div>
+                    `;
+                    return;
+                }
+
+                const table = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Run ID</th>
+                                <th>Workflow</th>
+                                <th>Status</th>
+                                <th>Started</th>
+                                <th>Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.runs.map(run => {
+                                const status = run.status.toLowerCase();
+                                const startedAt = new Date(run.startedAt);
+                                const duration = run.completedAt
+                                    ? Math.round((new Date(run.completedAt) - startedAt) / 1000)
+                                    : '--';
+
+                                return `
+                                    <tr>
+                                        <td><code>${run.id.substring(0, 8)}</code></td>
+                                        <td>${run.workflowId}</td>
+                                        <td><span class="status-pill status-${status}">${run.status}</span></td>
+                                        <td>${startedAt.toLocaleString()}</td>
+                                        <td>${duration}s</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('runs-content').innerHTML = table;
+            } catch (error) {
+                console.error('Error fetching runs:', error);
+                document.getElementById('runs-content').innerHTML = `
+                    <div class="empty-state">Failed to load runs</div>
+                `;
+            }
+        }
+
+        // Fetch audit log
+        async function refreshAuditLog() {
+            try {
+                const categoryFilter = currentAuditFilter !== 'all'
+                    ? `, category: "${currentAuditFilter}"`
+                    : '';
+
+                const data = await graphql(`
+                    query {
+                        auditEntries(limit: 20${categoryFilter}) {
+                            id
+                            timestamp
+                            category
+                            severity
+                            userId
+                        }
+                    }
+                `);
+
+                if (data.auditEntries.length === 0) {
+                    document.getElementById('audit-content').innerHTML = `
+                        <div class="empty-state">No audit entries found</div>
+                    `;
+                    return;
+                }
+
+                const table = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Category</th>
+                                <th>Severity</th>
+                                <th>User</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.auditEntries.map(entry => {
+                                const timestamp = new Date(entry.timestamp);
+                                const severityClass = entry.severity.toLowerCase();
+
+                                return `
+                                    <tr>
+                                        <td>${timestamp.toLocaleString()}</td>
+                                        <td>${entry.category}</td>
+                                        <td><span class="status-pill status-${severityClass}">${entry.severity}</span></td>
+                                        <td>${entry.userId || '--'}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('audit-content').innerHTML = table;
+            } catch (error) {
+                console.error('Error fetching audit log:', error);
+                document.getElementById('audit-content').innerHTML = `
+                    <div class="empty-state">Failed to load audit log</div>
+                `;
+            }
+        }
+
+        // Filter audit log
+        function filterAudit(category) {
+            currentAuditFilter = category;
+
+            // Update active tab
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            refreshAuditLog();
+        }
+
+        // WebSocket for GraphQL subscriptions
+        let ws = null;
+        let wsReconnectTimer = null;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/graphql/ws`;
+
+            ws = new WebSocket(wsUrl, 'graphql-transport-ws');
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                // Send connection init
+                ws.send(JSON.stringify({ type: 'connection_init' }));
+
+                // Subscribe to metrics updates
+                ws.send(JSON.stringify({
+                    id: 'metrics-sub',
+                    type: 'subscribe',
+                    payload: {
+                        query: `
+                            subscription {
+                                metricsUpdates {
+                                    totalRuns
+                                    successfulRuns
+                                    failedRuns
+                                    avgDurationMs
+                                }
+                            }
+                        `
+                    }
+                }));
+
+                // Subscribe to run updates
+                ws.send(JSON.stringify({
+                    id: 'runs-sub',
+                    type: 'subscribe',
+                    payload: {
+                        query: `
+                            subscription {
+                                runUpdates {
+                                    id
+                                    workflowId
+                                    status
+                                    startedAt
+                                }
+                            }
+                        `
+                    }
+                }));
+
+                // Subscribe to audit events
+                ws.send(JSON.stringify({
+                    id: 'audit-sub',
+                    type: 'subscribe',
+                    payload: {
+                        query: `
+                            subscription {
+                                auditEvents {
+                                    id
+                                    timestamp
+                                    category
+                                    severity
+                                    userId
+                                }
+                            }
+                        `
+                    }
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+
+                if (message.type === 'connection_ack') {
+                    console.log('WebSocket subscription ready');
+                }
+
+                if (message.type === 'next' && message.payload?.data) {
+                    // Handle metrics updates
+                    if (message.id === 'metrics-sub' && message.payload.data.metricsUpdates) {
+                        updateMetrics(message.payload.data.metricsUpdates);
+                    }
+
+                    // Handle run updates
+                    if (message.id === 'runs-sub' && message.payload.data.runUpdates) {
+                        refreshRuns(); // Refresh the full list
+                    }
+
+                    // Handle audit updates
+                    if (message.id === 'audit-sub' && message.payload.data.auditEvents) {
+                        refreshAuditLog(); // Refresh the full list
+                    }
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket closed, reconnecting in 5s...');
+                wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+            };
+        }
+
+        function updateMetrics(metrics) {
+            document.getElementById('total-runs').textContent = metrics.totalRuns;
+
+            const successRate = metrics.totalRuns > 0
+                ? ((metrics.successfulRuns / metrics.totalRuns) * 100).toFixed(1)
+                : 0;
+            document.getElementById('success-rate').textContent = `${successRate}%`;
+
+            document.getElementById('avg-duration').textContent = `${Math.round(metrics.avgDurationMs)}ms`;
+        }
+
+        // Initialize dashboard
+        async function initDashboard() {
+            await Promise.all([
+                fetchMetrics(),
+                refreshHealth(),
+                refreshRuns(),
+                refreshAuditLog(),
+            ]);
+
+            // Connect WebSocket for real-time updates
+            connectWebSocket();
+
+            // Fallback polling for health (not subscribed)
+            setInterval(refreshHealth, 10000);
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (ws) {
+                ws.close();
+            }
+            if (wsReconnectTimer) {
+                clearTimeout(wsReconnectTimer);
+            }
+        });
+
+        // Initialize on load
+        window.addEventListener('load', initDashboard);
+    </script>
+</body>
+</html>

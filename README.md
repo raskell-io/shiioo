@@ -20,9 +20,10 @@ Shiioo enables you to define **roles**, **processes**, **jobs**, **routines**, a
 
 ### Components
 
-- **API Server** (Axum/Tower) - RESTful API with OpenAPI
-- **Web UI** - Embedded static assets (CEO Console - coming soon)
-- **Scheduler** - Cron + queue for routines
+- **API Server** (Axum/Tower) - RESTful API + GraphQL with subscriptions (Phase 10)
+- **Web Dashboard** - Real-time monitoring UI with embedded static assets (Phase 10)
+- **GraphQL Playground** - Interactive API explorer (Phase 10)
+- **Scheduler** - Cron + queue for routines (Phase 5)
 - **Workflow Engine** - DAG execution with retries, timeouts, idempotency (Phase 1)
 - **Policy Engine** - Authorization and governance (Phase 2)
 - **MCP Tool Server** - Exposes enterprise tools to agent clients (Phase 2)
@@ -42,7 +43,7 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
 - Fast queries without scanning events
 - Rebuildable from event log if lost
 
-## Current Status (Phase 8 Complete ✅)
+## Current Status (Phase 10 Complete ✅)
 
 ### Implemented
 - ✅ **Phase 0**: Core infrastructure
@@ -165,7 +166,26 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - **Permission middleware** - authorization enforcement for API endpoints
   - **Full API** for audit logs, RBAC, compliance reports, and security scans
 
+- ✅ **Phase 10**: UI & Developer Experience
+  - **GraphQL API** - complete Query, Mutation, and Subscription support
+  - **Interactive GraphQL Playground** - browser-based API explorer at `/api/graphql`
+  - **Real-time web dashboard** - modern UI with live metrics and monitoring
+  - **WebSocket subscriptions** - push updates for metrics, runs, and audit events
+  - **Embedded dashboard** - compiled-in static assets, no build step required
+  - **Auto-reconnecting WebSocket** - resilient real-time connections
+  - **System health monitoring** - visual status indicators and success rates
+  - **Audit log filtering** - category-based filtering with live updates
+  - **Dark theme UI** - modern, professional interface design
+  - **Full GraphQL API** for all workflow, tenant, cluster, and security features
+
 ### API Endpoints
+
+**GraphQL API (Phase 10):**
+  - `POST /api/graphql` - GraphQL queries and mutations
+  - `GET /api/graphql` - Interactive GraphQL Playground
+  - `WS /api/graphql/ws` - WebSocket subscriptions (graphql-transport-ws protocol)
+  - `GET /` or `/dashboard` - Real-time web dashboard
+
 **Workflow Management:**
   - `GET /api/health` - Health check
   - `GET /api/runs` - List all runs
@@ -294,12 +314,11 @@ blobs/XX/<hash>                       # Content-addressed payloads (XX = first 2
   - `POST /api/security/scan` - Run security vulnerability scan
 
 ### Coming Next
-- 🚧 **Phase 10**: UI & Developer Experience
-  - Interactive web dashboard for workflow visualization
-  - Real-time workflow execution monitoring
-  - GraphQL API for flexible data querying
+- 🚧 **Phase 11**: Rust SDK & Client Libraries
+  - Official Rust SDK for programmatic access
+  - Type-safe workflow builders
+  - Client libraries for other languages (Python, JavaScript, Go)
   - Enhanced MCP tools with streaming support
-  - SDK for building custom workflow integrations
 
 ## Quick Start
 
@@ -547,7 +566,7 @@ After the Change Date, Shiioo automatically becomes Apache 2.0 licensed.
 
 ---
 
-**Status**: Phase 4 complete. Production-ready enterprise orchestration with:
+**Status**: Phase 10 complete. Production-ready enterprise orchestration with:
 - DAG workflow execution with dependencies, retry, event sourcing
 - Role-based access control and policy enforcement
 - Organization management with teams, people, reporting structure
@@ -556,8 +575,19 @@ After the Change Date, Shiioo automatically becomes Apache 2.0 licensed.
 - Multi-source capacity pooling with rate limit handling
 - Priority queues and automatic failover
 - Real-time cost tracking and usage monitoring
+- GraphQL API with real-time subscriptions
+- Interactive web dashboard with live monitoring
+- Tamper-proof audit logging and compliance reporting
+- Secret management with encryption and rotation
+- Multi-tenancy and cluster management
 
 See documentation:
 - [POLICY_EXAMPLES.md](POLICY_EXAMPLES.md) - Policy engine and governance
 - [PHASE3_EXAMPLES.md](PHASE3_EXAMPLES.md) - Org management, templates, Claude compiler
 - [PHASE4_EXAMPLES.md](PHASE4_EXAMPLES.md) - Capacity broker, rate limits, cost tracking
+- [PHASE5_EXAMPLES.md](PHASE5_EXAMPLES.md) - Routines, approval boards, config changes
+- [PHASE6_EXAMPLES.md](PHASE6_EXAMPLES.md) - Observability, analytics, real-time monitoring
+- [PHASE7_EXAMPLES.md](PHASE7_EXAMPLES.md) - Multi-tenancy, cluster management, HA
+- [PHASE8_EXAMPLES.md](PHASE8_EXAMPLES.md) - Secret management, advanced workflows
+- [PHASE9_EXAMPLES.md](PHASE9_EXAMPLES.md) - Security, compliance, audit logging
+- [PHASE10_EXAMPLES.md](PHASE10_EXAMPLES.md) - GraphQL API, web dashboard, developer tools

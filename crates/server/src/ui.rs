@@ -9,11 +9,40 @@ use rust_embed::RustEmbed;
 #[prefix = "/"]
 struct UiAssets;
 
+#[derive(RustEmbed)]
+#[folder = "static"]
+#[prefix = "/"]
+struct StaticAssets;
+
+/// Serve the dashboard (Phase 10)
+pub async fn serve_dashboard() -> Response {
+    if let Some(content) = StaticAssets::get("dashboard.html") {
+        return serve_file("dashboard.html", content.data.as_ref());
+    }
+
+    // Fallback if dashboard not found
+    (
+        StatusCode::NOT_FOUND,
+        Html("<h1>Dashboard not found</h1>"),
+    )
+        .into_response()
+}
+
 /// Serve the embedded UI
 pub async fn serve_ui(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
 
-    // Try to serve the requested file
+    // Serve root as dashboard
+    if path.is_empty() || path == "/" {
+        return serve_dashboard().await;
+    }
+
+    // Try to serve from static assets first (Phase 10 dashboard assets)
+    if let Some(content) = StaticAssets::get(path) {
+        return serve_file(path, content.data.as_ref());
+    }
+
+    // Try to serve the requested file from UI assets
     if let Some(content) = UiAssets::get(path) {
         return serve_file(path, content.data.as_ref());
     }
@@ -25,12 +54,8 @@ pub async fn serve_ui(uri: Uri) -> Response {
         }
     }
 
-    // Fallback: show a placeholder page
-    (
-        StatusCode::OK,
-        Html(include_str!("ui_placeholder.html")),
-    )
-        .into_response()
+    // Fallback: serve dashboard as the default page
+    serve_dashboard().await
 }
 
 fn serve_file(path: &str, content: &[u8]) -> Response {

@@ -21,7 +21,10 @@ mod handlers;
 pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
     let state = AppState::new(&config)?;
 
-    let app = create_router(state);
+    // Build GraphQL schema (Phase 10)
+    let schema = crate::graphql::build_schema(Arc::new(state.clone()));
+
+    let app = create_router(state, schema);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("API server listening on {}", addr);
@@ -32,8 +35,12 @@ pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
 }
 
 /// Create the API router
-fn create_router(state: AppState) -> Router {
+fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Router {
     Router::new()
+        // GraphQL endpoints (Phase 10)
+        .route("/api/graphql", post(crate::graphql::graphql_handler))
+        .route("/api/graphql", get(crate::graphql::graphql_playground))
+        .route("/api/graphql/ws", get(crate::graphql::graphql_subscription_handler))
         // API routes
         .route("/api/health", get(health_check))
         .route("/api/runs", get(handlers::list_runs))
@@ -144,7 +151,8 @@ fn create_router(state: AppState) -> Router {
         // Compliance & Security (Phase 9)
         .route("/api/compliance/report", post(handlers::generate_compliance_report))
         .route("/api/security/scan", post(handlers::run_security_scan))
-        // UI routes
+        // UI routes (Phase 10)
+        .route("/dashboard", get(ui::serve_dashboard))
         .fallback(ui::serve_ui)
         // Middleware
         .layer(
@@ -153,6 +161,7 @@ fn create_router(state: AppState) -> Router {
                 .on_response(DefaultOnResponse::new().include_headers(true)),
         )
         .layer(CorsLayer::permissive())
+        .layer(axum::Extension(schema))
         .with_state(Arc::new(state))
 }
 

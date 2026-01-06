@@ -143,6 +143,7 @@ impl RbacUser {
 }
 
 /// RBAC manager
+#[derive(Clone)]
 pub struct RbacManager {
     roles: Arc<Mutex<HashMap<String, RbacRole>>>,
     users: Arc<Mutex<HashMap<String, RbacUser>>>,

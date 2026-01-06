@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod api;
 mod config;
+mod graphql;
 mod middleware;
 mod ui;
 mod websocket;

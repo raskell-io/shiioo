@@ -1687,7 +1687,7 @@ pub struct ClusterHealthResponse {
 /// List audit log entries
 pub async fn list_audit_entries(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<AuditQueryParams>,
+    axum::extract::Query(params): axum::extract::Query<AuditQueryParams>,
 ) -> ApiResult<Json<Vec<shiioo_core::audit::AuditEntry>>> {
     let entries = if let Some(category) = params.category {
         state.audit_log.filter_by_category(category)
@@ -1842,8 +1842,8 @@ pub async fn check_user_permission(
     Json(request): Json<CheckPermissionRequest>,
 ) -> ApiResult<Json<PermissionCheckResponse>> {
     let permission = shiioo_core::rbac::Permission::new(
-        request.resource,
-        request.action,
+        request.resource.clone(),
+        request.action.clone(),
     );
 
     let has_permission = state
