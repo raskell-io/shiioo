@@ -15,21 +15,33 @@ struct StaticAssets;
 
 /// Serve the dashboard (Phase 10)
 pub async fn serve_dashboard() -> Response {
-    // Debug: List all embedded files
-    tracing::debug!("StaticAssets embedded files:");
-    for file in StaticAssets::iter() {
-        tracing::debug!("  - {}", file);
+    // Try enhanced dashboard first
+    if let Some(content) = StaticAssets::get("dashboard-enhanced.html") {
+        tracing::info!("✅ Serving enhanced dashboard from embedded assets");
+        return serve_file("dashboard-enhanced.html", content.data.as_ref());
     }
 
-    // Try embedded assets first
+    // Fallback to enhanced dashboard from filesystem
+    let enhanced_paths = [
+        "crates/server/static/dashboard-enhanced.html",
+        "static/dashboard-enhanced.html",
+        "./static/dashboard-enhanced.html",
+    ];
+
+    for path in &enhanced_paths {
+        if let Ok(content) = std::fs::read(path) {
+            tracing::info!("✅ Serving enhanced dashboard from filesystem: {}", path);
+            return serve_file("dashboard-enhanced.html", &content);
+        }
+    }
+
+    // Try original dashboard
     if let Some(content) = StaticAssets::get("dashboard.html") {
-        tracing::info!("✅ Serving dashboard from embedded assets");
+        tracing::info!("✅ Serving original dashboard from embedded assets");
         return serve_file("dashboard.html", content.data.as_ref());
     }
 
-    tracing::warn!("⚠️  Dashboard not found in embedded assets, trying filesystem fallback");
-
-    // Fallback: try to read from filesystem (development mode)
+    // Fallback: try to read original dashboard from filesystem
     let dashboard_paths = [
         "crates/server/static/dashboard.html",
         "static/dashboard.html",

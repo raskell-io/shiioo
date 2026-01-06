@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shiioo Dashboard - Virtual Company OS</title>
+
+    <!-- External Libraries -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --info: #3b82f6;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border: #334155;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .nav-tab {
+            padding: 0.5rem 1rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 0.5rem;
+            transition: all 0.2s;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .nav-tab:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--primary);
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card-header {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+            font-size: 0.875rem;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-sm {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        /* Workflow Visualization */
+        #workflow-viz {
+            width: 100%;
+            height: 500px;
+            background: var(--bg-dark);
+            border-radius: 0.5rem;
+            position: relative;
+        }
+
+        .node {
+            cursor: pointer;
+        }
+
+        .node circle {
+            stroke-width: 2px;
+        }
+
+        .node.pending circle {
+            fill: var(--text-secondary);
+            stroke: var(--border);
+        }
+
+        .node.running circle {
+            fill: var(--info);
+            stroke: var(--primary);
+            animation: pulse 2s infinite;
+        }
+
+        .node.completed circle {
+            fill: var(--success);
+            stroke: var(--success);
+        }
+
+        .node.failed circle {
+            fill: var(--danger);
+            stroke: var(--danger);
+        }
+
+        .node text {
+            fill: var(--text-primary);
+            font-size: 12px;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+
+        .link {
+            fill: none;
+            stroke: var(--border);
+            stroke-width: 2px;
+            marker-end: url(#arrowhead);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Charts */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 2rem;
+        }
+
+        /* Workflow List */
+        .workflow-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .workflow-item {
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: border-color 0.2s;
+        }
+
+        .workflow-item:hover {
+            border-color: var(--primary);
+        }
+
+        .workflow-info h3 {
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .workflow-info p {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .workflow-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .status-pill {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-pending {
+            background: rgba(148, 163, 184, 0.1);
+            color: var(--text-secondary);
+        }
+
+        .status-running {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--info);
+        }
+
+        .status-completed {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+        }
+
+        .status-failed {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border-radius: 0.75rem;
+            padding: 2rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            font-family: inherit;
+        }
+
+        .form-group textarea {
+            min-height: 200px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">Shiioo</div>
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="switchTab('overview')">Overview</button>
+            <button class="nav-tab" onclick="switchTab('workflows')">Workflows</button>
+            <button class="nav-tab" onclick="switchTab('analytics')">Analytics</button>
+            <button class="nav-tab" onclick="switchTab('monitoring')">Live Monitor</button>
+        </div>
+        <div class="status-badge">
+            <div class="status-dot"></div>
+            <span>System Online</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Overview Tab -->
+        <div id="overview-tab" class="tab-content active">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-label">Total Runs</div>
+                    <div class="metric-value" id="total-runs">0</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Success Rate</div>
+                    <div class="metric-value" id="success-rate">0%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Avg Duration</div>
+                    <div class="metric-value" id="avg-duration">0ms</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Active Tenants</div>
+                    <div class="metric-value" id="active-tenants">0</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">System Health</div>
+                <div id="health-content">Loading...</div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Recent Workflow Runs</div>
+                <div id="runs-content">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Workflows Tab -->
+        <div id="workflows-tab" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span>Workflows</span>
+                    <button class="btn btn-primary" onclick="showCreateWorkflowModal()">
+                        + Create Workflow
+                    </button>
+                </div>
+                <div id="workflow-list" class="workflow-list">
+                    <p style="color: var(--text-secondary);">No workflows yet. Create one to get started!</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Workflow Visualization</div>
+                <div id="workflow-viz"></div>
+            </div>
+        </div>
+
+        <!-- Analytics Tab -->
+        <div id="analytics-tab" class="tab-content">
+            <div class="card">
+                <div class="card-header">Workflow Execution Trends</div>
+                <div class="chart-container">
+                    <canvas id="execution-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Success Rate Over Time</div>
+                <div class="chart-container">
+                    <canvas id="success-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Step Performance</div>
+                <div class="chart-container">
+                    <canvas id="performance-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Monitor Tab -->
+        <div id="monitoring-tab" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span>Active Workflow Executions</span>
+                    <span class="status-pill status-running" id="active-count">0 running</span>
+                </div>
+                <div id="active-workflows">
+                    <p style="color: var(--text-secondary);">No active workflows</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Live Execution View</div>
+                <div id="live-viz"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Workflow Modal -->
+    <div id="create-workflow-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">Create New Workflow</div>
+            <form id="workflow-form">
+                <div class="form-group">
+                    <label>Workflow Name</label>
+                    <input type="text" id="workflow-name" placeholder="My Workflow" required>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="workflow-description" placeholder="What does this workflow do?">
+                </div>
+                <div class="form-group">
+                    <label>Workflow Definition (JSON)</label>
+                    <textarea id="workflow-json" placeholder='{"steps": [], "dependencies": {}}'></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn" onclick="closeCreateWorkflowModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create & Execute</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+
+            // Initialize tab-specific content
+            if (tabName === 'workflows') {
+                initWorkflowsTab();
+            } else if (tabName === 'analytics') {
+                initAnalyticsTab();
+            } else if (tabName === 'monitoring') {
+                initMonitoringTab();
+            }
+        }
+
+        // Modal functions
+        function showCreateWorkflowModal() {
+            // Set default workflow template
+            document.getElementById('workflow-json').value = JSON.stringify({
+                "steps": [
+                    {
+                        "id": "step1",
+                        "name": "First Step",
+                        "role": "worker",
+                        "action": {
+                            "type": "agent_task",
+                            "prompt": "Perform the first task"
+                        },
+                        "requires_approval": false
+                    }
+                ],
+                "dependencies": {}
+            }, null, 2);
+
+            document.getElementById('create-workflow-modal').classList.add('active');
+        }
+
+        function closeCreateWorkflowModal() {
+            document.getElementById('create-workflow-modal').classList.remove('active');
+        }
+
+        // Workflow form submission
+        document.getElementById('workflow-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const name = document.getElementById('workflow-name').value;
+            const description = document.getElementById('workflow-description').value;
+            const workflowJson = document.getElementById('workflow-json').value;
+
+            try {
+                const workflow = JSON.parse(workflowJson);
+
+                const response = await fetch('/api/jobs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        description,
+                        workflow,
+                        execute: true
+                    })
+                });
+
+                if (response.ok) {
+                    closeCreateWorkflowModal();
+                    alert('Workflow created and started!');
+                    initWorkflowsTab();
+                } else {
+                    alert('Failed to create workflow');
+                }
+            } catch (error) {
+                alert('Invalid JSON: ' + error.message);
+            }
+        });
+
+        // GraphQL helper
+        async function graphql(query, variables = {}) {
+            const response = await fetch('/api/graphql', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, variables }),
+            });
+
+            const result = await response.json();
+            if (result.errors) {
+                throw new Error(result.errors[0].message);
+            }
+
+            return result.data;
+        }
+
+        // Fetch metrics
+        async function fetchMetrics() {
+            try {
+                const data = await graphql(`
+                    query {
+                        metricsSummary {
+                            totalRuns
+                            successfulRuns
+                            failedRuns
+                            avgDurationMs
+                        }
+                        tenants {
+                            id
+                            status
+                        }
+                    }
+                `);
+
+                const metrics = data.metricsSummary;
+                document.getElementById('total-runs').textContent = metrics.totalRuns;
+
+                const successRate = metrics.totalRuns > 0
+                    ? ((metrics.successfulRuns / metrics.totalRuns) * 100).toFixed(1)
+                    : 0;
+                document.getElementById('success-rate').textContent = `${successRate}%`;
+
+                document.getElementById('avg-duration').textContent = `${Math.round(metrics.avgDurationMs)}ms`;
+
+                const activeTenants = data.tenants.filter(t => t.status === 'Active').length;
+                document.getElementById('active-tenants').textContent = activeTenants;
+            } catch (error) {
+                console.error('Error fetching metrics:', error);
+            }
+        }
+
+        // Fetch recent runs
+        async function fetchRuns() {
+            try {
+                const data = await graphql(`
+                    query {
+                        runs(limit: 10) {
+                            id
+                            workflowId
+                            status
+                            startedAt
+                            completedAt
+                        }
+                    }
+                `);
+
+                if (data.runs.length === 0) {
+                    document.getElementById('runs-content').innerHTML = `
+                        <p style="color: var(--text-secondary);">No workflow runs yet</p>
+                    `;
+                    return;
+                }
+
+                const html = `
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border);">
+                                    <th style="padding: 0.75rem; text-align: left;">Workflow ID</th>
+                                    <th style="padding: 0.75rem; text-align: left;">Status</th>
+                                    <th style="padding: 0.75rem; text-align: left;">Started</th>
+                                    <th style="padding: 0.75rem; text-align: left;">Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.runs.map(run => {
+                                    const started = new Date(run.startedAt);
+                                    const completed = run.completedAt ? new Date(run.completedAt) : null;
+                                    const duration = completed ? completed - started : null;
+
+                                    return `
+                                        <tr style="border-bottom: 1px solid var(--border);">
+                                            <td style="padding: 0.75rem; font-family: monospace; font-size: 0.75rem;">
+                                                ${run.workflowId.substring(0, 8)}...
+                                            </td>
+                                            <td style="padding: 0.75rem;">
+                                                <span class="status-pill status-${run.status.toLowerCase()}">
+                                                    ${run.status}
+                                                </span>
+                                            </td>
+                                            <td style="padding: 0.75rem; font-size: 0.875rem;">
+                                                ${started.toLocaleString()}
+                                            </td>
+                                            <td style="padding: 0.75rem;">
+                                                ${duration ? `${Math.round(duration)}ms` : '--'}
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+
+                document.getElementById('runs-content').innerHTML = html;
+            } catch (error) {
+                console.error('Error fetching runs:', error);
+            }
+        }
+
+        // Initialize workflows tab
+        async function initWorkflowsTab() {
+            try {
+                const data = await graphql(`
+                    query {
+                        runs(limit: 20) {
+                            id
+                            workflowId
+                            status
+                            startedAt
+                        }
+                    }
+                `);
+
+                // Group by workflow ID
+                const workflows = {};
+                data.runs.forEach(run => {
+                    if (!workflows[run.workflowId]) {
+                        workflows[run.workflowId] = {
+                            id: run.workflowId,
+                            runs: []
+                        };
+                    }
+                    workflows[run.workflowId].runs.push(run);
+                });
+
+                const workflowList = Object.values(workflows);
+
+                if (workflowList.length === 0) {
+                    return;
+                }
+
+                document.getElementById('workflow-list').innerHTML = workflowList.map(wf => `
+                    <div class="workflow-item">
+                        <div class="workflow-info">
+                            <h3>${wf.id.substring(0, 16)}...</h3>
+                            <p>${wf.runs.length} execution(s)</p>
+                        </div>
+                        <div class="workflow-actions">
+                            <button class="btn btn-sm btn-primary" onclick="visualizeWorkflow('${wf.id}')">
+                                Visualize
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+
+            } catch (error) {
+                console.error('Error loading workflows:', error);
+            }
+        }
+
+        // Visualize workflow with D3
+        function visualizeWorkflow(workflowId) {
+            const width = document.getElementById('workflow-viz').clientWidth;
+            const height = 500;
+
+            // Clear existing
+            d3.select('#workflow-viz').html('');
+
+            const svg = d3.select('#workflow-viz')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+
+            // Add arrow marker
+            svg.append('defs').append('marker')
+                .attr('id', 'arrowhead')
+                .attr('viewBox', '-0 -5 10 10')
+                .attr('refX', 20)
+                .attr('refY', 0)
+                .attr('orient', 'auto')
+                .attr('markerWidth', 8)
+                .attr('markerHeight', 8)
+                .append('path')
+                .attr('d', 'M 0,-5 L 10,0 L 0,5')
+                .attr('fill', '#475569');
+
+            // Sample workflow data
+            const nodes = [
+                { id: 'step1', name: 'Extract', status: 'completed', x: 100, y: 250 },
+                { id: 'step2', name: 'Transform', status: 'completed', x: 300, y: 250 },
+                { id: 'step3', name: 'Load', status: 'running', x: 500, y: 250 }
+            ];
+
+            const links = [
+                { source: 0, target: 1 },
+                { source: 1, target: 2 }
+            ];
+
+            // Draw links
+            svg.selectAll('.link')
+                .data(links)
+                .enter()
+                .append('line')
+                .attr('class', 'link')
+                .attr('x1', d => nodes[d.source].x)
+                .attr('y1', d => nodes[d.source].y)
+                .attr('x2', d => nodes[d.target].x)
+                .attr('y2', d => nodes[d.target].y);
+
+            // Draw nodes
+            const node = svg.selectAll('.node')
+                .data(nodes)
+                .enter()
+                .append('g')
+                .attr('class', d => `node ${d.status}`)
+                .attr('transform', d => `translate(${d.x},${d.y})`);
+
+            node.append('circle')
+                .attr('r', 30);
+
+            node.append('text')
+                .attr('dy', '0.35em')
+                .text(d => d.name);
+
+            // Add status text below node
+            node.append('text')
+                .attr('dy', '3em')
+                .attr('font-size', '10px')
+                .attr('fill', 'var(--text-secondary)')
+                .text(d => d.status);
+        }
+
+        // Initialize analytics tab
+        let executionChart, successChart, performanceChart;
+
+        function initAnalyticsTab() {
+            if (!executionChart) {
+                createExecutionChart();
+                createSuccessChart();
+                createPerformanceChart();
+            }
+        }
+
+        function createExecutionChart() {
+            const ctx = document.getElementById('execution-chart').getContext('2d');
+            executionChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [{
+                        label: 'Executions',
+                        data: [12, 19, 8, 15, 22, 18, 25],
+                        borderColor: 'rgb(99, 102, 241)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        function createSuccessChart() {
+            const ctx = document.getElementById('success-chart').getContext('2d');
+            successChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [
+                        {
+                            label: 'Success',
+                            data: [95, 97, 92, 98, 94, 96, 97],
+                            borderColor: 'rgb(16, 185, 129)',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)'
+                        },
+                        {
+                            label: 'Failed',
+                            data: [5, 3, 8, 2, 6, 4, 3],
+                            borderColor: 'rgb(239, 68, 68)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, max: 100, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        function createPerformanceChart() {
+            const ctx = document.getElementById('performance-chart').getContext('2d');
+            performanceChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Extract', 'Transform', 'Validate', 'Load', 'Notify'],
+                    datasets: [{
+                        label: 'Avg Duration (ms)',
+                        data: [450, 1200, 300, 800, 150],
+                        backgroundColor: [
+                            'rgba(99, 102, 241, 0.8)',
+                            'rgba(59, 130, 246, 0.8)',
+                            'rgba(16, 185, 129, 0.8)',
+                            'rgba(245, 158, 11, 0.8)',
+                            'rgba(139, 92, 246, 0.8)'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        // Initialize monitoring tab
+        function initMonitoringTab() {
+            // Fetch active workflows
+            fetchActiveWorkflows();
+            // Auto-refresh every 2 seconds
+            setInterval(fetchActiveWorkflows, 2000);
+        }
+
+        async function fetchActiveWorkflows() {
+            try {
+                const data = await graphql(`
+                    query {
+                        runs(limit: 50) {
+                            id
+                            workflowId
+                            status
+                            startedAt
+                        }
+                    }
+                `);
+
+                const running = data.runs.filter(r => r.status === 'Running' || r.status === 'Pending');
+                document.getElementById('active-count').textContent = `${running.length} running`;
+
+                if (running.length === 0) {
+                    document.getElementById('active-workflows').innerHTML = `
+                        <p style="color: var(--text-secondary);">No active workflows</p>
+                    `;
+                } else {
+                    document.getElementById('active-workflows').innerHTML = running.map(run => `
+                        <div class="workflow-item">
+                            <div class="workflow-info">
+                                <h3>${run.workflowId.substring(0, 16)}...</h3>
+                                <p>Started ${new Date(run.startedAt).toLocaleString()}</p>
+                            </div>
+                            <span class="status-pill status-${run.status.toLowerCase()}">${run.status}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Error fetching active workflows:', error);
+            }
+        }
+
+        // Initialize dashboard
+        async function initDashboard() {
+            await Promise.all([
+                fetchMetrics(),
+                fetchRuns()
+            ]);
+
+            // Auto-refresh overview
+            setInterval(fetchMetrics, 5000);
+            setInterval(fetchRuns, 10000);
+        }
+
+        // Initialize on load
+        window.addEventListener('load', initDashboard);
+    </script>
+</body>
+</html>
