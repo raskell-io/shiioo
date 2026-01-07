@@ -1,0 +1,127 @@
+# Shiioo - mise configuration for dependency and task management
+
+[tools]
+# Rust toolchain (using rustup for rust management)
+# mise delegates to rustup for rust
+rust = "latest"
+
+# Optional: Node.js for potential frontend tooling
+# node = "22"
+
+[env]
+# Environment variables
+RUST_LOG = "info"
+RUST_BACKTRACE = "1"
+
+# Project-specific paths
+_.path = ["./target/release", "./target/debug"]
+
+[tasks.build]
+description = "Build all crates in release mode"
+run = "cargo build --release"
+
+[tasks.build-dev]
+description = "Build all crates in debug mode"
+run = "cargo build"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test"
+
+[tasks.test-verbose]
+description = "Run tests with verbose output"
+run = "cargo test -- --nocapture --test-threads=1"
+
+[tasks.check]
+description = "Check code without building"
+run = "cargo check --all-targets"
+
+[tasks.fmt]
+description = "Format code with rustfmt"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check code formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.clippy]
+description = "Run clippy lints"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "cargo clean"
+
+[tasks.run]
+description = "Run the server in development mode"
+run = "cargo run --release -p shiioo-server"
+
+[tasks.run-dev]
+description = "Run the server in debug mode"
+run = "RUST_LOG=debug cargo run -p shiioo-server"
+
+[tasks.serve]
+description = "Build and run the server"
+depends = ["build"]
+run = "./target/release/shiioo-server"
+
+[tasks.doc]
+description = "Generate and open documentation"
+run = "cargo doc --no-deps --open"
+
+[tasks.doc-all]
+description = "Generate documentation for all dependencies"
+run = "cargo doc --open"
+
+[tasks.watch]
+description = "Watch for changes and rebuild (requires cargo-watch)"
+run = "cargo watch -x 'check' -x 'test' -x 'run'"
+
+[tasks.install-tools]
+description = "Install development tools"
+run = """
+cargo install cargo-watch
+cargo install cargo-edit
+cargo install cargo-outdated
+"""
+
+[tasks.update-deps]
+description = "Update dependencies"
+run = "cargo update"
+
+[tasks.outdated]
+description = "Check for outdated dependencies"
+run = "cargo outdated"
+
+[tasks.audit]
+description = "Audit dependencies for security vulnerabilities"
+run = "cargo audit"
+
+[tasks.bench]
+description = "Run benchmarks"
+run = "cargo bench"
+
+[tasks.coverage]
+description = "Generate code coverage report (requires cargo-tarpaulin)"
+run = "cargo tarpaulin --out Html --output-dir coverage"
+
+[tasks.server]
+description = "Run the server with custom settings"
+run = "./target/release/shiioo-server --data-dir ./data --port 8080"
+
+[tasks.dev]
+description = "Full development build and run"
+depends = ["fmt", "check", "test"]
+run = "cargo run -p shiioo-server"
+
+[tasks.ci]
+description = "CI pipeline: format check, clippy, test"
+depends = ["fmt-check", "clippy", "test"]
+
+[tasks.release]
+description = "Build optimized release binary"
+run = "cargo build --release"
+
+[tasks.pre-commit]
+description = "Pre-commit checks"
+depends = ["fmt", "clippy", "test"]
