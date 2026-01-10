@@ -75,8 +75,8 @@ pub use shiioo_core::{
     types::{ApprovalStatus, ConfigChangeStatus, RunStatus, StepStatus},
     // Workflow types
     types::{
-        Job, Routine, RoutineExecution, RoutineSchedule, Run, StepAction, StepExecution, StepSpec,
-        WorkflowSpec,
+        Job, RetryPolicy, Routine, RoutineExecution, RoutineSchedule, Run, StepAction,
+        StepExecution, StepSpec, WorkflowSpec,
     },
     // Role & Policy
     types::{PolicyRule, PolicySpec, RoleBudgets, RoleSpec},

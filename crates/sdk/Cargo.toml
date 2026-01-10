@@ -50,3 +50,28 @@ url = "2.5"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
+
+[[example]]
+name = "create_job"
+path = "examples/create_job.rs"
+
+[[example]]
+name = "websocket_subscriptions"
+path = "examples/websocket_subscriptions.rs"
+
+[[example]]
+name = "approvals"
+path = "examples/approvals.rs"
+
+[[example]]
+name = "routines"
+path = "examples/routines.rs"
+
+[[example]]
+name = "multi_tenant"
+path = "examples/multi_tenant.rs"

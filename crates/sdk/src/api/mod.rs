@@ -1,26 +1,26 @@
 //! API modules for the Shiioo SDK.
 
-mod analytics;
-mod approval_boards;
-mod approvals;
-mod audit;
-mod capacity;
-mod cluster;
-mod compliance;
-mod config_changes;
-mod health;
-mod jobs;
-mod metrics;
-mod organizations;
-mod policies;
-mod rbac;
-mod roles;
-mod routines;
-mod runs;
-mod secrets;
-mod security;
-mod templates;
-mod tenants;
+pub mod analytics;
+pub mod approval_boards;
+pub mod approvals;
+pub mod audit;
+pub mod capacity;
+pub mod cluster;
+pub mod compliance;
+pub mod config_changes;
+pub mod health;
+pub mod jobs;
+pub mod metrics;
+pub mod organizations;
+pub mod policies;
+pub mod rbac;
+pub mod roles;
+pub mod routines;
+pub mod runs;
+pub mod secrets;
+pub mod security;
+pub mod templates;
+pub mod tenants;
 
 pub use analytics::AnalyticsApi;
 pub use approval_boards::ApprovalBoardsApi;
