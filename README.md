@@ -8,9 +8,9 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
-[![Phase](https://img.shields.io/badge/phase-10%20complete-green.svg)](https://github.com/raskell-io/shiioo)
+[![Phase](https://img.shields.io/badge/phase-11%20complete-green.svg)](https://github.com/raskell-io/shiioo)
 
-[Documentation](#quick-start) · [API Reference](#api-endpoints) · [Contributing](#community)
+[Documentation](#quick-start) · [SDK](#rust-sdk) · [API Reference](#api-endpoints) · [Contributing](#community)
 
 </div>
 
@@ -52,6 +52,7 @@ The server starts with an embedded web dashboard, GraphQL API, and real-time mon
 | **GraphQL API** | Complete Query, Mutation, and Subscription support with Playground |
 | **Real-Time Dashboard** | Live metrics, workflow visualization, and audit log monitoring |
 | **Compliance Ready** | SOC2, GDPR, tamper-proof audit logs with chain integrity verification |
+| **Rust SDK** | Type-safe client library with async support and WebSocket subscriptions |
 
 ---
 
@@ -130,6 +131,100 @@ See GraphQL Playground at `http://localhost:8080/api/graphql` for interactive sc
 
 ---
 
+## Rust SDK
+
+Add the SDK to your `Cargo.toml`:
+
+```toml
+[dependencies]
+shiioo-sdk = { git = "https://github.com/raskell-io/shiioo" }
+tokio = { version = "1", features = ["full"] }
+```
+
+### Basic Usage
+
+```rust
+use shiioo_sdk::{ShiiooClient, ShiiooResult};
+
+#[tokio::main]
+async fn main() -> ShiiooResult<()> {
+    // Build client
+    let client = ShiiooClient::builder()
+        .base_url("http://localhost:8080")
+        .api_key("sk-your-api-key")
+        .build()?;
+
+    // Check health
+    let health = client.health().check().await?;
+    println!("Server status: {}", health.status);
+
+    // List workflow runs
+    let runs = client.runs().list().await?;
+    println!("Found {} runs", runs.len());
+
+    // Create and execute a job
+    let response = client.jobs().create(CreateJobRequest {
+        name: "Code Review".to_string(),
+        workflow: my_workflow,
+        execute: Some(true),
+        ..Default::default()
+    }).await?;
+
+    println!("Created job: {}", response.job_id);
+    Ok(())
+}
+```
+
+### WebSocket Subscriptions
+
+```rust
+use shiioo_sdk::{ShiiooClient, stream::SubscriptionEvent};
+
+let client = ShiiooClient::builder()
+    .base_url("http://localhost:8080")
+    .build()?;
+
+// Subscribe to real-time updates
+let mut sub = client.subscribe().await?;
+sub.subscribe_all().await?;
+
+while let Some(event) = sub.next_event().await {
+    match event? {
+        SubscriptionEvent::WorkflowUpdate { run_id, status, .. } => {
+            println!("Workflow {} is now {}", run_id, status);
+        }
+        SubscriptionEvent::StepUpdate { step_id, status, .. } => {
+            println!("Step {} completed with status {}", step_id, status);
+        }
+        _ => {}
+    }
+}
+```
+
+### Available APIs
+
+| API | Methods |
+|-----|---------|
+| `client.health()` | `check()`, `status()` |
+| `client.runs()` | `list()`, `get()`, `events()` |
+| `client.jobs()` | `create()` |
+| `client.roles()` | `list()`, `get()`, `create()`, `delete()` |
+| `client.policies()` | `list()`, `get()`, `create()`, `delete()` |
+| `client.organizations()` | `list()`, `get()`, `create()`, `delete()` |
+| `client.templates()` | `list()`, `get()`, `create()`, `delete()`, `instantiate()` |
+| `client.capacity()` | `sources()`, `usage()`, `cost()` |
+| `client.routines()` | `list()`, `get()`, `create()`, `enable()`, `disable()` |
+| `client.approvals()` | `list()`, `get()`, `vote()` |
+| `client.secrets()` | `list()`, `get()`, `create()`, `rotate()`, `versions()` |
+| `client.tenants()` | `list()`, `get()`, `register()`, `suspend()`, `activate()` |
+| `client.cluster()` | `nodes()`, `leader()`, `health()` |
+| `client.audit()` | `entries()`, `statistics()`, `verify_chain()` |
+| `client.rbac()` | `roles()`, `assign_role()`, `check_permission()` |
+| `client.compliance()` | `generate_report()` |
+| `client.security()` | `scan()` |
+
+---
+
 ## Configuration
 
 Create `shiioo.toml` in the working directory:
@@ -161,7 +256,8 @@ shiioo/
 ├── crates/
 │   ├── core/          # Domain types, storage, workflow engine, policy engine
 │   ├── server/        # API server, GraphQL, dashboard UI
-│   └── mcp/           # MCP tool server (JSON-RPC over stdio)
+│   ├── mcp/           # MCP tool server (JSON-RPC over stdio)
+│   └── sdk/           # Rust SDK client library
 ├── .mise.toml         # Task and dependency management
 └── Cargo.toml         # Workspace manifest
 ```
@@ -208,7 +304,7 @@ cat data/blobs/ab/<full-hash>
 
 ## Current Status
 
-**Phase 10 Complete** ✅
+**Phase 11 Complete** ✅
 
 All core features are production-ready:
 
@@ -223,8 +319,9 @@ All core features are production-ready:
 - ✅ Phase 8: Advanced features (secrets, parallel-for-each, conditionals)
 - ✅ Phase 9: Enhanced security & compliance (audit logs, RBAC)
 - ✅ Phase 10: UI & Developer Experience (GraphQL, dashboard)
+- ✅ Phase 11: Rust SDK & Client Libraries
 
-**Next:** Phase 11 — Rust SDK & Client Libraries
+**Next:** Phase 12 — Production Hardening & Documentation
 
 ---
 

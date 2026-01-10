@@ -1,0 +1,52 @@
+[package]
+name = "shiioo-sdk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Official Rust SDK for Shiioo - Enterprise LLM Agent Orchestrator"
+keywords = ["shiioo", "llm", "orchestrator", "sdk", "client"]
+categories = ["api-bindings", "asynchronous"]
+
+[features]
+default = ["rustls-tls"]
+native-tls = ["reqwest/native-tls", "tokio-tungstenite/native-tls"]
+rustls-tls = ["reqwest/rustls-tls", "tokio-tungstenite/rustls-tls-webpki-roots"]
+
+[dependencies]
+# Re-use core types
+shiioo-core = { path = "../core" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-stream = "0.1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+# WebSocket
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# URL handling
+url = "2.5"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

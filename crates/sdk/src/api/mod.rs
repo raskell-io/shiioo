@@ -1,0 +1,45 @@
+//! API modules for the Shiioo SDK.
+
+mod analytics;
+mod approval_boards;
+mod approvals;
+mod audit;
+mod capacity;
+mod cluster;
+mod compliance;
+mod config_changes;
+mod health;
+mod jobs;
+mod metrics;
+mod organizations;
+mod policies;
+mod rbac;
+mod roles;
+mod routines;
+mod runs;
+mod secrets;
+mod security;
+mod templates;
+mod tenants;
+
+pub use analytics::AnalyticsApi;
+pub use approval_boards::ApprovalBoardsApi;
+pub use approvals::ApprovalsApi;
+pub use audit::AuditApi;
+pub use capacity::CapacityApi;
+pub use cluster::ClusterApi;
+pub use compliance::ComplianceApi;
+pub use config_changes::ConfigChangesApi;
+pub use health::HealthApi;
+pub use jobs::JobsApi;
+pub use metrics::MetricsApi;
+pub use organizations::OrganizationsApi;
+pub use policies::PoliciesApi;
+pub use rbac::RbacApi;
+pub use roles::RolesApi;
+pub use routines::RoutinesApi;
+pub use runs::RunsApi;
+pub use secrets::SecretsApi;
+pub use security::SecurityApi;
+pub use templates::TemplatesApi;
+pub use tenants::TenantsApi;
