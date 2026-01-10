@@ -49,8 +49,9 @@ uuid = { workspace = true }
 url = "2.5"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util", "macros"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
+wiremock = "0.6"
 
 [[example]]
 name = "basic_usage"

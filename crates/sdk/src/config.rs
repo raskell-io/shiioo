@@ -118,4 +118,43 @@ mod tests {
         assert!(!config.should_retry_status(400));
         assert!(!config.should_retry_status(404));
     }
+
+    #[test]
+    fn test_client_config_new() {
+        let url = Url::parse("https://example.com").unwrap();
+        let config = ClientConfig::new(url.clone());
+
+        assert_eq!(config.base_url, url);
+        assert!(config.api_key.is_none());
+        assert!(config.tenant_id.is_none());
+    }
+
+    #[test]
+    fn test_client_config_defaults() {
+        let url = Url::parse("https://example.com").unwrap();
+        let config = ClientConfig::new(url);
+
+        assert_eq!(config.timeout, Duration::from_secs(30));
+        assert_eq!(config.retry_config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_retry_config_no_retry() {
+        let config = RetryConfig::no_retry();
+
+        assert_eq!(config.max_retries, 0);
+        // Other defaults should still be present
+        assert_eq!(config.initial_backoff, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_retry_config_defaults() {
+        let config = RetryConfig::default();
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.initial_backoff, Duration::from_millis(100));
+        assert_eq!(config.max_backoff, Duration::from_secs(10));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.retry_on_status_codes, vec![429, 500, 502, 503, 504]);
+    }
 }

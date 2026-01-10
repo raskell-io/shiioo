@@ -222,3 +222,105 @@ pub enum SubscriptionEvent {
     /// Pong response.
     Pong,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ClientConfig, RetryConfig};
+    use std::time::Duration;
+    use url::Url;
+
+    fn create_config(base_url: &str) -> Arc<ClientConfig> {
+        Arc::new(ClientConfig {
+            base_url: Url::parse(base_url).unwrap(),
+            api_key: None,
+            timeout: Duration::from_secs(30),
+            retry_config: RetryConfig::default(),
+            tenant_id: None,
+        })
+    }
+
+    fn create_config_with_api_key(base_url: &str, api_key: &str) -> Arc<ClientConfig> {
+        Arc::new(ClientConfig {
+            base_url: Url::parse(base_url).unwrap(),
+            api_key: Some(api_key.to_string()),
+            timeout: Duration::from_secs(30),
+            retry_config: RetryConfig::default(),
+            tenant_id: None,
+        })
+    }
+
+    #[test]
+    fn test_build_ws_url_http() {
+        let config = create_config("http://localhost:8080");
+        let client = WebSocketClient::new(config);
+        let url = client.build_ws_url().unwrap();
+
+        assert!(url.starts_with("ws://"));
+        assert!(url.contains("localhost:8080"));
+        assert!(url.contains("/api/ws"));
+    }
+
+    #[test]
+    fn test_build_ws_url_https() {
+        let config = create_config("https://api.example.com");
+        let client = WebSocketClient::new(config);
+        let url = client.build_ws_url().unwrap();
+
+        assert!(url.starts_with("wss://"));
+        assert!(url.contains("api.example.com"));
+        assert!(url.contains("/api/ws"));
+    }
+
+    #[test]
+    fn test_build_ws_url_with_port() {
+        let config = create_config("http://localhost:3000");
+        let client = WebSocketClient::new(config);
+        let url = client.build_ws_url().unwrap();
+
+        assert!(url.contains("localhost:3000"));
+    }
+
+    #[test]
+    fn test_build_ws_url_with_api_key() {
+        let config = create_config_with_api_key("http://localhost:8080", "sk-test-key");
+        let client = WebSocketClient::new(config);
+        let url = client.build_ws_url().unwrap();
+
+        assert!(url.contains("token=sk-test-key"));
+    }
+
+    #[test]
+    fn test_subscription_event_serialization() {
+        let event = SubscriptionEvent::WorkflowUpdate {
+            run_id: "run-123".to_string(),
+            status: "running".to_string(),
+            progress: 0.5,
+            message: Some("Processing...".to_string()),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("workflow_update"));
+        assert!(json.contains("run-123"));
+
+        let parsed: SubscriptionEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SubscriptionEvent::WorkflowUpdate { run_id, status, .. } => {
+                assert_eq!(run_id, "run-123");
+                assert_eq!(status, "running");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_ws_request_serialization() {
+        let request = WsRequest::SubscribeWorkflow {
+            run_id: "run-456".to_string(),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("subscribe_workflow"));
+        assert!(json.contains("run-456"));
+    }
+}

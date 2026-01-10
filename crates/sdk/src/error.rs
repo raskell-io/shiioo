@@ -93,3 +93,132 @@ pub struct ErrorResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_retryable_timeout() {
+        assert!(ShiiooError::Timeout.is_retryable());
+    }
+
+    #[test]
+    fn test_is_retryable_rate_limited() {
+        let error = ShiiooError::RateLimited {
+            retry_after_secs: Some(30),
+        };
+        assert!(error.is_retryable());
+
+        let error_no_retry = ShiiooError::RateLimited {
+            retry_after_secs: None,
+        };
+        assert!(error_no_retry.is_retryable());
+    }
+
+    #[test]
+    fn test_is_retryable_api_5xx() {
+        let error_500 = ShiiooError::Api {
+            status: 500,
+            message: "Internal Server Error".to_string(),
+            details: None,
+        };
+        assert!(error_500.is_retryable());
+
+        let error_503 = ShiiooError::Api {
+            status: 503,
+            message: "Service Unavailable".to_string(),
+            details: None,
+        };
+        assert!(error_503.is_retryable());
+    }
+
+    #[test]
+    fn test_is_retryable_api_4xx_not_retryable() {
+        let error_400 = ShiiooError::Api {
+            status: 400,
+            message: "Bad Request".to_string(),
+            details: None,
+        };
+        assert!(!error_400.is_retryable());
+
+        let error_404 = ShiiooError::Api {
+            status: 404,
+            message: "Not Found".to_string(),
+            details: None,
+        };
+        assert!(!error_404.is_retryable());
+    }
+
+    #[test]
+    fn test_is_retryable_auth_error() {
+        let error = ShiiooError::Authentication("Invalid token".to_string());
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn test_is_retryable_not_found() {
+        let error = ShiiooError::NotFound("Run not found".to_string());
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn test_is_retryable_config() {
+        let error = ShiiooError::Config("Missing base URL".to_string());
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn test_from_response_json() {
+        let body = r#"{"error": "Something went wrong", "details": "More info here"}"#;
+        let error = ShiiooError::from_response(500, body);
+
+        match error {
+            ShiiooError::Api {
+                status,
+                message,
+                details,
+            } => {
+                assert_eq!(status, 500);
+                assert_eq!(message, "Something went wrong");
+                assert_eq!(details, Some("More info here".to_string()));
+            }
+            _ => panic!("Expected Api error"),
+        }
+    }
+
+    #[test]
+    fn test_from_response_plain_text() {
+        let body = "Plain text error message";
+        let error = ShiiooError::from_response(400, body);
+
+        match error {
+            ShiiooError::Api {
+                status,
+                message,
+                details,
+            } => {
+                assert_eq!(status, 400);
+                assert_eq!(message, "Plain text error message");
+                assert!(details.is_none());
+            }
+            _ => panic!("Expected Api error"),
+        }
+    }
+
+    #[test]
+    fn test_error_display() {
+        let timeout = ShiiooError::Timeout;
+        assert_eq!(format!("{}", timeout), "Request timed out");
+
+        let api = ShiiooError::Api {
+            status: 404,
+            message: "Not found".to_string(),
+            details: None,
+        };
+        assert_eq!(format!("{}", api), "API error (status 404): Not found");
+
+        let config = ShiiooError::Config("Missing URL".to_string());
+        assert_eq!(format!("{}", config), "Configuration error: Missing URL");
+    }
+}

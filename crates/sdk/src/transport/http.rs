@@ -188,3 +188,242 @@ impl HttpTransport {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RetryConfig;
+    use serde::{Deserialize, Serialize};
+    use std::time::Duration;
+    use wiremock::matchers::{method, path, header};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct TestResponse {
+        message: String,
+        value: i32,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct TestRequest {
+        name: String,
+    }
+
+    fn create_config(base_url: &str) -> Arc<ClientConfig> {
+        Arc::new(ClientConfig {
+            base_url: url::Url::parse(base_url).unwrap(),
+            api_key: None,
+            timeout: Duration::from_secs(30),
+            retry_config: RetryConfig::no_retry(),
+            tenant_id: None,
+        })
+    }
+
+    fn create_config_with_auth(base_url: &str, api_key: &str) -> Arc<ClientConfig> {
+        Arc::new(ClientConfig {
+            base_url: url::Url::parse(base_url).unwrap(),
+            api_key: Some(api_key.to_string()),
+            timeout: Duration::from_secs(30),
+            retry_config: RetryConfig::no_retry(),
+            tenant_id: None,
+        })
+    }
+
+    fn create_config_with_tenant(base_url: &str, tenant_id: &str) -> Arc<ClientConfig> {
+        Arc::new(ClientConfig {
+            base_url: url::Url::parse(base_url).unwrap(),
+            api_key: None,
+            timeout: Duration::from_secs(30),
+            retry_config: RetryConfig::no_retry(),
+            tenant_id: Some(tenant_id.to_string()),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_request() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(TestResponse {
+                message: "success".to_string(),
+                value: 42,
+            }))
+            .mount(&server)
+            .await;
+
+        let config = create_config(&server.uri());
+        let transport = HttpTransport::new(config).unwrap();
+
+        let result: TestResponse = transport.get("/api/test").await.unwrap();
+        assert_eq!(result.message, "success");
+        assert_eq!(result.value, 42);
+    }
+
+    #[tokio::test]
+    async fn test_post_request() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/create"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(TestResponse {
+                message: "created".to_string(),
+                value: 1,
+            }))
+            .mount(&server)
+            .await;
+
+        let config = create_config(&server.uri());
+        let transport = HttpTransport::new(config).unwrap();
+
+        let request = TestRequest {
+            name: "test".to_string(),
+        };
+        let result: TestResponse = transport.post("/api/create", &request).await.unwrap();
+        assert_eq!(result.message, "created");
+    }
+
+    #[tokio::test]
+    async fn test_authorization_header() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/protected"))
+            .and(header("Authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(TestResponse {
+                message: "authorized".to_string(),
+                value: 100,
+            }))
+            .mount(&server)
+            .await;
+
+        let config = create_config_with_auth(&server.uri(), "sk-test-key");
+        let transport = HttpTransport::new(config).unwrap();
+
+        let result: TestResponse = transport.get("/api/protected").await.unwrap();
+        assert_eq!(result.message, "authorized");
+    }
+
+    #[tokio::test]
+    async fn test_tenant_id_header() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/tenant"))
+            .and(header("x-tenant-id", "tenant-abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(TestResponse {
+                message: "tenant-scoped".to_string(),
+                value: 200,
+            }))
+            .mount(&server)
+            .await;
+
+        let config = create_config_with_tenant(&server.uri(), "tenant-abc");
+        let transport = HttpTransport::new(config).unwrap();
+
+        let result: TestResponse = transport.get("/api/tenant").await.unwrap();
+        assert_eq!(result.message, "tenant-scoped");
+    }
+
+    #[tokio::test]
+    async fn test_error_on_400() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/bad"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({"error": "Bad Request"})),
+            )
+            .mount(&server)
+            .await;
+
+        let config = create_config(&server.uri());
+        let transport = HttpTransport::new(config).unwrap();
+
+        let result: ShiiooResult<TestResponse> = transport.get("/api/bad").await;
+        assert!(result.is_err());
+        match result {
+            Err(ShiiooError::Api { status, .. }) => assert_eq!(status, 400),
+            _ => panic!("Expected Api error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_on_404() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/notfound"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not found"))
+            .mount(&server)
+            .await;
+
+        let config = create_config(&server.uri());
+        let transport = HttpTransport::new(config).unwrap();
+
+        let result: ShiiooResult<TestResponse> = transport.get("/api/notfound").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_put_request() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/api/update"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(TestResponse {
+                message: "updated".to_string(),
+                value: 2,
+            }))
+            .mount(&server)
+            .await;
+
+        let config = create_config(&server.uri());
+        let transport = HttpTransport::new(config).unwrap();
+
+        let request = TestRequest {
+            name: "updated".to_string(),
+        };
+        let result: TestResponse = transport.put("/api/update", &request).await.unwrap();
+        assert_eq!(result.message, "updated");
+    }
+
+    #[tokio::test]
+    async fn test_delete_request() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/api/remove"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(TestResponse {
+                message: "deleted".to_string(),
+                value: 0,
+            }))
+            .mount(&server)
+            .await;
+
+        let config = create_config(&server.uri());
+        let transport = HttpTransport::new(config).unwrap();
+
+        let result: TestResponse = transport.delete("/api/remove").await.unwrap();
+        assert_eq!(result.message, "deleted");
+    }
+
+    #[tokio::test]
+    async fn test_build_url() {
+        let config = create_config("http://localhost:8080");
+        let transport = HttpTransport::new(config).unwrap();
+
+        let url = transport.build_url("/api/test").unwrap();
+        assert_eq!(url.as_str(), "http://localhost:8080/api/test");
+    }
+
+    #[tokio::test]
+    async fn test_build_url_with_trailing_slash() {
+        let config = create_config("http://localhost:8080/");
+        let transport = HttpTransport::new(config).unwrap();
+
+        let url = transport.build_url("api/test").unwrap();
+        assert_eq!(url.as_str(), "http://localhost:8080/api/test");
+    }
+}

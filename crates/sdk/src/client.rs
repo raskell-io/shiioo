@@ -218,3 +218,100 @@ impl Default for ShiiooClientBuilder {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_builder_valid_config() {
+        let client = ShiiooClient::builder()
+            .base_url("http://localhost:8080")
+            .api_key("test-api-key")
+            .tenant_id("tenant-123")
+            .timeout(Duration::from_secs(60))
+            .build();
+
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_builder_missing_base_url() {
+        let result = ShiiooClient::builder().build();
+
+        assert!(result.is_err());
+        match result {
+            Err(ShiiooError::Config(msg)) => {
+                assert!(msg.contains("base_url"));
+            }
+            _ => panic!("Expected Config error"),
+        }
+    }
+
+    #[test]
+    fn test_builder_invalid_url() {
+        let result = ShiiooClient::builder()
+            .base_url("not a valid url")
+            .build();
+
+        assert!(result.is_err());
+        match result {
+            Err(ShiiooError::InvalidUrl(_)) => {}
+            _ => panic!("Expected InvalidUrl error"),
+        }
+    }
+
+    #[test]
+    fn test_builder_defaults() {
+        let builder = ShiiooClientBuilder::new();
+
+        assert!(builder.base_url.is_none());
+        assert!(builder.api_key.is_none());
+        assert!(builder.tenant_id.is_none());
+        assert_eq!(builder.timeout, Duration::from_secs(30));
+        assert_eq!(builder.retry_config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_builder_with_api_key() {
+        let client = ShiiooClient::builder()
+            .base_url("http://localhost:8080")
+            .api_key("sk-test-key-12345")
+            .build()
+            .unwrap();
+
+        assert_eq!(client.config.api_key, Some("sk-test-key-12345".to_string()));
+    }
+
+    #[test]
+    fn test_builder_with_tenant_id() {
+        let client = ShiiooClient::builder()
+            .base_url("http://localhost:8080")
+            .tenant_id("tenant-abc")
+            .build()
+            .unwrap();
+
+        assert_eq!(client.config.tenant_id, Some("tenant-abc".to_string()));
+    }
+
+    #[test]
+    fn test_builder_default_impl() {
+        let builder = ShiiooClientBuilder::default();
+        assert!(builder.base_url.is_none());
+    }
+
+    #[test]
+    fn test_client_api_accessors() {
+        let client = ShiiooClient::builder()
+            .base_url("http://localhost:8080")
+            .build()
+            .unwrap();
+
+        // Just verify these don't panic
+        let _ = client.health();
+        let _ = client.runs();
+        let _ = client.jobs();
+        let _ = client.roles();
+        let _ = client.policies();
+    }
+}
