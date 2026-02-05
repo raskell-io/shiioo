@@ -15,7 +15,9 @@ use tower_http::{
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
 
+mod agent_handlers;
 mod handlers;
+mod migration_handlers;
 
 /// Start the API server
 pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
@@ -151,6 +153,27 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         // Compliance & Security (Phase 9)
         .route("/api/compliance/report", post(handlers::generate_compliance_report))
         .route("/api/security/scan", post(handlers::run_security_scan))
+        // Agent management (Phase 12 - Agent Primitive)
+        .route("/api/agents", get(agent_handlers::list_agents))
+        .route("/api/agents", post(agent_handlers::create_agent))
+        .route("/api/agents/{agent_id}", get(agent_handlers::get_agent))
+        .route("/api/agents/{agent_id}", axum::routing::put(agent_handlers::update_agent))
+        .route("/api/agents/{agent_id}", delete(agent_handlers::delete_agent))
+        .route("/api/agents/{agent_id}/activate", post(agent_handlers::activate_agent))
+        .route("/api/agents/{agent_id}/suspend", post(agent_handlers::suspend_agent))
+        .route("/api/agents/{agent_id}/pause", post(agent_handlers::pause_agent))
+        .route("/api/agents/{agent_id}/archive", post(agent_handlers::archive_agent))
+        // Archetype management (Phase 12 - Agent Primitive)
+        .route("/api/archetypes", get(agent_handlers::list_archetypes))
+        .route("/api/archetypes", post(agent_handlers::create_archetype))
+        .route("/api/archetypes/{archetype_id}", get(agent_handlers::get_archetype))
+        .route("/api/archetypes/{archetype_id}", axum::routing::put(agent_handlers::update_archetype))
+        .route("/api/archetypes/{archetype_id}", delete(agent_handlers::delete_archetype))
+        // Migration (Phase 12 - Agent Primitive)
+        .route("/api/migration/run", post(migration_handlers::run_migration))
+        .route("/api/migration/preview", post(migration_handlers::preview_migration))
+        .route("/api/migration/roles", post(migration_handlers::migrate_roles))
+        .route("/api/migration/persons", post(migration_handlers::migrate_persons))
         // UI routes (Phase 10)
         .route("/dashboard", get(ui::serve_dashboard))
         .fallback(ui::serve_ui)

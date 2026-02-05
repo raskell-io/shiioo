@@ -1,6 +1,7 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
 use futures::Stream;
+use shiioo_core::storage::AgentStore;
 use shiioo_core::*;
 use std::sync::Arc;
 
@@ -73,6 +74,60 @@ pub struct MetricsSummary {
     pub successful_runs: i64,
     pub failed_runs: i64,
     pub avg_duration_ms: f64,
+}
+
+/// GraphQL agent type
+#[derive(Clone, SimpleObject)]
+pub struct Agent {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub archetype_id: Option<String>,
+    pub team_id: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<agent::Agent> for Agent {
+    fn from(a: agent::Agent) -> Self {
+        Self {
+            id: a.id.0,
+            name: a.name,
+            description: a.description,
+            archetype_id: a.archetype.map(|id| id.0),
+            team_id: a.organization.team.0,
+            status: format!("{:?}", a.status),
+            created_at: a.created_at,
+            updated_at: a.updated_at,
+        }
+    }
+}
+
+/// GraphQL archetype type
+#[derive(Clone, SimpleObject)]
+pub struct Archetype {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub parent_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub created_by: String,
+}
+
+impl From<agent::Archetype> for Archetype {
+    fn from(a: agent::Archetype) -> Self {
+        Self {
+            id: a.id.0,
+            name: a.name,
+            description: a.description,
+            parent_id: a.parent.map(|id| id.0),
+            created_at: a.created_at,
+            updated_at: a.updated_at,
+            created_by: a.created_by,
+        }
+    }
 }
 
 /// Query root
@@ -282,6 +337,70 @@ impl Query {
             success_rate,
         })
     }
+
+    /// Get agent by ID
+    async fn agent(&self, ctx: &Context<'_>, id: String) -> Result<Option<Agent>> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        let agent_opt = state
+            .agent_store
+            .get_agent(&agent::AgentId::new(&id))
+            .await
+            .map_err(|e| Error::new(e.to_string()))?;
+
+        Ok(agent_opt.map(Agent::from))
+    }
+
+    /// List all agents
+    async fn agents(&self, ctx: &Context<'_>, status: Option<String>, team_id: Option<String>, limit: Option<i32>) -> Result<Vec<Agent>> {
+        let state = ctx.data::<Arc<AppState>>()?;
+        let limit = limit.unwrap_or(100) as usize;
+
+        let agents = if let Some(status_str) = status {
+            let status = match status_str.to_lowercase().as_str() {
+                "active" => agent::AgentStatus::Active,
+                "paused" => agent::AgentStatus::Paused,
+                "suspended" => agent::AgentStatus::Suspended,
+                "archived" => agent::AgentStatus::Archived,
+                _ => return Err(Error::new(format!("Invalid status: {}", status_str))),
+            };
+            state.agent_store.list_agents_by_status(status).await
+        } else if let Some(team) = team_id {
+            state.agent_store.list_agents_by_team(&team).await
+        } else {
+            state.agent_store.list_agents().await
+        }
+        .map_err(|e| Error::new(e.to_string()))?;
+
+        Ok(agents.into_iter().take(limit).map(Agent::from).collect())
+    }
+
+    /// Get archetype by ID
+    async fn archetype(&self, ctx: &Context<'_>, id: String) -> Result<Option<Archetype>> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        let archetype_opt = state
+            .agent_store
+            .get_archetype(&agent::ArchetypeId::new(&id))
+            .await
+            .map_err(|e| Error::new(e.to_string()))?;
+
+        Ok(archetype_opt.map(Archetype::from))
+    }
+
+    /// List all archetypes
+    async fn archetypes(&self, ctx: &Context<'_>, limit: Option<i32>) -> Result<Vec<Archetype>> {
+        let state = ctx.data::<Arc<AppState>>()?;
+        let limit = limit.unwrap_or(100) as usize;
+
+        let archetypes = state
+            .agent_store
+            .list_archetypes()
+            .await
+            .map_err(|e| Error::new(e.to_string()))?;
+
+        Ok(archetypes.into_iter().take(limit).map(Archetype::from).collect())
+    }
 }
 
 /// System health status
@@ -366,6 +485,110 @@ impl Mutation {
             created_at: tenant.created_at,
         })
     }
+
+    /// Create a new agent
+    async fn create_agent(&self, ctx: &Context<'_>, input: CreateAgentInput) -> Result<Agent> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        let mut builder = agent::Agent::builder(
+            agent::AgentId::new(&input.id),
+            &input.name,
+        )
+        .description(&input.description)
+        .organization(agent::AgentOrganization {
+            team: shiioo_core::types::TeamId::new(&input.team_id),
+            reports_to: input.reports_to.map(agent::AgentId::new),
+            supervises: vec![],
+            peers: vec![],
+        });
+
+        if let Some(archetype_id) = input.archetype_id {
+            builder = builder.archetype(agent::ArchetypeId::new(archetype_id));
+        }
+
+        let new_agent = builder.build();
+
+        state
+            .agent_store
+            .store_agent(&new_agent)
+            .await
+            .map_err(|e| Error::new(e.to_string()))?;
+
+        Ok(Agent::from(new_agent))
+    }
+
+    /// Update agent status
+    async fn update_agent_status(&self, ctx: &Context<'_>, id: String, status: String) -> Result<Agent> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        let agent_status = match status.to_lowercase().as_str() {
+            "active" => agent::AgentStatus::Active,
+            "paused" => agent::AgentStatus::Paused,
+            "suspended" => agent::AgentStatus::Suspended,
+            "archived" => agent::AgentStatus::Archived,
+            _ => return Err(Error::new(format!("Invalid status: {}", status))),
+        };
+
+        state
+            .agent_store
+            .update_agent_status(&agent::AgentId::new(&id), agent_status)
+            .await
+            .map_err(|e| Error::new(e.to_string()))?;
+
+        let updated_agent = state
+            .agent_store
+            .get_agent(&agent::AgentId::new(&id))
+            .await
+            .map_err(|e| Error::new(e.to_string()))?
+            .ok_or_else(|| Error::new("Agent not found"))?;
+
+        Ok(Agent::from(updated_agent))
+    }
+
+    /// Delete an agent
+    async fn delete_agent(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        state
+            .agent_store
+            .delete_agent(&agent::AgentId::new(&id))
+            .await
+            .map_err(|e| Error::new(e.to_string()))
+    }
+
+    /// Create a new archetype
+    async fn create_archetype(&self, ctx: &Context<'_>, input: CreateArchetypeInput) -> Result<Archetype> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        let mut builder = agent::Archetype::builder(input.id.clone(), input.name.clone())
+            .description(input.description.clone())
+            .created_by(input.created_by.as_deref().unwrap_or("graphql"));
+
+        if let Some(parent_id) = input.parent_id {
+            builder = builder.parent(agent::ArchetypeId::new(parent_id));
+        }
+
+        let new_archetype = builder.build();
+
+        state
+            .agent_store
+            .store_archetype(&new_archetype)
+            .await
+            .map_err(|e| Error::new(e.to_string()))?;
+
+        Ok(Archetype::from(new_archetype))
+    }
+
+    /// Delete an archetype
+    async fn delete_archetype(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
+        let state = ctx.data::<Arc<AppState>>()?;
+
+        state
+            .agent_store
+            .delete_archetype(&agent::ArchetypeId::new(&id))
+            .await
+            .map_err(|e| Error::new(e.to_string()))
+    }
 }
 
 /// Input for creating a run
@@ -383,6 +606,27 @@ pub struct RegisterTenantInput {
     pub max_routines: Option<i32>,
     pub max_storage_mb: Option<i32>,
     pub max_api_calls_per_hour: Option<i32>,
+}
+
+/// Input for creating an agent
+#[derive(InputObject)]
+pub struct CreateAgentInput {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub team_id: String,
+    pub archetype_id: Option<String>,
+    pub reports_to: Option<String>,
+}
+
+/// Input for creating an archetype
+#[derive(InputObject)]
+pub struct CreateArchetypeInput {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub parent_id: Option<String>,
+    pub created_by: Option<String>,
 }
 
 /// Subscription root for real-time updates

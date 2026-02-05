@@ -9,7 +9,7 @@ use shiioo_core::config_change::ConfigChangeManager;
 use shiioo_core::metrics::MetricsCollector;
 use shiioo_core::rbac::RbacManager;
 use shiioo_core::scheduler::RoutineScheduler;
-use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbIndexStore, TenantStorage};
+use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbAgentStore, RedbIndexStore, TenantStorage};
 use shiioo_core::cluster::NodeId;
 use shiioo_core::secrets::SecretManager;
 use shiioo_core::tenant::TenantManager;
@@ -105,6 +105,7 @@ pub struct AppState {
     pub blob_store: Arc<FilesystemBlobStore>,
     pub event_log: Arc<JsonlEventLog>,
     pub index_store: Arc<RedbIndexStore>,
+    pub agent_store: Arc<RedbAgentStore>,
     pub workflow_executor: Arc<WorkflowExecutor>,
     pub routine_scheduler: Arc<RoutineScheduler>,
     pub approval_manager: Arc<ApprovalManager>,
@@ -134,6 +135,11 @@ impl AppState {
 
         let index_store = Arc::new(
             RedbIndexStore::new(config.index_path()).context("Failed to create index store")?,
+        );
+
+        let agent_store = Arc::new(
+            RedbAgentStore::new(config.data_dir.join("agents.redb"))
+                .context("Failed to create agent store")?,
         );
 
         let workflow_executor = Arc::new(WorkflowExecutor::new(
@@ -187,6 +193,7 @@ impl AppState {
             blob_store,
             event_log,
             index_store,
+            agent_store,
             workflow_executor,
             routine_scheduler,
             approval_manager,
