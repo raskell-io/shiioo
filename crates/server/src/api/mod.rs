@@ -1,4 +1,5 @@
 use crate::config::{AppState, ServerConfig};
+use crate::middleware::RateLimitLayer;
 use crate::ui;
 use anyhow::Result;
 use axum::{
@@ -191,13 +192,14 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         // UI routes (Phase 10)
         .route("/dashboard", get(ui::serve_dashboard))
         .fallback(ui::serve_ui)
-        // Middleware
+        // Middleware (applied in reverse order - last added is first executed)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
                 .on_response(DefaultOnResponse::new().include_headers(true)),
         )
         .layer(CorsLayer::permissive())
+        .layer(RateLimitLayer::from_env())
         .layer(axum::Extension(schema))
         .with_state(Arc::new(state))
 }
