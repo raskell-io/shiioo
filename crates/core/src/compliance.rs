@@ -1,3 +1,83 @@
+//! Compliance frameworks and security scanning.
+//!
+//! This module provides automated compliance checking against major regulatory
+//! frameworks and continuous security vulnerability detection.
+//!
+//! # Overview
+//!
+//! The compliance system evaluates your Shiioo deployment against industry
+//! standards by analyzing audit logs, access controls, and security events.
+//!
+//! # Supported Frameworks
+//!
+//! | Framework | Description |
+//! |-----------|-------------|
+//! | [`SOC2`](ComplianceFramework::SOC2) | Service Organization Control 2 |
+//! | [`GDPR`](ComplianceFramework::GDPR) | General Data Protection Regulation |
+//! | [`HIPAA`](ComplianceFramework::HIPAA) | Health Insurance Portability and Accountability |
+//! | [`ISO27001`](ComplianceFramework::ISO27001) | Information Security Management |
+//! | [`PCI_DSS`](ComplianceFramework::PCI_DSS) | Payment Card Industry Data Security Standard |
+//!
+//! # Components
+//!
+//! - [`ComplianceChecker`] - Generates compliance reports by framework
+//! - [`SecurityScanner`] - Detects security vulnerabilities and threats
+//! - [`ComplianceReport`] - Detailed compliance assessment with evidence
+//! - [`SecurityScanReport`] - Vulnerability findings and recommendations
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                   ComplianceChecker                         │
+//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+//! │  │  AuditLog   │  │ RbacManager │  │  Framework  │        │
+//! │  │  Analysis   │  │   Review    │  │   Rules     │        │
+//! │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
+//! │         │                │                │               │
+//! │         └────────────────┼────────────────┘               │
+//! │                          ▼                                │
+//! │              ┌─────────────────────┐                      │
+//! │              │ ComplianceReport    │                      │
+//! │              │ - Requirements      │                      │
+//! │              │ - Evidence          │                      │
+//! │              │ - Findings          │                      │
+//! │              └─────────────────────┘                      │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Security Scanner
+//!
+//! The [`SecurityScanner`] performs real-time threat detection:
+//! - **Brute force attacks** - Multiple failed login attempts
+//! - **Privilege escalation** - Unauthorized access patterns
+//! - **Data exfiltration** - Abnormal data access volumes
+//! - **Secret access anomalies** - Suspicious credential retrieval
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::compliance::{ComplianceChecker, ComplianceFramework, SecurityScanner};
+//!
+//! // Generate SOC2 compliance report
+//! let checker = ComplianceChecker::new(audit_log, rbac_manager);
+//! let report = checker.generate_report(
+//!     ComplianceFramework::SOC2,
+//!     period_start,
+//!     period_end,
+//! );
+//!
+//! println!("Compliance: {:.1}%", report.summary.compliance_percentage);
+//!
+//! // Run security scan
+//! let scanner = SecurityScanner::new(audit_log);
+//! let scan = scanner.scan();
+//!
+//! for finding in &scan.findings {
+//!     println!("[{:?}] {}: {}", finding.severity, finding.title, finding.recommendation);
+//! }
+//! ```
+
 use crate::audit::{AuditAction, AuditCategory, AuditEntry, AuditId, AuditLog, AuditSeverity};
 use crate::rbac::{Action, Permission, RbacManager, Resource};
 use chrono::{DateTime, Duration, Utc};

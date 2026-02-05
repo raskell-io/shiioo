@@ -1,3 +1,59 @@
+//! Human-in-the-loop approval workflows.
+//!
+//! This module provides approval management for actions requiring human oversight,
+//! including multi-party approvals with quorum rules.
+//!
+//! # Overview
+//!
+//! Some agent actions require human approval before execution:
+//! - High-value transactions
+//! - External communications
+//! - Irreversible operations
+//! - Policy-mandated checkpoints
+//!
+//! The [`ApprovalManager`] handles these approval workflows with support for:
+//! - Multiple approval boards with different members
+//! - Quorum rules (e.g., 2-of-3 approvers)
+//! - Time-limited approvals with expiration
+//! - Vote tracking and audit trails
+//!
+//! # Quorum Rules
+//!
+//! - **Unanimous** - All board members must approve
+//! - **Majority** - More than half must approve
+//! - **Count(n)** - At least n members must approve
+//! - **Percent(p)** - At least p% must approve
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::approval::ApprovalManager;
+//! use shiioo_core::types::{ApprovalBoard, QuorumRule};
+//!
+//! let manager = ApprovalManager::new();
+//!
+//! // Create an approval board
+//! let board = ApprovalBoard {
+//!     id: ApprovalBoardId::new("finance-board"),
+//!     name: "Finance Approval Board".to_string(),
+//!     members: vec![alice_id, bob_id, carol_id],
+//!     quorum_rule: QuorumRule::Majority,
+//!     ..Default::default()
+//! };
+//!
+//! manager.create_board(board)?;
+//!
+//! // Request approval for an action
+//! let approval = manager.request_approval(
+//!     board_id,
+//!     ApprovalSubject::ToolCall { tool: "transfer".into(), .. },
+//!     "Transfer $10,000 to vendor",
+//! ).await?;
+//!
+//! // Cast a vote
+//! manager.vote(approval.id, alice_id, VoteDecision::Approve, None).await?;
+//! ```
+
 use crate::types::{
     Approval, ApprovalBoard, ApprovalBoardId, ApprovalId, ApprovalStatus, ApprovalSubject,
     ApprovalVote, PersonId, QuorumRule, VoteDecision,

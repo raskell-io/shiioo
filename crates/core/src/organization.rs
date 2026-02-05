@@ -1,4 +1,79 @@
-// Organization management
+//! Organization structure and hierarchy management.
+//!
+//! This module provides organizational modeling including teams, people,
+//! reporting structures, and approval authority validation.
+//!
+//! # Overview
+//!
+//! The [`OrganizationManager`] validates and queries organizational structures,
+//! ensuring consistency between people, teams, and reporting relationships.
+//!
+//! # Features
+//!
+//! - **Structure validation** - Ensures referential integrity
+//! - **Cycle detection** - Prevents circular reporting relationships
+//! - **Hierarchy traversal** - Navigate team trees and management chains
+//! - **Approval authority** - Check who can approve specific actions
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                     Organization                            │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │                    OrgChart                          │   │
+//! │  │         ┌──────────────────┐                        │   │
+//! │  │         │   Executive      │ (root team)            │   │
+//! │  │         │   ├── CEO        │                        │   │
+//! │  │         │   └── CTO        │                        │   │
+//! │  │         └────────┬─────────┘                        │   │
+//! │  │                  │                                  │   │
+//! │  │         ┌────────┴─────────┐                        │   │
+//! │  │         │   Engineering    │                        │   │
+//! │  │         │   ├── Lead       │                        │   │
+//! │  │         │   ├── Engineer 1 │                        │   │
+//! │  │         │   └── Engineer 2 │                        │   │
+//! │  │         └──────────────────┘                        │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Validation Rules
+//!
+//! The manager validates:
+//! - All team members reference existing people
+//! - Team leads exist in the people list
+//! - Parent teams exist for sub-teams
+//! - People reference valid teams
+//! - Reporting relationships are acyclic
+//! - Root team exists in org chart
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::organization::OrganizationManager;
+//! use shiioo_core::types::{Organization, PersonId, TeamId};
+//!
+//! let manager = OrganizationManager::new(organization)?;
+//!
+//! // Get person details
+//! let cto = manager.get_person(&PersonId::new("cto"));
+//!
+//! // Find direct reports
+//! let reports = manager.get_direct_reports(&PersonId::new("cto"));
+//!
+//! // Get full management chain
+//! let chain = manager.get_management_chain(&PersonId::new("engineer1"));
+//! // Returns: [engineer1, tech_lead, cto, ceo]
+//!
+//! // Check approval authority
+//! if manager.can_approve(&PersonId::new("cto"), "technical") {
+//!     // CTO can approve technical decisions
+//! }
+//!
+//! // Get all members of a team (including sub-teams)
+//! let all_engineering = manager.get_all_team_members(&TeamId::new("engineering"));
+//! ```
 
 use crate::types::{Organization, Person, PersonId, Team, TeamId};
 use anyhow::Result;

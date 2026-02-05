@@ -1,3 +1,86 @@
+//! Encrypted secret storage with rotation support.
+//!
+//! This module provides secure secret management with encryption at rest,
+//! version history, and automatic rotation policies.
+//!
+//! # Overview
+//!
+//! The [`SecretManager`] securely stores sensitive credentials like API keys,
+//! database passwords, and private keys. All secrets are encrypted before
+//! storage and can be rotated with full version history preserved.
+//!
+//! # Security Features
+//!
+//! - **Encryption at rest** - All secrets encrypted before storage
+//! - **Hash verification** - SHA-256 hashes for integrity checking
+//! - **Version history** - Access previous secret versions during rotation
+//! - **Rotation policies** - Automatic rotation reminders and scheduling
+//! - **Expiration tracking** - Alerts for expiring credentials
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                     SecretManager                           │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │                   Encryption Layer                   │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ Secret: api-key-prod                                │   │
+//! │  │ ├── v3 (current)  ── encrypted_value ── hash       │   │
+//! │  │ ├── v2 (deprecated) ── encrypted_value ── hash     │   │
+//! │  │ └── v1 (deprecated) ── encrypted_value ── hash     │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Secret Types
+//!
+//! - [`SecretType::ApiKey`] - API keys and access tokens
+//! - [`SecretType::DatabasePassword`] - Database credentials
+//! - [`SecretType::PrivateKey`] - RSA, Ed25519, or other private keys
+//! - [`SecretType::OAuthCredentials`] - OAuth client secrets
+//! - [`SecretType::Generic`] - Other sensitive data
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::secrets::{SecretManager, SecretType, RotationPolicy};
+//!
+//! let manager = SecretManager::new(b"encryption-key-32-bytes-long!!");
+//!
+//! // Create a secret with rotation policy
+//! let policy = RotationPolicy {
+//!     enabled: true,
+//!     rotation_interval_days: 90,
+//!     grace_period_days: 7,
+//!     notify_before_days: 14,
+//! };
+//!
+//! let secret = manager.create_secret(
+//!     "prod-api-key".to_string(),
+//!     "Production API key for external service".to_string(),
+//!     SecretType::ApiKey,
+//!     "sk-live-abc123xyz".to_string(),
+//!     Some(policy),
+//!     HashMap::new(),
+//! )?;
+//!
+//! // Retrieve decrypted value
+//! let value = manager.get_secret_value(&secret.id)?;
+//!
+//! // Rotate the secret
+//! manager.rotate_secret(&secret.id, "sk-live-new456def".to_string())?;
+//!
+//! // Access old version during grace period
+//! let old_value = manager.get_secret_value_version(&secret.id, 1)?;
+//! ```
+//!
+//! # Note
+//!
+//! The current implementation uses XOR cipher for demonstration. Production
+//! deployments should use proper encryption (AES-GCM via `ring` or `aes-gcm` crate).
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,79 @@
+//! Performance analytics and bottleneck detection.
+//!
+//! This module provides detailed performance tracking for workflows and steps,
+//! including execution traces, statistics, and automatic bottleneck identification.
+//!
+//! # Overview
+//!
+//! The [`PerformanceAnalytics`] system tracks every workflow and step execution,
+//! calculating statistics like duration percentiles, retry rates, and success ratios.
+//!
+//! # Features
+//!
+//! - **Execution tracing** - Track individual runs from start to completion
+//! - **Step-level metrics** - Duration, success/failure rates, retry counts
+//! - **Workflow statistics** - Aggregate performance across all executions
+//! - **Bottleneck detection** - Automatically identify slow steps
+//! - **Percentile calculations** - p50, p95, p99 latency tracking
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                  PerformanceAnalytics                       │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ ExecutionTrace (run-abc)                            │   │
+//! │  │   started_at: 2024-01-15T10:00:00Z                  │   │
+//! │  │   ┌───────┐ ┌───────┐ ┌───────┐                    │   │
+//! │  │   │Step 1 │→│Step 2 │→│Step 3 │ ← bottleneck       │   │
+//! │  │   │ 0.5s  │ │ 0.3s  │ │ 2.1s  │                    │   │
+//! │  │   └───────┘ └───────┘ └───────┘                    │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ WorkflowStats                                       │   │
+//! │  │   executions: 150   success_rate: 94%              │   │
+//! │  │   avg: 2.9s   p50: 2.5s   p95: 5.2s   p99: 8.1s   │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Bottleneck Detection
+//!
+//! The system automatically identifies performance bottlenecks by:
+//! 1. Tracking which step takes the longest in each execution
+//! 2. Calculating each step's percentage of total workflow time
+//! 3. Generating reports ranking steps by impact
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::analytics::PerformanceAnalytics;
+//!
+//! let analytics = PerformanceAnalytics::new();
+//!
+//! // Track workflow execution
+//! analytics.start_workflow(run_id.clone(), "data-pipeline".to_string());
+//!
+//! // Track step execution
+//! analytics.start_step(&run_id, step_id.clone(), 0);
+//! // ... step executes ...
+//! analytics.complete_step(&run_id, &step_id, true, None);
+//!
+//! analytics.complete_workflow(&run_id, true);
+//!
+//! // Get statistics
+//! let stats = analytics.get_workflow_stats("data-pipeline").unwrap();
+//! println!("Success rate: {:.1}%",
+//!     (stats.success_count as f64 / stats.execution_count as f64) * 100.0);
+//! println!("p95 latency: {:.2}s", stats.avg_duration_secs);
+//!
+//! // Detect bottlenecks
+//! let report = analytics.detect_bottlenecks("data-pipeline").unwrap();
+//! for b in report.bottlenecks.iter().take(3) {
+//!     println!("{}: {:.1}% of workflow time", b.step_id, b.percentage_of_workflow);
+//! }
+//! ```
+
 use crate::types::{RunId, StepId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

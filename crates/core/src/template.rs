@@ -1,4 +1,107 @@
-// Process template system for reusable workflows
+//! Reusable workflow templates with parameter substitution.
+//!
+//! This module provides a template system for creating parameterized workflow
+//! definitions that can be instantiated with different values.
+//!
+//! # Overview
+//!
+//! Process templates allow you to define workflow patterns once and reuse them
+//! with different parameters. Templates use `{{parameter}}` placeholder syntax.
+//!
+//! # Features
+//!
+//! - **Parameter placeholders** - `{{name}}` syntax in prompts and commands
+//! - **Type validation** - String, Number, Boolean, and ID types
+//! - **Default values** - Optional parameters with fallback values
+//! - **Required parameters** - Enforce mandatory inputs
+//!
+//! # Template Structure
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    ProcessTemplate                          │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ Parameters:                                          │   │
+//! │  │   - file_path: String (required)                    │   │
+//! │  │   - reviewer: PersonId (default: "alice")           │   │
+//! │  │   - priority: Number (default: "1")                 │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ Workflow Template:                                   │   │
+//! │  │   Step 1: "Review {{file_path}}"                    │   │
+//! │  │   Step 2: "Notify {{reviewer}}"                     │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────┘
+//!           │
+//!           ▼  instantiate(file_path="src/main.rs")
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    WorkflowSpec                             │
+//! │   Step 1: "Review src/main.rs"                             │
+//! │   Step 2: "Notify alice"                                   │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Parameter Types
+//!
+//! | Type | Description | Validation |
+//! |------|-------------|------------|
+//! | String | Free-form text | None |
+//! | Number | Numeric value | Parseable as f64 |
+//! | Boolean | true/false | Parseable as bool |
+//! | RoleId | Role identifier | Non-empty |
+//! | TeamId | Team identifier | Non-empty |
+//! | PersonId | Person identifier | Non-empty |
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::template::TemplateProcessor;
+//! use shiioo_core::types::{ProcessTemplate, TemplateInstance, TemplateParameter};
+//!
+//! // Define template with parameters
+//! let template = ProcessTemplate {
+//!     name: "Code Review".to_string(),
+//!     parameters: vec![
+//!         TemplateParameter {
+//!             name: "file_path".to_string(),
+//!             param_type: TemplateParameterType::String,
+//!             required: true,
+//!             default_value: None,
+//!             ..Default::default()
+//!         },
+//!         TemplateParameter {
+//!             name: "reviewer".to_string(),
+//!             param_type: TemplateParameterType::PersonId,
+//!             required: false,
+//!             default_value: Some("alice".to_string()),
+//!             ..Default::default()
+//!         },
+//!     ],
+//!     workflow_template: WorkflowSpec {
+//!         steps: vec![
+//!             // Step with prompt: "Review {{file_path}} and send to {{reviewer}}"
+//!         ],
+//!         ..Default::default()
+//!     },
+//!     ..Default::default()
+//! };
+//!
+//! // Instantiate with values
+//! let instance = TemplateInstance {
+//!     template_id: template.id.clone(),
+//!     parameters: HashMap::from([
+//!         ("file_path".to_string(), "src/lib.rs".to_string()),
+//!     ]),
+//!     ..Default::default()
+//! };
+//!
+//! let workflow = TemplateProcessor::instantiate(&template, &instance)?;
+//! // Result: "Review src/lib.rs and send to alice"
+//!
+//! // Extract parameter names from text
+//! let params = TemplateProcessor::extract_parameters("Hello {{name}}, your ID is {{id}}");
+//! // Returns: ["id", "name"]
+//! ```
 
 use crate::types::{
     ProcessTemplate, StepAction, TemplateId, TemplateInstance, TemplateParameter,

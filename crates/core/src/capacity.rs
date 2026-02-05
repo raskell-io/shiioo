@@ -1,3 +1,72 @@
+//! LLM capacity management and pooling.
+//!
+//! This module provides multi-source capacity pooling for LLM requests,
+//! including rate limiting, cost tracking, and priority-based scheduling.
+//!
+//! # Overview
+//!
+//! In enterprise environments, LLM capacity often comes from multiple sources:
+//! - Direct API keys with varying rate limits
+//! - Enterprise agreements with different pricing tiers
+//! - Fallback providers for redundancy
+//!
+//! The [`CapacityBroker`] manages these sources, routing requests optimally
+//! based on availability, cost, and priority.
+//!
+//! # Features
+//!
+//! - **Multi-source pooling** - Aggregate capacity from multiple providers
+//! - **Rate limiting** - Respect per-source rate limits with backoff
+//! - **Cost tracking** - Monitor spend across all sources
+//! - **Priority queuing** - Handle urgent requests first
+//! - **Failover** - Automatic fallback when sources are unavailable
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                     CAPACITY BROKER                             │
+//! ├─────────────────────────────────────────────────────────────────┤
+//! │                                                                 │
+//! │  Incoming Requests                                              │
+//! │        │                                                        │
+//! │        ▼                                                        │
+//! │  ┌─────────────┐                                                │
+//! │  │  Priority   │                                                │
+//! │  │   Queue     │                                                │
+//! │  └─────────────┘                                                │
+//! │        │                                                        │
+//! │        ▼                                                        │
+//! │  ┌─────────────────────────────────────────────┐               │
+//! │  │           Source Selection                   │               │
+//! │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐       │               │
+//! │  │  │Source A │ │Source B │ │Source C │       │               │
+//! │  │  │ OpenAI  │ │ Anthropic│ │ Azure   │       │               │
+//! │  │  └─────────┘ └─────────┘ └─────────┘       │               │
+//! │  └─────────────────────────────────────────────┘               │
+//! │                                                                 │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::capacity::CapacityBroker;
+//! use shiioo_core::types::{CapacitySource, LlmRequest};
+//!
+//! let broker = CapacityBroker::new();
+//!
+//! // Register capacity sources
+//! broker.register_source(openai_source);
+//! broker.register_source(anthropic_source);
+//!
+//! // Execute a request (broker selects optimal source)
+//! let response = broker.execute_request(request).await?;
+//!
+//! // Check usage statistics
+//! let usage = broker.get_usage_summary();
+//! ```
+
 use crate::types::{
     CapacitySource, CapacitySourceId, CapacityUsage, LlmError, LlmRequest, LlmResponse,
     PriorityRequest, RateLimitState, RoleId, RunId, StepId,

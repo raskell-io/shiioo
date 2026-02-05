@@ -1,3 +1,88 @@
+//! System observability metrics collection.
+//!
+//! This module provides a Prometheus-compatible metrics collection system
+//! with counters, gauges, and histograms for monitoring Shiioo deployments.
+//!
+//! # Overview
+//!
+//! The [`MetricsCollector`] tracks operational metrics with dimensional labels,
+//! supporting the three standard metric types:
+//!
+//! - [`Counter`] - Monotonically increasing values (requests, errors)
+//! - [`Gauge`] - Values that can increase or decrease (connections, memory)
+//! - [`Histogram`] - Distribution of values (latencies, sizes)
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    MetricsCollector                         │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ Counters                                            │   │
+//! │  │   requests_total{method="GET",path="/api"}  = 1234  │   │
+//! │  │   errors_total{type="validation"}           = 42    │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ Gauges                                              │   │
+//! │  │   active_connections{service="api"}         = 156   │   │
+//! │  │   memory_usage_bytes{node="node1"}          = 2.1GB │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! │  ┌─────────────────────────────────────────────────────┐   │
+//! │  │ Histograms                                          │   │
+//! │  │   request_duration_seconds                          │   │
+//! │  │     p50=0.05s  p95=0.2s  p99=0.5s  avg=0.08s       │   │
+//! │  └─────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Metric Types
+//!
+//! | Type | Use Case | Example |
+//! |------|----------|---------|
+//! | Counter | Cumulative totals | Request count, bytes sent |
+//! | Gauge | Current state | Active users, queue depth |
+//! | Histogram | Distributions | Response times, payload sizes |
+//!
+//! # Labels
+//!
+//! Metrics support dimensional labels for fine-grained analysis:
+//! - `method` - HTTP method (GET, POST, etc.)
+//! - `path` - API endpoint path
+//! - `status` - Response status code
+//! - `service` - Service or component name
+//! - `tenant_id` - Multi-tenant isolation
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::metrics::MetricsCollector;
+//! use std::collections::HashMap;
+//!
+//! let metrics = MetricsCollector::new();
+//!
+//! // Track HTTP requests
+//! let labels = HashMap::from([
+//!     ("method".to_string(), "GET".to_string()),
+//!     ("path".to_string(), "/api/runs".to_string()),
+//! ]);
+//! metrics.increment_counter("http_requests_total", labels);
+//!
+//! // Track active connections
+//! metrics.set_gauge("active_connections", 42.0, HashMap::new());
+//!
+//! // Record request latency
+//! metrics.observe_histogram("request_duration_seconds", 0.125, HashMap::new());
+//!
+//! // Get histogram statistics
+//! if let Some(h) = metrics.get_histogram("request_duration_seconds", &HashMap::new()) {
+//!     println!("p50: {:?}, p99: {:?}, avg: {:?}",
+//!         h.percentile(50.0),
+//!         h.percentile(99.0),
+//!         h.average()
+//!     );
+//! }
+//! ```
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -1,3 +1,71 @@
+//! Configuration change management with approval workflows.
+//!
+//! This module provides controlled configuration changes that can optionally
+//! require human approval before being applied to the system.
+//!
+//! # Overview
+//!
+//! The [`ConfigChangeManager`] tracks all proposed configuration changes,
+//! integrating with the approval system to require sign-off on sensitive changes.
+//!
+//! # Change Lifecycle
+//!
+//! ```text
+//! ┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
+//! │  Proposed   │────▶│ Pending Approval │────▶│   Applied   │
+//! └─────────────┘     └──────────────────┘     └─────────────┘
+//!       │                     │
+//!       │                     │
+//!       ▼                     ▼
+//! ┌─────────────┐     ┌─────────────┐
+//! │  Rejected   │     │   Failed    │
+//! └─────────────┘     └─────────────┘
+//! ```
+//!
+//! # Change Types
+//!
+//! | Type | Description |
+//! |------|-------------|
+//! | [`Policy`](ConfigChangeType::Policy) | Security or governance policies |
+//! | [`Role`](ConfigChangeType::Role) | Role definitions and permissions |
+//! | [`Workflow`](ConfigChangeType::Workflow) | Workflow specifications |
+//! | [`Template`](ConfigChangeType::Template) | Process templates |
+//! | [`Secret`](ConfigChangeType::Secret) | Credential configurations |
+//! | [`Infrastructure`](ConfigChangeType::Infrastructure) | System infrastructure |
+//!
+//! # Features
+//!
+//! - **Proposal tracking** - Record who proposed what and when
+//! - **Before/after diff** - Store previous and new values
+//! - **Approval integration** - Require board approval for sensitive changes
+//! - **Status management** - Track changes through their lifecycle
+//! - **Audit trail** - Complete history of all configuration changes
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::config_change::ConfigChangeManager;
+//! use shiioo_core::types::ConfigChangeType;
+//!
+//! let manager = ConfigChangeManager::new(approval_manager);
+//!
+//! // Propose a policy change requiring approval
+//! let change = manager.propose_change(
+//!     ConfigChangeType::Policy,
+//!     "Update data retention policy to 90 days".to_string(),
+//!     Some(r#"{"retention_days": 30}"#.to_string()),
+//!     r#"{"retention_days": 90}"#.to_string(),
+//!     "alice@example.com".to_string(),
+//!     Some(ApprovalBoardId::new("policy-board")),
+//! )?;
+//!
+//! // After approval is granted...
+//! manager.apply_change(&change.id)?;
+//!
+//! // Or reject with reason
+//! manager.reject_change(&change.id, "Retention too long for compliance".to_string())?;
+//! ```
+
 use crate::approval::ApprovalManager;
 use crate::types::{
     ApprovalBoardId, ApprovalSubject, ConfigChange, ConfigChangeId, ConfigChangeStatus,

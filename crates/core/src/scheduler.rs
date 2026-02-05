@@ -1,3 +1,46 @@
+//! Task scheduling and cron-based routines.
+//!
+//! This module provides scheduling capabilities for recurring workflows,
+//! including cron expression parsing and execution tracking.
+//!
+//! # Overview
+//!
+//! The [`RoutineScheduler`] manages recurring tasks that run on a schedule.
+//! Each routine is defined with:
+//! - A cron expression specifying when to run
+//! - A workflow specification to execute
+//! - Optional configuration for retries and timeouts
+//!
+//! # Features
+//!
+//! - **Cron expressions** - Standard 5-field cron syntax
+//! - **Execution tracking** - History of all routine runs
+//! - **Enable/disable** - Pause routines without deleting
+//! - **Manual trigger** - Run routines on demand
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::scheduler::RoutineScheduler;
+//! use shiioo_core::types::Routine;
+//!
+//! let scheduler = RoutineScheduler::new(workflow_executor);
+//!
+//! // Register a routine to run daily at midnight
+//! let routine = Routine {
+//!     id: RoutineId::new("daily-report"),
+//!     cron_expression: "0 0 * * *".to_string(),
+//!     workflow_spec: report_workflow,
+//!     enabled: true,
+//!     ..Default::default()
+//! };
+//!
+//! scheduler.register(routine).await?;
+//!
+//! // Start the scheduler
+//! scheduler.start().await?;
+//! ```
+
 use crate::types::{Routine, RoutineExecution, RoutineId, RunId, RunStatus};
 use crate::workflow::executor::WorkflowExecutor;
 use anyhow::Result;

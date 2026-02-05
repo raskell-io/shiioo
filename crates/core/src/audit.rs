@@ -1,3 +1,67 @@
+//! Tamper-proof audit logging system.
+//!
+//! This module provides comprehensive audit logging with cryptographic integrity
+//! verification, enabling compliance tracking and forensic analysis.
+//!
+//! # Overview
+//!
+//! The audit system records security-relevant events with:
+//! - **Blockchain-style chaining** - Each entry includes a hash of the previous entry
+//! - **Tamper detection** - Cryptographic verification of entry integrity
+//! - **Rich event types** - Authentication, authorization, data access, and more
+//! - **Flexible querying** - Filter by category, severity, user, tenant, or time range
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                       AuditLog                              │
+//! │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐    │
+//! │  │ Entry 1 │──▶│ Entry 2 │──▶│ Entry 3 │──▶│ Entry N │    │
+//! │  │ hash: H1│   │prev: H1 │   │prev: H2 │   │prev: HN-1│   │
+//! │  └─────────┘   │hash: H2 │   │hash: H3 │   │hash: HN │    │
+//! │                └─────────┘   └─────────┘   └─────────┘    │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Event Categories
+//!
+//! - [`AuditCategory::Authentication`] - Login, logout, failed attempts
+//! - [`AuditCategory::Authorization`] - Permission grants, denials, role changes
+//! - [`AuditCategory::DataAccess`] - Secret access, data reads
+//! - [`AuditCategory::DataModification`] - Workflow creation, execution
+//! - [`AuditCategory::ConfigChange`] - System configuration updates
+//! - [`AuditCategory::SecurityEvent`] - Security scans, incidents
+//! - [`AuditCategory::ComplianceEvent`] - Compliance checks, data retention
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::audit::{AuditLog, AuditCategory, AuditSeverity, AuditAction};
+//!
+//! let log = AuditLog::new();
+//!
+//! // Record a login event
+//! log.record(
+//!     AuditCategory::Authentication,
+//!     AuditSeverity::Info,
+//!     AuditAction::UserLogin {
+//!         user_id: "alice".to_string(),
+//!         ip_address: "192.168.1.100".to_string(),
+//!     },
+//!     Some("alice".to_string()),
+//!     Some("tenant1".to_string()),
+//!     Some("192.168.1.100".to_string()),
+//!     HashMap::new(),
+//! );
+//!
+//! // Verify chain integrity
+//! assert!(log.verify_chain());
+//!
+//! // Query by category
+//! let auth_events = log.list_by_category(AuditCategory::Authentication);
+//! ```
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

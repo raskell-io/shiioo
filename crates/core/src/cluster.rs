@@ -1,3 +1,94 @@
+//! Distributed cluster coordination and leader election.
+//!
+//! This module provides cluster management primitives for running Shiioo in a
+//! distributed, high-availability configuration.
+//!
+//! # Overview
+//!
+//! The cluster system enables multiple Shiioo instances to coordinate as a
+//! single logical service with automatic failover and load distribution.
+//!
+//! # Components
+//!
+//! - [`ClusterManager`] - Node registration, health tracking, heartbeats
+//! - [`DistributedLock`] - TTL-based exclusive locks for coordination
+//! - [`LeaderElection`] - Single-leader election with automatic failover
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                        Cluster                              │
+//! │  ┌────────────┐  ┌────────────┐  ┌────────────┐           │
+//! │  │   Node 1   │  │   Node 2   │  │   Node 3   │           │
+//! │  │  (Leader)  │  │ (Follower) │  │ (Follower) │           │
+//! │  │  ┌──────┐  │  │  ┌──────┐  │  │  ┌──────┐  │           │
+//! │  │  │Health│  │  │  │Health│  │  │  │Health│  │           │
+//! │  │  │ ✓    │  │  │  │ ✓    │  │  │  │ ✗    │  │           │
+//! │  │  └──────┘  │  │  └──────┘  │  │  └──────┘  │           │
+//! │  └─────┬──────┘  └──────┬─────┘  └────────────┘           │
+//! │        │                │                                  │
+//! │        └────────────────┼─────── Heartbeats ──────────────│
+//! │                         ▼                                  │
+//! │              ┌─────────────────────┐                      │
+//! │              │  Distributed Locks  │                      │
+//! │              │   leader_election   │                      │
+//! │              │   workflow_run_1    │                      │
+//! │              └─────────────────────┘                      │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Node Lifecycle
+//!
+//! 1. **Registration** - Node joins cluster with address and metadata
+//! 2. **Heartbeating** - Periodic health signals to prove liveness
+//! 3. **Health checks** - Stale nodes marked unhealthy after timeout
+//! 4. **Leader election** - Healthy nodes compete for leadership
+//! 5. **Deregistration** - Clean removal or automatic expiry
+//!
+//! # Distributed Locks
+//!
+//! The [`DistributedLock`] provides mutual exclusion with:
+//! - **TTL expiry** - Locks auto-release if holder crashes
+//! - **Holder tracking** - Know which node holds each lock
+//! - **Safe release** - Only the holder can release their lock
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::cluster::{ClusterManager, NodeId, ClusterNode, NodeStatus, NodeRole};
+//! use shiioo_core::cluster::{DistributedLock, LeaderElection};
+//!
+//! // Create cluster manager
+//! let local_node_id = NodeId::new("node-1");
+//! let cluster = Arc::new(ClusterManager::new(local_node_id.clone(), 30));
+//!
+//! // Register this node
+//! cluster.register_node(ClusterNode {
+//!     id: local_node_id.clone(),
+//!     address: "http://localhost:8080".to_string(),
+//!     status: NodeStatus::Healthy,
+//!     role: NodeRole::Follower,
+//!     ..Default::default()
+//! })?;
+//!
+//! // Set up leader election
+//! let lock = Arc::new(DistributedLock::new(30));
+//! let election = LeaderElection::new(cluster.clone(), lock, 30);
+//!
+//! // Try to become leader
+//! if election.try_become_leader(&local_node_id)? {
+//!     println!("This node is now the leader");
+//! }
+//!
+//! // Use distributed lock for exclusive work
+//! let work_lock = DistributedLock::new(60);
+//! if work_lock.acquire("workflow-run-123", local_node_id.clone())? {
+//!     // Do exclusive work...
+//!     work_lock.release("workflow-run-123", &local_node_id)?;
+//! }
+//! ```
+
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

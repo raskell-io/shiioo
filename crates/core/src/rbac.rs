@@ -1,3 +1,75 @@
+//! Role-based access control (RBAC).
+//!
+//! This module provides fine-grained access control through roles and permissions,
+//! allowing organizations to control who can perform what actions.
+//!
+//! # Overview
+//!
+//! RBAC in Shiioo follows a standard model:
+//! - **Users** are assigned to **Roles**
+//! - **Roles** contain sets of **Permissions**
+//! - **Permissions** grant access to specific **Actions** on **Resources**
+//!
+//! # Permission Model
+//!
+//! ```text
+//! ┌─────────┐     ┌─────────┐     ┌─────────────┐
+//! │  User   │────▶│  Role   │────▶│ Permissions │
+//! └─────────┘     └─────────┘     └─────────────┘
+//!                                       │
+//!                                       ▼
+//!                               ┌───────────────┐
+//!                               │ Resource:Action│
+//!                               │ e.g., Workflow │
+//!                               │    :Execute    │
+//!                               └───────────────┘
+//! ```
+//!
+//! # Resources
+//!
+//! - `Workflow` - Workflow definitions and executions
+//! - `Secret` - Secret management operations
+//! - `Tenant` - Tenant administration
+//! - `Policy` - Policy configuration
+//! - `Approval` - Approval board management
+//! - `AuditLog` - Audit log access
+//!
+//! # Actions
+//!
+//! - `Create` - Create new resources
+//! - `Read` - View resources
+//! - `Update` - Modify resources
+//! - `Delete` - Remove resources
+//! - `Execute` - Run workflows or actions
+//! - `Admin` - Full administrative access
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::rbac::{RbacManager, RbacRole, Permission, Resource, Action};
+//!
+//! let manager = RbacManager::new();
+//!
+//! // Create a role with specific permissions
+//! let analyst_role = RbacRole {
+//!     id: "analyst".to_string(),
+//!     name: "Data Analyst".to_string(),
+//!     permissions: vec![
+//!         Permission { resource: Resource::Workflow, action: Action::Execute },
+//!         Permission { resource: Resource::Workflow, action: Action::Read },
+//!     ],
+//!     ..Default::default()
+//! };
+//!
+//! manager.create_role(analyst_role)?;
+//!
+//! // Assign user to role
+//! manager.assign_role("user-123", "analyst")?;
+//!
+//! // Check permission
+//! let allowed = manager.check_permission("user-123", Resource::Workflow, Action::Execute)?;
+//! ```
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

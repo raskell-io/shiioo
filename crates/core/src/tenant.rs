@@ -1,3 +1,75 @@
+//! Multi-tenant isolation and resource management.
+//!
+//! This module provides tenant management capabilities for multi-tenant deployments,
+//! including resource quotas, isolation contexts, and lifecycle management.
+//!
+//! # Overview
+//!
+//! Multi-tenancy allows a single Shiioo deployment to serve multiple organizations
+//! with complete data isolation and configurable resource limits.
+//!
+//! # Features
+//!
+//! - **Tenant isolation** - Each tenant's data is logically separated
+//! - **Resource quotas** - Limits on workflows, storage, API requests
+//! - **Status management** - Active, suspended, or disabled states
+//! - **Custom settings** - Per-tenant configuration (retention, audit, etc.)
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                     TenantManager                           │
+//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+//! │  │  Tenant A   │  │  Tenant B   │  │  Tenant C   │        │
+//! │  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │        │
+//! │  │ │  Quota  │ │  │ │  Quota  │ │  │ │  Quota  │ │        │
+//! │  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │        │
+//! │  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │        │
+//! │  │ │Settings │ │  │ │Settings │ │  │ │Settings │ │        │
+//! │  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │        │
+//! │  └─────────────┘  └─────────────┘  └─────────────┘        │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Quota Resources
+//!
+//! | Resource | Description | Default |
+//! |----------|-------------|---------|
+//! | Concurrent Workflows | Max simultaneous workflow runs | 10 |
+//! | Workflows/Day | Daily workflow execution limit | 1000 |
+//! | Routines | Max scheduled routines | 50 |
+//! | Storage | Max storage in bytes | 10 GB |
+//! | API Requests | Requests per minute | 1000 |
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use shiioo_core::tenant::{TenantManager, Tenant, TenantId, TenantStatus, TenantQuota};
+//!
+//! let manager = TenantManager::new();
+//!
+//! // Create a tenant with custom quotas
+//! let tenant = Tenant {
+//!     id: TenantId::new("acme-corp"),
+//!     name: "ACME Corporation".to_string(),
+//!     description: "Enterprise customer".to_string(),
+//!     status: TenantStatus::Active,
+//!     quota: TenantQuota {
+//!         max_concurrent_workflows: Some(50),
+//!         ..Default::default()
+//!     },
+//!     settings: Default::default(),
+//!     created_at: Utc::now(),
+//!     updated_at: Utc::now(),
+//! };
+//!
+//! manager.register_tenant(tenant)?;
+//!
+//! // Check quota before starting workflow
+//! manager.check_quota(&TenantId::new("acme-corp"), QuotaResource::ConcurrentWorkflows(5))?;
+//! ```
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
