@@ -45,6 +45,8 @@ pub mod policy_engine;
 pub mod mcp_manager;
 pub mod archetype_manager;
 pub mod migration;
+pub mod runtime;
+pub mod orchestration;
 
 pub use types::*;
 pub use skills::*;
@@ -70,4 +72,14 @@ pub use archetype_manager::{
 pub use migration::{
     FullMigrationReport, MigrationConfig, MigrationError, MigrationReport, MigrationResult,
     MigrationRunner, PersonAdapter, PolicySpecAdapter,
+};
+pub use runtime::{
+    AgentRuntime, AgentTask, BudgetConsumed, ExecutionContext, InMemoryMcpResolver,
+    InMemoryToolExecutor, McpResolver, RuntimeConfig, RuntimeToolInfo, TaskResult, ToolCallRecord,
+    ToolExecutor,
+};
+pub use orchestration::{
+    AgentOrchestrator, AgentSupervisor, AgentTeam, AgentWorkflowAdapter, DelegationRequest,
+    DelegationResult, OrchestrationConfig, SupervisionAction, SupervisionEvent,
+    SupervisionEventType, SupervisionRestartPolicy, SupervisionStrategy, TeamChannel,
 };

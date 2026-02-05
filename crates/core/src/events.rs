@@ -184,3 +184,52 @@ pub trait EventLog: Send + Sync {
         end: DateTime<Utc>,
     ) -> anyhow::Result<Vec<Event>>;
 }
+
+/// In-memory event log for testing.
+#[derive(Debug, Default)]
+pub struct InMemoryEventLog {
+    events: std::sync::RwLock<Vec<Event>>,
+}
+
+impl InMemoryEventLog {
+    pub fn new() -> Self {
+        Self {
+            events: std::sync::RwLock::new(Vec::new()),
+        }
+    }
+
+    pub fn get_all_events(&self) -> Vec<Event> {
+        self.events.read().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl EventLog for InMemoryEventLog {
+    async fn append(&self, event: Event) -> anyhow::Result<()> {
+        self.events.write().unwrap().push(event);
+        Ok(())
+    }
+
+    async fn get_run_events(&self, run_id: RunId) -> anyhow::Result<Vec<Event>> {
+        let events = self.events.read().unwrap();
+        Ok(events
+            .iter()
+            .filter(|e| e.run_id == run_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn get_run_events_range(
+        &self,
+        run_id: RunId,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> anyhow::Result<Vec<Event>> {
+        let events = self.events.read().unwrap();
+        Ok(events
+            .iter()
+            .filter(|e| e.run_id == run_id && e.timestamp >= start && e.timestamp <= end)
+            .cloned()
+            .collect())
+    }
+}
