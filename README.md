@@ -239,12 +239,30 @@ event_log_dir = "events"
 index_file = "index.redb"
 ```
 
-Or use environment variables:
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SHIIOO_ENCRYPTION_KEY` | **Yes** | 32-byte key for encrypting secrets (AES-256) |
+| `SHIIOO_DATA_DIR` | No | Data directory (default: `./data`) |
+| `SHIIOO_PORT` | No | Server port (default: `8080`) |
+| `RUST_LOG` | No | Log level (default: `info`) |
+
+Generate an encryption key:
 
 ```bash
-SHIIOO_DATA_DIR=./data
-SHIIOO_PORT=8080
-RUST_LOG=info
+# Generate a 32-byte key
+openssl rand -base64 32 | head -c 32
+
+# Or use a password-derived key
+echo -n "your-secure-password-here!!!" | head -c 32
+```
+
+Run with required configuration:
+
+```bash
+export SHIIOO_ENCRYPTION_KEY=$(openssl rand -base64 32 | head -c 32)
+export SHIIOO_DATA_DIR=./data
 ./target/release/shiioo-server
 ```
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use shiioo_core::agent::{
     AgentOrchestrator, AgentRuntime, DefaultPolicyEngine, InMemoryMcpResolver,
@@ -22,6 +22,41 @@ use shiioo_core::tenant::TenantManager;
 use shiioo_core::workflow::WorkflowExecutor;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Environment variable for the encryption key used by SecretManager.
+/// Must be exactly 32 bytes (256 bits) for AES-256 encryption.
+pub const ENCRYPTION_KEY_ENV: &str = "SHIIOO_ENCRYPTION_KEY";
+
+/// Required length for the encryption key (32 bytes for AES-256).
+const ENCRYPTION_KEY_LENGTH: usize = 32;
+
+/// Load and validate the encryption key from environment variable.
+///
+/// The key must be exactly 32 bytes for AES-256 encryption.
+/// If not set, returns an error with instructions on how to generate a key.
+fn load_encryption_key() -> Result<Vec<u8>> {
+    match std::env::var(ENCRYPTION_KEY_ENV) {
+        Ok(key) => {
+            let key_bytes = key.as_bytes();
+            if key_bytes.len() != ENCRYPTION_KEY_LENGTH {
+                return Err(anyhow!(
+                    "Invalid {} length: expected {} bytes, got {} bytes. \
+                    Generate a key with: openssl rand -base64 32 | head -c 32",
+                    ENCRYPTION_KEY_ENV,
+                    ENCRYPTION_KEY_LENGTH,
+                    key_bytes.len()
+                ));
+            }
+            Ok(key_bytes.to_vec())
+        }
+        Err(_) => Err(anyhow!(
+            "Missing required environment variable: {}. \
+            This key is used to encrypt secrets and must be exactly 32 bytes. \
+            Generate one with: openssl rand -base64 32 | head -c 32",
+            ENCRYPTION_KEY_ENV
+        )),
+    }
+}
 
 /// Concrete type for AgentRuntime with our chosen implementations
 pub type ConcreteAgentRuntime = AgentRuntime<
@@ -195,9 +230,9 @@ impl AppState {
         let cluster_manager = Arc::new(ClusterManager::new(local_node_id, 30)); // 30 sec heartbeat timeout
 
         // Phase 8: Secret management
-        // TODO: Load encryption key from environment or config file
-        let encryption_key = b"shiioo-default-secret-key-change-me-in-production!";
-        let secret_manager = Arc::new(SecretManager::new(encryption_key));
+        let encryption_key = load_encryption_key()
+            .context("Failed to load encryption key for secret management")?;
+        let secret_manager = Arc::new(SecretManager::new(&encryption_key));
 
         // Phase 9: Security and compliance
         let audit_log = Arc::new(AuditLog::new());
