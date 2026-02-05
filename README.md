@@ -8,7 +8,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
-[![Phase](https://img.shields.io/badge/phase-11%20complete-green.svg)](https://github.com/raskell-io/shiioo)
+[![Phase](https://img.shields.io/badge/phase-16%20complete-green.svg)](https://github.com/raskell-io/shiioo)
 
 [Documentation](#quick-start) · [SDK](#rust-sdk) · [API Reference](#api-endpoints) · [Contributing](#community)
 
@@ -40,6 +40,9 @@ The server starts with an embedded web dashboard, GraphQL API, and real-time mon
 | Feature | Description |
 |---------|-------------|
 | **DAG Workflows** | Define multi-step workflows with dependencies, retries, and timeouts |
+| **Agent Primitive** | Virtual employees with skills, policies, MCP bindings, and budgets |
+| **Agent Runtime** | Execute agent tasks with tool calls, budget tracking, and policy enforcement |
+| **Agent Orchestration** | Teams, delegation, supervision with restart policies |
 | **Event Sourcing** | Immutable event log with complete audit trail and time-travel replay |
 | **Role-Based Access** | Fine-grained RBAC with permissions, approval gates, and budgets |
 | **MCP Tool Server** | Expose enterprise tools to agent clients with policy enforcement |
@@ -304,7 +307,7 @@ cat data/blobs/ab/<full-hash>
 
 ## Current Status
 
-**Phase 11 Complete** ✅
+**Phase 16 Complete** ✅
 
 All core features are production-ready:
 
@@ -320,8 +323,12 @@ All core features are production-ready:
 - ✅ Phase 9: Enhanced security & compliance (audit logs, RBAC)
 - ✅ Phase 10: UI & Developer Experience (GraphQL, dashboard)
 - ✅ Phase 11: Rust SDK & Client Libraries
+- ✅ Phase 12: Agent Primitive with archetypes, storage, and migration
+- ✅ Phase 13-14: Agent runtime and orchestration
+- ✅ Phase 15: Testing infrastructure (integration + property-based tests)
+- ✅ Phase 16: Documentation and API refinement
 
-**Next:** Phase 12 — Production Hardening & Documentation
+**Next:** Production hardening, CI/CD, and deployment guides
 
 ---
 

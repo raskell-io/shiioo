@@ -18,6 +18,7 @@ use tower_http::{
 mod agent_handlers;
 mod handlers;
 mod migration_handlers;
+mod runtime_handlers;
 
 /// Start the API server
 pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
@@ -174,6 +175,19 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         .route("/api/migration/preview", post(migration_handlers::preview_migration))
         .route("/api/migration/roles", post(migration_handlers::migrate_roles))
         .route("/api/migration/persons", post(migration_handlers::migrate_persons))
+        // Agent Runtime (Phase 13-14)
+        .route("/api/agents/{agent_id}/execute", post(runtime_handlers::execute_task))
+        .route("/api/agents/{agent_id}/budget", get(runtime_handlers::get_agent_budget))
+        .route("/api/agents/{agent_id}/delegate", post(runtime_handlers::delegate_task))
+        .route("/api/agents/{agent_id}/supervisor", post(runtime_handlers::create_supervisor))
+        .route("/api/agents/{agent_id}/supervision-events", get(runtime_handlers::get_supervision_events))
+        // Agent Teams (Phase 13-14)
+        .route("/api/teams", get(runtime_handlers::list_teams))
+        .route("/api/teams", post(runtime_handlers::create_team))
+        .route("/api/teams/{team_id}", get(runtime_handlers::get_team))
+        .route("/api/teams/{team_id}/broadcast", post(runtime_handlers::broadcast_to_team))
+        // Workflow-Agent Integration (Phase 13-14)
+        .route("/api/workflow/execute-step", post(runtime_handlers::execute_workflow_step))
         // UI routes (Phase 10)
         .route("/dashboard", get(ui::serve_dashboard))
         .fallback(ui::serve_ui)

@@ -1,21 +1,44 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use shiioo_core::agent::{
+    AgentOrchestrator, AgentRuntime, DefaultPolicyEngine, InMemoryMcpResolver,
+    InMemoryPolicyStorage, InMemoryToolExecutor, OrchestrationConfig, RuntimeConfig,
+};
 use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
 use shiioo_core::audit::AuditLog;
 use shiioo_core::cluster::ClusterManager;
+use shiioo_core::cluster::NodeId;
 use shiioo_core::compliance::{ComplianceChecker, SecurityScanner};
 use shiioo_core::config_change::ConfigChangeManager;
 use shiioo_core::metrics::MetricsCollector;
 use shiioo_core::rbac::RbacManager;
 use shiioo_core::scheduler::RoutineScheduler;
-use shiioo_core::storage::{FilesystemBlobStore, JsonlEventLog, RedbAgentStore, RedbIndexStore, TenantStorage};
-use shiioo_core::cluster::NodeId;
 use shiioo_core::secrets::SecretManager;
+use shiioo_core::storage::{
+    FilesystemBlobStore, JsonlEventLog, RedbAgentStore, RedbIndexStore, TenantStorage,
+};
 use shiioo_core::tenant::TenantManager;
 use shiioo_core::workflow::WorkflowExecutor;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Concrete type for AgentRuntime with our chosen implementations
+pub type ConcreteAgentRuntime = AgentRuntime<
+    DefaultPolicyEngine<InMemoryPolicyStorage>,
+    InMemoryMcpResolver,
+    InMemoryToolExecutor,
+    JsonlEventLog,
+>;
+
+/// Concrete type for AgentOrchestrator with our chosen implementations
+pub type ConcreteAgentOrchestrator = AgentOrchestrator<
+    DefaultPolicyEngine<InMemoryPolicyStorage>,
+    InMemoryMcpResolver,
+    InMemoryToolExecutor,
+    JsonlEventLog,
+    RedbAgentStore,
+>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -120,6 +143,9 @@ pub struct AppState {
     pub rbac_manager: Arc<RbacManager>,
     pub compliance_checker: Arc<ComplianceChecker>,
     pub security_scanner: Arc<SecurityScanner>,
+    // Agent Runtime (Phase 13-14)
+    pub agent_runtime: Arc<ConcreteAgentRuntime>,
+    pub agent_orchestrator: Arc<ConcreteAgentOrchestrator>,
 }
 
 impl AppState {
@@ -189,6 +215,35 @@ impl AppState {
         ));
         let security_scanner = Arc::new(SecurityScanner::new((*audit_log).clone()));
 
+        // Phase 13-14: Agent Runtime and Orchestration
+        let policy_storage = InMemoryPolicyStorage::new();
+        let policy_engine = Arc::new(DefaultPolicyEngine::new(policy_storage));
+        let mcp_resolver = Arc::new(InMemoryMcpResolver::new());
+        let tool_executor = Arc::new(InMemoryToolExecutor::new());
+
+        let runtime_config = RuntimeConfig {
+            max_task_duration_secs: 300,
+            enforce_budgets: true,
+            require_policy_check: true,
+            default_tool_timeout_secs: 60,
+        };
+
+        let agent_runtime = Arc::new(AgentRuntime::new(
+            runtime_config,
+            policy_engine,
+            mcp_resolver,
+            tool_executor,
+            event_log.clone(),
+        ));
+
+        let orchestration_config = OrchestrationConfig::default();
+        let agent_orchestrator = Arc::new(AgentOrchestrator::new(
+            orchestration_config,
+            agent_runtime.clone(),
+            agent_store.clone(),
+            event_log.clone(),
+        ));
+
         Ok(Self {
             blob_store,
             event_log,
@@ -208,6 +263,8 @@ impl AppState {
             rbac_manager,
             compliance_checker,
             security_scanner,
+            agent_runtime,
+            agent_orchestrator,
         })
     }
 }
