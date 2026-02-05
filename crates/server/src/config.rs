@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use shiioo_core::agent::{
     AgentOrchestrator, AgentRuntime, DefaultPolicyEngine, InMemoryMcpResolver,
-    InMemoryPolicyStorage, InMemoryToolExecutor, OrchestrationConfig, RuntimeConfig,
+    InMemoryToolExecutor, OrchestrationConfig, RuntimeConfig,
 };
 use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
@@ -16,7 +16,8 @@ use shiioo_core::rbac::RbacManager;
 use shiioo_core::scheduler::RoutineScheduler;
 use shiioo_core::secrets::SecretManager;
 use shiioo_core::storage::{
-    FilesystemBlobStore, JsonlEventLog, RedbAgentStore, RedbIndexStore, TenantStorage,
+    FilesystemBlobStore, JsonlEventLog, RedbAgentStore, RedbIndexStore, RedbPolicyStorage,
+    TenantStorage,
 };
 use shiioo_core::tenant::TenantManager;
 use shiioo_core::workflow::WorkflowExecutor;
@@ -60,7 +61,7 @@ fn load_encryption_key() -> Result<Vec<u8>> {
 
 /// Concrete type for AgentRuntime with our chosen implementations
 pub type ConcreteAgentRuntime = AgentRuntime<
-    DefaultPolicyEngine<InMemoryPolicyStorage>,
+    DefaultPolicyEngine<RedbPolicyStorage>,
     InMemoryMcpResolver,
     InMemoryToolExecutor,
     JsonlEventLog,
@@ -68,7 +69,7 @@ pub type ConcreteAgentRuntime = AgentRuntime<
 
 /// Concrete type for AgentOrchestrator with our chosen implementations
 pub type ConcreteAgentOrchestrator = AgentOrchestrator<
-    DefaultPolicyEngine<InMemoryPolicyStorage>,
+    DefaultPolicyEngine<RedbPolicyStorage>,
     InMemoryMcpResolver,
     InMemoryToolExecutor,
     JsonlEventLog,
@@ -251,7 +252,8 @@ impl AppState {
         let security_scanner = Arc::new(SecurityScanner::new((*audit_log).clone()));
 
         // Phase 13-14: Agent Runtime and Orchestration
-        let policy_storage = InMemoryPolicyStorage::new();
+        let policy_storage = RedbPolicyStorage::new(config.data_dir.join("policies.redb"))
+            .context("Failed to create policy storage")?;
         let policy_engine = Arc::new(DefaultPolicyEngine::new(policy_storage));
         let mcp_resolver = Arc::new(InMemoryMcpResolver::new());
         let tool_executor = Arc::new(InMemoryToolExecutor::new());
