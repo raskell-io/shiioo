@@ -161,7 +161,7 @@ jobs:
           tar -czvf shiioo-linux-x86_64.tar.gz shiioo
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/shiioo-linux-x86_64.tar.gz
           generate_release_notes: true
