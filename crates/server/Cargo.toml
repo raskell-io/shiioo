@@ -35,7 +35,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 rust-embed = "8.5"
 mime_guess = "2.0"
 futures = "0.3"
-governor = "0.8"
+governor = "0.10"
 http = "1.1"
 
 # GraphQL support (Phase 10)
