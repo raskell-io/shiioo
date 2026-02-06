@@ -1052,6 +1052,21 @@ pub struct MetricsResponse {
     pub histograms: Vec<shiioo_core::metrics::Histogram>,
 }
 
+/// Export metrics in Prometheus text format
+///
+/// Returns metrics in the standard Prometheus exposition format for scraping.
+/// Content-Type: text/plain; version=0.0.4; charset=utf-8
+pub async fn prometheus_metrics(
+    State(state): State<Arc<AppState>>,
+) -> impl axum::response::IntoResponse {
+    let metrics_text = state.metrics.export_prometheus();
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        metrics_text,
+    )
+}
+
 /// Get workflow analytics
 pub async fn get_workflow_analytics(
     State(state): State<Arc<AppState>>,

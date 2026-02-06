@@ -285,6 +285,113 @@ impl MetricsCollector {
         self.histograms.lock().unwrap().clear();
     }
 
+    /// Export metrics in Prometheus text format
+    ///
+    /// Returns metrics in the standard Prometheus exposition format:
+    /// ```text
+    /// # HELP metric_name Description
+    /// # TYPE metric_name counter
+    /// metric_name{label="value"} 123
+    /// ```
+    pub fn export_prometheus(&self) -> String {
+        let mut output = String::new();
+
+        // Export counters
+        let counters = self.counters.lock().unwrap();
+        for counter in counters.values() {
+            let labels = Self::format_labels(&counter.labels);
+            output.push_str(&format!(
+                "# TYPE {} counter\n{}{} {}\n",
+                counter.name, counter.name, labels, counter.value
+            ));
+        }
+
+        // Export gauges
+        let gauges = self.gauges.lock().unwrap();
+        for gauge in gauges.values() {
+            let labels = Self::format_labels(&gauge.labels);
+            output.push_str(&format!(
+                "# TYPE {} gauge\n{}{} {}\n",
+                gauge.name, gauge.name, labels, gauge.value
+            ));
+        }
+
+        // Export histograms
+        let histograms = self.histograms.lock().unwrap();
+        for histogram in histograms.values() {
+            let labels = Self::format_labels(&histogram.labels);
+            let base_labels = if histogram.labels.is_empty() {
+                String::new()
+            } else {
+                format!("{{{}}}", histogram.labels.iter()
+                    .map(|(k, v)| format!("{}=\"{}\"", k, v))
+                    .collect::<Vec<_>>()
+                    .join(","))
+            };
+
+            output.push_str(&format!("# TYPE {} histogram\n", histogram.name));
+
+            // Export bucket counts
+            for (i, bucket) in histogram.buckets.iter().enumerate() {
+                let bucket_labels = if histogram.labels.is_empty() {
+                    format!("{{le=\"{}\"}}", bucket)
+                } else {
+                    format!("{{{},le=\"{}\"}}",
+                        histogram.labels.iter()
+                            .map(|(k, v)| format!("{}=\"{}\"", k, v))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        bucket
+                    )
+                };
+                output.push_str(&format!(
+                    "{}_bucket{} {}\n",
+                    histogram.name, bucket_labels, histogram.counts[i]
+                ));
+            }
+
+            // Export +Inf bucket
+            let inf_labels = if histogram.labels.is_empty() {
+                "{le=\"+Inf\"}".to_string()
+            } else {
+                format!("{{{},le=\"+Inf\"}}",
+                    histogram.labels.iter()
+                        .map(|(k, v)| format!("{}=\"{}\"", k, v))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            output.push_str(&format!(
+                "{}_bucket{} {}\n",
+                histogram.name, inf_labels, histogram.count
+            ));
+
+            // Export sum and count
+            output.push_str(&format!("{}_sum{} {}\n", histogram.name, base_labels, histogram.sum));
+            output.push_str(&format!("{}_count{} {}\n", histogram.name, base_labels, histogram.count));
+        }
+
+        output
+    }
+
+    /// Format labels for Prometheus output
+    fn format_labels(labels: &HashMap<String, String>) -> String {
+        if labels.is_empty() {
+            String::new()
+        } else {
+            let mut sorted: Vec<_> = labels.iter().collect();
+            sorted.sort_by_key(|(k, _)| *k);
+            format!(
+                "{{{}}}",
+                sorted
+                    .iter()
+                    .map(|(k, v)| format!("{}=\"{}\"", k, v))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    }
+
     /// Generate a unique key for a metric with labels
     fn metric_key(name: &str, labels: &HashMap<String, String>) -> String {
         if labels.is_empty() {
@@ -492,5 +599,33 @@ mod tests {
 
         assert_eq!(collector.get_counters().len(), 0);
         assert_eq!(collector.get_gauges().len(), 0);
+    }
+
+    #[test]
+    fn test_export_prometheus() {
+        let collector = MetricsCollector::new();
+
+        // Add some metrics
+        let labels = HashMap::from([("service".to_string(), "api".to_string())]);
+        collector.increment_counter("http_requests_total", labels.clone());
+        collector.increment_counter("http_requests_total", labels.clone());
+        collector.set_gauge("active_connections", 42.0, HashMap::new());
+        collector.observe_histogram("request_duration_seconds", 0.5, HashMap::new());
+
+        let output = collector.export_prometheus();
+
+        // Verify counter format
+        assert!(output.contains("# TYPE http_requests_total counter"));
+        assert!(output.contains("http_requests_total{service=\"api\"} 2"));
+
+        // Verify gauge format
+        assert!(output.contains("# TYPE active_connections gauge"));
+        assert!(output.contains("active_connections 42"));
+
+        // Verify histogram format
+        assert!(output.contains("# TYPE request_duration_seconds histogram"));
+        assert!(output.contains("request_duration_seconds_bucket"));
+        assert!(output.contains("request_duration_seconds_sum"));
+        assert!(output.contains("request_duration_seconds_count"));
     }
 }

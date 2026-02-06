@@ -121,6 +121,8 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         // Health probes (Kubernetes)
         .route("/health/live", get(liveness_probe))
         .route("/health/ready", get(readiness_probe))
+        // Prometheus metrics endpoint
+        .route("/metrics", get(handlers::prometheus_metrics))
         // API routes
         .route("/api/health", get(health_check))
         .route("/api/runs", get(handlers::list_runs))
