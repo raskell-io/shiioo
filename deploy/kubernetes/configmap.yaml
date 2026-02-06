@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shiioo-config
+  namespace: shiioo
+  labels:
+    app.kubernetes.io/name: shiioo
+data:
+  RUST_LOG: "shiioo=info,tower_http=info"
+  SHIIOO_LOG_JSON: "true"
+  SHIIOO_RATE_LIMIT_PER_SECOND: "100"
+  SHIIOO_RATE_LIMIT_BURST: "200"

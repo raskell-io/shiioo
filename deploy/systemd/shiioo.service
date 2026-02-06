@@ -1,0 +1,60 @@
+[Unit]
+Description=Shiioo - Agentic Enterprise Orchestrator
+Documentation=https://github.com/raskell-io/shiioo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shiioo
+Group=shiioo
+
+# Environment file for secrets and configuration
+EnvironmentFile=/etc/shiioo/shiioo.env
+
+# Working directory
+WorkingDirectory=/var/lib/shiioo
+
+# Binary and arguments
+ExecStart=/usr/local/bin/shiioo \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --data-dir /var/lib/shiioo/data \
+    --config /etc/shiioo/shiioo.toml
+
+# Graceful shutdown
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Allow writing to data directory
+ReadWritePaths=/var/lib/shiioo
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shiioo
+
+[Install]
+WantedBy=multi-user.target

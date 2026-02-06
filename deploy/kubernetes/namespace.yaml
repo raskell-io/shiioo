@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shiioo
+  labels:
+    app.kubernetes.io/name: shiioo
+    app.kubernetes.io/part-of: shiioo

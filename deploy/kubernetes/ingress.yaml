@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shiioo
+  namespace: shiioo
+  labels:
+    app.kubernetes.io/name: shiioo
+  annotations:
+    # Uncomment for cert-manager TLS
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: shiioo.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: shiioo
+                port:
+                  name: http
+  # Uncomment for TLS
+  # tls:
+  #   - hosts:
+  #       - shiioo.example.com
+  #     secretName: shiioo-tls

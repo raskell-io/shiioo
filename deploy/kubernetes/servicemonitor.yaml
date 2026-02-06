@@ -1,0 +1,21 @@
+# ServiceMonitor for Prometheus Operator
+# Requires Prometheus Operator to be installed
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shiioo
+  namespace: shiioo
+  labels:
+    app.kubernetes.io/name: shiioo
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shiioo
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - shiioo
