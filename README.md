@@ -248,6 +248,7 @@ index_file = "index.redb"
 | `SHIIOO_PORT` | No | Server port (default: `8080`) |
 | `SHIIOO_RATE_LIMIT_PER_SECOND` | No | API rate limit per second (default: `10`) |
 | `SHIIOO_RATE_LIMIT_BURST` | No | Maximum burst size for rate limiting (default: `50`) |
+| `SHIIOO_LOG_JSON` | No | Enable JSON log format for production (default: `false`) |
 | `RUST_LOG` | No | Log level (default: `info`) |
 
 Generate an encryption key:

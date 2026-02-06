@@ -4,7 +4,8 @@ use crate::ui;
 use anyhow::Result;
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -21,7 +22,7 @@ mod handlers;
 mod migration_handlers;
 mod runtime_handlers;
 
-/// Start the API server
+/// Start the API server with graceful shutdown
 pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
     let state = AppState::new(&config)?;
 
@@ -31,11 +32,83 @@ pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
     let app = create_router(state, schema);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("API server listening on {}", addr);
+    tracing::info!(addr = %addr, "API server listening");
 
-    axum::serve(listener, app).await?;
+    // Graceful shutdown handling
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+/// Wait for shutdown signal (SIGTERM or SIGINT)
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received Ctrl+C, starting graceful shutdown");
+        }
+        _ = terminate => {
+            tracing::info!("Received SIGTERM, starting graceful shutdown");
+        }
+    }
+
+    // Give in-flight requests time to complete
+    tracing::info!("Waiting for in-flight requests to complete...");
+}
+
+/// Middleware to add request ID to each request
+///
+/// If the client provides an `X-Request-ID` header, it's used.
+/// Otherwise, a new UUID is generated.
+/// The request ID is added to the response headers for correlation.
+async fn request_id_middleware(
+    mut request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    // Get or generate request ID
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Insert request ID into request headers if not present
+    if !request.headers().contains_key("x-request-id") {
+        request.headers_mut().insert(
+            "x-request-id",
+            request_id.parse().unwrap(),
+        );
+    }
+
+    // Process request
+    let mut response = next.run(request).await;
+
+    // Add request ID to response headers
+    response.headers_mut().insert(
+        "x-request-id",
+        request_id.parse().unwrap(),
+    );
+
+    response
 }
 
 /// Create the API router
@@ -196,9 +269,22 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         .route("/dashboard", get(ui::serve_dashboard))
         .fallback(ui::serve_ui)
         // Middleware (applied in reverse order - last added is first executed)
+        .layer(middleware::from_fn(request_id_middleware))
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                .make_span_with(|request: &Request<axum::body::Body>| {
+                    let request_id = request
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("-");
+                    tracing::info_span!(
+                        "http_request",
+                        request_id = %request_id,
+                        method = %request.method(),
+                        uri = %request.uri(),
+                    )
+                })
                 .on_response(DefaultOnResponse::new().include_headers(true)),
         )
         .layer(CorsLayer::permissive())

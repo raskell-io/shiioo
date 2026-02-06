@@ -36,6 +36,7 @@ rust-embed = "8.5"
 mime_guess = "2.0"
 futures = "0.3"
 governor = "0.8"
+http = "1.1"
 
 # GraphQL support (Phase 10)
 async-graphql = { version = "7.0", features = ["chrono", "uuid"] }
