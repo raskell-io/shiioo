@@ -45,6 +45,9 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         .route("/api/graphql", post(crate::graphql::graphql_handler))
         .route("/api/graphql", get(crate::graphql::graphql_playground))
         .route("/api/graphql/ws", get(crate::graphql::graphql_subscription_handler))
+        // Health probes (Kubernetes)
+        .route("/health/live", get(liveness_probe))
+        .route("/health/ready", get(readiness_probe))
         // API routes
         .route("/api/health", get(health_check))
         .route("/api/runs", get(handlers::list_runs))
@@ -211,6 +214,54 @@ async fn health_check() -> impl IntoResponse {
         "service": "shiioo",
         "version": env!("CARGO_PKG_VERSION"),
     }))
+}
+
+/// Kubernetes liveness probe
+///
+/// Returns 200 OK if the process is alive and can handle requests.
+/// If this fails, Kubernetes will restart the container.
+async fn liveness_probe() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({
+        "status": "alive",
+    })))
+}
+
+/// Kubernetes readiness probe
+///
+/// Returns 200 OK if the service is ready to accept traffic.
+/// Checks that critical dependencies (storage, etc.) are accessible.
+/// If this fails, Kubernetes won't route traffic to this pod.
+async fn readiness_probe(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let mut checks = Vec::new();
+    let mut all_healthy = true;
+
+    // Check index store (redb database)
+    let index_ok = state.index_store.list_runs().is_ok();
+    checks.push(serde_json::json!({
+        "name": "index_store",
+        "status": if index_ok { "ok" } else { "error" },
+    }));
+    if !index_ok {
+        all_healthy = false;
+    }
+
+    // Check cluster manager
+    let cluster_ok = !state.cluster_manager.list_healthy_nodes().is_empty()
+        || state.cluster_manager.list_nodes().is_empty(); // OK if no cluster configured
+    checks.push(serde_json::json!({
+        "name": "cluster",
+        "status": if cluster_ok { "ok" } else { "degraded" },
+    }));
+
+    let status = if all_healthy { "ready" } else { "not_ready" };
+    let status_code = if all_healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+
+    (status_code, Json(serde_json::json!({
+        "status": status,
+        "checks": checks,
+    })))
 }
 
 /// API error response
