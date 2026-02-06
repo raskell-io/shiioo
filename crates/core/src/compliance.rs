@@ -16,7 +16,7 @@
 //! | [`GDPR`](ComplianceFramework::GDPR) | General Data Protection Regulation |
 //! | [`HIPAA`](ComplianceFramework::HIPAA) | Health Insurance Portability and Accountability |
 //! | [`ISO27001`](ComplianceFramework::ISO27001) | Information Security Management |
-//! | [`PCI_DSS`](ComplianceFramework::PCI_DSS) | Payment Card Industry Data Security Standard |
+//! | [`PciDss`](ComplianceFramework::PciDss) | Payment Card Industry Data Security Standard |
 //!
 //! # Components
 //!
@@ -78,11 +78,10 @@
 //! }
 //! ```
 
-use crate::audit::{AuditAction, AuditCategory, AuditEntry, AuditId, AuditLog, AuditSeverity};
-use crate::rbac::{Action, Permission, RbacManager, Resource};
+use crate::audit::{AuditAction, AuditCategory, AuditLog, AuditSeverity};
+use crate::rbac::RbacManager;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 
 /// Compliance frameworks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,7 +90,7 @@ pub enum ComplianceFramework {
     GDPR,
     HIPAA,
     ISO27001,
-    PCI_DSS,
+    PciDss,
 }
 
 /// Compliance requirement status
@@ -204,6 +203,7 @@ impl ComplianceSummary {
 /// Compliance checker
 pub struct ComplianceChecker {
     audit_log: AuditLog,
+    #[allow(dead_code)]
     rbac_manager: RbacManager,
 }
 
@@ -227,7 +227,7 @@ impl ComplianceChecker {
             ComplianceFramework::GDPR => self.check_gdpr_compliance(period_start, period_end),
             ComplianceFramework::HIPAA => self.check_hipaa_compliance(period_start, period_end),
             ComplianceFramework::ISO27001 => self.check_iso27001_compliance(period_start, period_end),
-            ComplianceFramework::PCI_DSS => self.check_pci_dss_compliance(period_start, period_end),
+            ComplianceFramework::PciDss => self.check_pci_dss_compliance(period_start, period_end),
         };
 
         let summary = ComplianceSummary::from_requirements(&requirements);
@@ -538,7 +538,7 @@ impl ComplianceChecker {
         vec![
             ComplianceRequirement::new(
                 "PCI-DSS-1".to_string(),
-                ComplianceFramework::PCI_DSS,
+                ComplianceFramework::PciDss,
                 "Install and Maintain Firewall Configuration".to_string(),
                 "Install and maintain a firewall configuration to protect cardholder data.".to_string(),
                 "Network Security".to_string(),

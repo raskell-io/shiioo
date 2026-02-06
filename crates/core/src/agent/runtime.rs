@@ -247,6 +247,7 @@ where
     config: RuntimeConfig,
     policy_engine: Arc<P>,
     mcp_resolver: Arc<M>,
+    #[allow(dead_code)]
     tool_executor: Arc<T>,
     #[allow(dead_code)]
     event_log: Arc<E>,

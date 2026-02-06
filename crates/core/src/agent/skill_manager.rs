@@ -4,12 +4,12 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::{
-    skill_parser::SkillParser, Skill, SkillDiscovery, SkillLoadState, SkillMetadata, SkillRef,
+    skill_parser::SkillParser, Skill, SkillDiscovery, SkillMetadata, SkillRef,
     SkillSource,
 };
 
@@ -179,7 +179,7 @@ impl DefaultSkillManager {
                 }
             }
 
-            SkillSource::Git { repo, path, git_ref } => {
+            SkillSource::Git { repo, path, git_ref: _ } => {
                 // For git sources, we'd clone/fetch to cache
                 // For now, return an error indicating this needs implementation
                 let cache_dir = self

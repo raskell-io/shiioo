@@ -6,13 +6,13 @@
 //! - Budget limits (tokens, cost, requests, concurrency)
 //! - Delegation and escalation rules
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::types::{ApprovalBoardId, OrgId, PersonId, TeamId};
+use crate::types::{OrgId, TeamId};
 
 use super::{
     Agent, AgentBudgets, AgentId, AgentPolicies, ApprovalRule, ApprovalTrigger, ApproverSpec,
@@ -610,7 +610,7 @@ impl<S: PolicyStorage> DefaultPolicyEngine<S> {
                 .iter()
                 .any(|e| e.eq_ignore_ascii_case(&context.environment)),
 
-            PolicyCondition::ResourcePattern { field, patterns } => {
+            PolicyCondition::ResourcePattern { field: _, patterns: _ } => {
                 // Would need action parameters to check this
                 // For now, return true (condition not blocking)
                 true
@@ -679,7 +679,7 @@ impl<S: PolicyStorage> DefaultPolicyEngine<S> {
         &self,
         budgets: &AgentBudgets,
         usage: &BudgetUsageStats,
-        action: &AgentAction,
+        _action: &AgentAction,
     ) -> Option<PolicyDecision> {
         // Check token limits
         if let Some(limit) = budgets.tokens.per_day {

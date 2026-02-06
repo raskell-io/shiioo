@@ -13,8 +13,10 @@ use tokio::sync::RwLock;
 
 use super::{
     AgentBudgets, AgentPolicies, AgentSkills, Archetype, ArchetypeId, ConcurrencyBudget,
-    CostBudget, DelegationRules, McpBinding, PolicyScope, RequestBudget, SkillRef, TokenBudget,
+    CostBudget, DelegationRules, McpBinding, PolicyScope, RequestBudget, TokenBudget,
 };
+#[cfg(test)]
+use super::SkillRef;
 use crate::types::{RoleBudgets, RoleSpec};
 
 /// Error type for archetype operations.

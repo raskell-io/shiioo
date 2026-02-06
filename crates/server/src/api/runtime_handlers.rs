@@ -456,6 +456,7 @@ pub async fn get_supervision_events(
 
 #[derive(Debug, Deserialize)]
 pub struct SupervisionEventsParams {
+    #[allow(dead_code)]
     pub limit: Option<usize>,
 }
 

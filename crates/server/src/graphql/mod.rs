@@ -3,7 +3,7 @@ pub mod schema;
 pub use schema::*;
 
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
     extract::State,
     response::{Html, IntoResponse},
@@ -15,7 +15,7 @@ use crate::config::AppState;
 
 /// GraphQL query/mutation handler
 pub async fn graphql_handler(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Extension(schema): Extension<ShiiooSchema>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {

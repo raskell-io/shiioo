@@ -161,6 +161,7 @@ impl ServerConfig {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
+    #[allow(dead_code)]
     pub blob_store: Arc<FilesystemBlobStore>,
     pub event_log: Arc<JsonlEventLog>,
     pub index_store: Arc<RedbIndexStore>,

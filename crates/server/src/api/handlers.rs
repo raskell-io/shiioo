@@ -1,4 +1,4 @@
-use super::{ApiResult, ErrorResponse};
+use super::ApiResult;
 use crate::config::AppState;
 use axum::{
     extract::{Path, State},
@@ -1373,7 +1373,7 @@ pub async fn get_secrets_needing_rotation(
 // ============================================================================
 
 use shiioo_core::{
-    tenant::{Tenant, TenantId, TenantQuota, TenantSettings, TenantStatus, QuotaResource},
+    tenant::{Tenant, TenantId, TenantQuota, TenantSettings, TenantStatus},
     cluster::{ClusterNode, NodeId, NodeStatus, NodeRole},
 };
 

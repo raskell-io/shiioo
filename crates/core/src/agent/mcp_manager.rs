@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 
 use super::{
     Agent, AgentId, CredentialRef, McpBinding, McpServerRef, McpToolAccess, PolicyRule,
-    SecretCondition, SecretGrant, SecretPermissions,
+    SecretCondition, SecretGrant,
 };
 
 /// Resolved MCP configuration for an agent.

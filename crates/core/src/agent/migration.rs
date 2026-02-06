@@ -8,19 +8,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use super::{
-    Agent, AgentBudgets, AgentId, AgentOrganization, AgentPolicies, AgentSkills, AgentStatus,
-    Archetype, ArchetypeId, ApprovalRule, ApprovalTrigger, ApproverSpec, CostBudget,
-    DelegationRules, PolicyRule as AgentPolicyRule, PolicyScope, SkillDiscovery, SkillRef,
-    TimeoutAction, TokenBudget,
+    Agent, AgentId, AgentOrganization, AgentPolicies, ArchetypeId, ApprovalRule, ApprovalTrigger, ApproverSpec, PolicyRule as AgentPolicyRule, PolicyScope,
+    TimeoutAction,
 };
 use crate::storage::AgentStore;
-use crate::types::{Person, PersonId, PolicyRule, PolicySpec, RoleBudgets, RoleId, RoleSpec, TeamId};
+use crate::types::{Person, PolicyRule, PolicySpec, RoleSpec};
+#[cfg(test)]
+use crate::types::{PersonId, RoleBudgets, RoleId, TeamId};
 
 /// Migration result for a single item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,7 +368,7 @@ impl<S: AgentStore> MigrationRunner<S> {
         let started_at = Utc::now();
         let mut successful = 0;
         let mut failed = 0;
-        let mut with_warnings = 0;
+        let with_warnings = 0;
         let mut errors = Vec::new();
 
         for role in roles {

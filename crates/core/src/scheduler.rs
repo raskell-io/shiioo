@@ -44,7 +44,7 @@
 use crate::types::{Routine, RoutineExecution, RoutineId, RunId, RunStatus};
 use crate::workflow::executor::WorkflowExecutor;
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Timelike, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;

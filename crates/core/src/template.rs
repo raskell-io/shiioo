@@ -104,9 +104,11 @@
 //! ```
 
 use crate::types::{
-    ProcessTemplate, StepAction, TemplateId, TemplateInstance, TemplateParameter,
+    ProcessTemplate, StepAction, TemplateInstance, TemplateParameter,
     TemplateParameterType, WorkflowSpec,
 };
+#[cfg(test)]
+use crate::types::TemplateId;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 

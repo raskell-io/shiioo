@@ -12,6 +12,7 @@ use std::path::PathBuf;
 pub struct ClaudeCompiler {
     org: Organization,
     roles: Vec<RoleSpec>,
+    #[allow(dead_code)]
     policies: Vec<PolicySpec>,
 }
 

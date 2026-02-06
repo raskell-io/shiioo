@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 /// Workflow executor that coordinates DAG execution
 pub struct WorkflowExecutor {
     event_log: Arc<dyn EventLog>,
+    #[allow(dead_code)]
     blob_store: Arc<dyn BlobStore>,
     index_store: Arc<dyn IndexStore>,
     step_executor: Arc<StepExecutor>,

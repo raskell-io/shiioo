@@ -1,6 +1,6 @@
 //! Agent and Archetype API handlers.
 
-use super::{ApiResult, ErrorResponse};
+use super::ApiResult;
 use crate::config::AppState;
 use axum::{
     extract::{Path, Query, State},

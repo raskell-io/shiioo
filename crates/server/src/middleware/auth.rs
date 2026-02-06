@@ -1,14 +1,14 @@
 use axum::{
-    extract::{Request, State},
+    extract::Request,
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
 };
 use serde::{Deserialize, Serialize};
 use shiioo_core::rbac::{Action, Permission, RbacManager, Resource};
-use std::sync::Arc;
 
 /// Authentication token claims
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthClaims {
     pub user_id: String,
@@ -18,6 +18,7 @@ pub struct AuthClaims {
 }
 
 /// Extract user ID from authorization header
+#[allow(dead_code)]
 pub fn extract_user_from_headers(headers: &HeaderMap) -> Option<String> {
     let auth_header = headers.get("Authorization")?;
     let auth_str = auth_header.to_str().ok()?;
@@ -32,6 +33,7 @@ pub fn extract_user_from_headers(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Check if user has permission
+#[allow(dead_code)]
 pub fn check_permission(
     rbac_manager: &RbacManager,
     user_id: &str,
@@ -43,17 +45,18 @@ pub fn check_permission(
 }
 
 /// Permission enforcement middleware
+#[allow(dead_code)]
 pub async fn require_permission(
     resource: Resource,
     action: Action,
 ) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>> {
     move |req: Request, next: Next| {
-        let resource = resource.clone();
-        let action = action.clone();
+        let _resource = resource.clone();
+        let _action = action.clone();
 
         Box::pin(async move {
             // Extract user from request headers
-            let user_id = match extract_user_from_headers(req.headers()) {
+            let _user_id = match extract_user_from_headers(req.headers()) {
                 Some(id) => id,
                 None => return Err(StatusCode::UNAUTHORIZED),
             };

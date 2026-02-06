@@ -260,6 +260,7 @@ pub struct DistributedLock {
 #[derive(Debug, Clone)]
 struct LockInfo {
     holder: NodeId,
+    #[allow(dead_code)]
     acquired_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
 }

@@ -1,6 +1,6 @@
 // MCP tool definitions and implementations
 
-use crate::protocol::{CallToolResult, ToolContent, ToolSchema};
+use crate::protocol::{CallToolResult, ToolSchema};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;

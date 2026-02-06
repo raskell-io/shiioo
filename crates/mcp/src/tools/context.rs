@@ -3,7 +3,7 @@
 use crate::protocol::{CallToolResult, ToolContent, ToolSchema};
 use crate::tools::{json_schema_object, json_schema_string, Tool};
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use shiioo_core::events::EventLog;
 use shiioo_core::storage::IndexStore;
 use shiioo_core::types::RunId;

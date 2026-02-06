@@ -319,7 +319,7 @@ impl MetricsCollector {
         // Export histograms
         let histograms = self.histograms.lock().unwrap();
         for histogram in histograms.values() {
-            let labels = Self::format_labels(&histogram.labels);
+            let _labels = Self::format_labels(&histogram.labels);
             let base_labels = if histogram.labels.is_empty() {
                 String::new()
             } else {

@@ -72,6 +72,7 @@ impl RateLimitConfig {
     }
 
     /// Create a new configuration with custom values.
+    #[allow(dead_code)]
     pub fn new(per_second: u32, burst: u32) -> Self {
         Self { per_second, burst }
     }

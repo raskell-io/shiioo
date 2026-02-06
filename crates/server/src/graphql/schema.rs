@@ -137,7 +137,7 @@ pub struct Query;
 impl Query {
     /// Get workflow by ID
     async fn workflow(&self, ctx: &Context<'_>, id: String) -> Result<Option<Workflow>> {
-        let state = ctx.data::<Arc<AppState>>()?;
+        let _state = ctx.data::<Arc<AppState>>()?;
 
         // For now, return a placeholder
         // In a real implementation, we'd query from storage
@@ -152,8 +152,8 @@ impl Query {
 
     /// List all workflows
     async fn workflows(&self, ctx: &Context<'_>, limit: Option<i32>) -> Result<Vec<Workflow>> {
-        let state = ctx.data::<Arc<AppState>>()?;
-        let limit = limit.unwrap_or(100);
+        let _state = ctx.data::<Arc<AppState>>()?;
+        let _limit = limit.unwrap_or(100);
 
         // Placeholder implementation
         Ok(vec![])
@@ -420,7 +420,7 @@ pub struct Mutation;
 impl Mutation {
     /// Create a new workflow execution
     async fn create_run(&self, ctx: &Context<'_>, input: CreateRunInput) -> Result<Run> {
-        let state = ctx.data::<Arc<AppState>>()?;
+        let _state = ctx.data::<Arc<AppState>>()?;
 
         // Placeholder implementation
         Ok(Run {
