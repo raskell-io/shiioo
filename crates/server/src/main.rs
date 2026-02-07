@@ -1,8 +1,9 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod api;
+mod cli;
 mod config;
 mod graphql;
 mod middleware;
@@ -13,27 +14,36 @@ use config::ServerConfig;
 
 #[derive(Parser, Debug)]
 #[command(name = "shiioo")]
-#[command(about = "Virtual Company OS — Run your virtual company", long_about = None)]
-struct Args {
+#[command(about = "Virtual Company OS — Talk to your Chief of Staff")]
+struct Cli {
     /// Path to configuration file
-    #[arg(short, long, default_value = "shiioo.toml")]
+    #[arg(short, long, default_value = "shiioo.toml", global = true)]
     config: PathBuf,
 
     /// Data directory for storage
-    #[arg(short, long, default_value = "./data")]
+    #[arg(short, long, default_value = "./data", global = true)]
     data_dir: PathBuf,
 
-    /// Port to listen on
-    #[arg(short, long, default_value = "8080")]
-    port: u16,
-
-    /// Host to bind to
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-
     /// Output logs in JSON format (for production/log aggregation)
-    #[arg(long, env = "SHIIOO_LOG_JSON")]
+    #[arg(long, env = "SHIIOO_LOG_JSON", global = true)]
     log_json: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Start the HTTP API server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
 }
 
 fn init_logging(json_format: bool) {
@@ -43,7 +53,6 @@ fn init_logging(json_format: bool) {
         .unwrap_or_else(|_| "shiioo=info,tower_http=debug".into());
 
     if json_format {
-        // JSON format for production/log aggregation
         tracing_subscriber::registry()
             .with(env_filter)
             .with(
@@ -57,7 +66,6 @@ fn init_logging(json_format: bool) {
             )
             .init();
     } else {
-        // Human-readable format for development
         tracing_subscriber::registry()
             .with(env_filter)
             .with(
@@ -73,26 +81,34 @@ fn init_logging(json_format: bool) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
-    // Initialize structured logging
-    init_logging(args.log_json);
+    match cli.command {
+        Some(Commands::Serve { port, host }) => {
+            // Server mode: start the HTTP API
+            init_logging(cli.log_json);
 
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        data_dir = %args.data_dir.display(),
-        "Starting Shiioo Virtual Company OS"
-    );
+            tracing::info!(
+                version = env!("CARGO_PKG_VERSION"),
+                data_dir = %cli.data_dir.display(),
+                "Starting Shiioo Virtual Company OS"
+            );
 
-    // Load configuration
-    let config = ServerConfig::load(&args.config, args.data_dir)?;
+            let config = ServerConfig::load(&cli.config, cli.data_dir)?;
 
-    // Start API server with graceful shutdown
-    let addr = format!("{}:{}", args.host, args.port);
-    tracing::info!(addr = %addr, "Starting API server");
+            let addr = format!("{}:{}", host, port);
+            tracing::info!(addr = %addr, "Starting API server");
 
-    api::serve(&addr, config).await?;
+            api::serve(&addr, config).await?;
 
-    tracing::info!("Shiioo shutdown complete");
+            tracing::info!("Shiioo shutdown complete");
+        }
+        None => {
+            // REPL mode: conversational Chief of Staff
+            let config = ServerConfig::load(&cli.config, cli.data_dir)?;
+            cli::repl::run(config).await?;
+        }
+    }
+
     Ok(())
 }

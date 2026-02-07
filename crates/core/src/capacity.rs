@@ -67,13 +67,17 @@
 //! let usage = broker.get_usage_summary();
 //! ```
 
+use crate::llm_client;
 use crate::types::{
-    CapacitySource, CapacitySourceId, CapacityUsage, LlmError, LlmRequest, LlmResponse,
-    PriorityRequest, RateLimitState, RoleId, RunId, StepId,
+    CapacitySource, CapacitySourceId, CapacityUsage, LlmError, LlmMessagesRequest,
+    LlmMessagesResponse, LlmProvider, LlmRequest, LlmResponse, PriorityRequest, RateLimitState,
+    RoleId, RunId, StepId, StreamEvent,
 };
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
+use futures_core::Stream;
 use std::collections::{BinaryHeap, HashMap};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::time::sleep;
 
@@ -83,6 +87,8 @@ pub struct CapacityBroker {
     rate_limits: Arc<Mutex<HashMap<CapacitySourceId, RateLimitState>>>,
     usage_history: Arc<Mutex<Vec<CapacityUsage>>>,
     priority_queue: Arc<Mutex<BinaryHeap<PriorityRequestWrapper>>>,
+    /// Actual API keys for each source (not stored in CapacitySource which only has the hash).
+    api_keys: Arc<Mutex<HashMap<CapacitySourceId, String>>>,
 }
 
 /// Wrapper for PriorityRequest to implement Ord for BinaryHeap
@@ -121,6 +127,7 @@ impl CapacityBroker {
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
             usage_history: Arc::new(Mutex::new(Vec::new())),
             priority_queue: Arc::new(Mutex::new(BinaryHeap::new())),
+            api_keys: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -433,6 +440,168 @@ impl CapacityBroker {
     /// Get rate limit state for a source
     pub fn get_rate_limit_state(&self, source_id: &CapacitySourceId) -> Option<RateLimitState> {
         self.rate_limits.lock().unwrap().get(source_id).cloned()
+    }
+
+    /// Register a capacity source along with its actual API key.
+    pub fn register_source_with_key(
+        &self,
+        source: CapacitySource,
+        api_key: String,
+    ) -> Result<()> {
+        let source_id = source.id.clone();
+        self.register_source(source)?;
+        self.api_keys
+            .lock()
+            .unwrap()
+            .insert(source_id, api_key);
+        Ok(())
+    }
+
+    /// Execute a Messages API request through the broker.
+    ///
+    /// Selects the best available source, dispatches the real HTTP call
+    /// based on the provider, tracks usage, and returns the response.
+    pub async fn execute_messages_request(
+        &self,
+        request: LlmMessagesRequest,
+    ) -> Result<LlmMessagesResponse, LlmError> {
+        let required_tokens = request.max_tokens;
+
+        let source_id = self
+            .select_source(required_tokens)
+            .ok_or(LlmError::Other {
+                message: "No capacity source available".to_string(),
+            })?;
+
+        let source = self
+            .sources
+            .lock()
+            .unwrap()
+            .get(&source_id)
+            .cloned()
+            .ok_or(LlmError::Other {
+                message: "Source not found".to_string(),
+            })?;
+
+        let api_key = self
+            .api_keys
+            .lock()
+            .unwrap()
+            .get(&source_id)
+            .cloned();
+
+        // Update rate limit counters before the call
+        {
+            let mut rate_limits = self.rate_limits.lock().unwrap();
+            if let Some(state) = rate_limits.get_mut(&source_id) {
+                state.requests_in_window += 1;
+                state.tokens_in_window += required_tokens;
+                state.daily_tokens += required_tokens;
+            }
+        }
+
+        // Dispatch based on provider
+        let response = match (&source.provider, api_key) {
+            (LlmProvider::Anthropic, Some(key)) => {
+                // Override model in request if source has one and request doesn't
+                let mut req = request;
+                if req.model.is_none() {
+                    req.model = Some(source.model.clone());
+                }
+                llm_client::call_anthropic(&key, &req).await?
+            }
+            (_, None) => {
+                // No API key — fall back to mock
+                return Err(LlmError::AuthenticationFailed);
+            }
+            (provider, _) => {
+                return Err(LlmError::Other {
+                    message: format!("Provider {:?} not yet supported for Messages API", provider),
+                });
+            }
+        };
+
+        // Track usage
+        let cost = (response.usage.input_tokens as f64 * source.cost_per_token.input_cost
+            + response.usage.output_tokens as f64 * source.cost_per_token.output_cost)
+            / 1_000_000.0;
+
+        let usage = CapacityUsage {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_id: source_id.clone(),
+            timestamp: Utc::now(),
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+            total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+            cost,
+            request_count: 1,
+            run_id: None,
+            step_id: None,
+        };
+
+        self.usage_history.lock().unwrap().push(usage);
+
+        Ok(response)
+    }
+
+    /// Execute a streaming Messages API request through the broker.
+    ///
+    /// Selects the best available source, updates rate limits, then returns
+    /// a stream of events. Usage tracking happens via the stream events
+    /// (the caller should track the final Usage event).
+    pub async fn execute_messages_request_streaming(
+        &self,
+        request: LlmMessagesRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send>>, LlmError> {
+        let required_tokens = request.max_tokens;
+
+        let source_id = self
+            .select_source(required_tokens)
+            .ok_or(LlmError::Other {
+                message: "No capacity source available".to_string(),
+            })?;
+
+        let api_key = self
+            .api_keys
+            .lock()
+            .unwrap()
+            .get(&source_id)
+            .cloned();
+
+        let source = self
+            .sources
+            .lock()
+            .unwrap()
+            .get(&source_id)
+            .cloned()
+            .ok_or(LlmError::Other {
+                message: "Source not found".to_string(),
+            })?;
+
+        // Update rate limit counters before the call
+        {
+            let mut rate_limits = self.rate_limits.lock().unwrap();
+            if let Some(state) = rate_limits.get_mut(&source_id) {
+                state.requests_in_window += 1;
+                state.tokens_in_window += required_tokens;
+                state.daily_tokens += required_tokens;
+            }
+        }
+
+        // Dispatch based on provider
+        match (&source.provider, api_key) {
+            (LlmProvider::Anthropic, Some(key)) => {
+                let mut req = request;
+                if req.model.is_none() {
+                    req.model = Some(source.model.clone());
+                }
+                llm_client::call_anthropic_streaming(&key, &req).await
+            }
+            (_, None) => Err(LlmError::AuthenticationFailed),
+            (provider, _) => Err(LlmError::Other {
+                message: format!("Provider {:?} not yet supported for streaming", provider),
+            }),
+        }
     }
 }
 

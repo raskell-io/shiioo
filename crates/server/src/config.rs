@@ -4,6 +4,7 @@ use shiioo_core::agent::{
     AgentOrchestrator, AgentRuntime, DefaultPolicyEngine, FormatConverterRegistry,
     InMemoryMcpResolver, InMemoryToolExecutor, OrchestrationConfig, RuntimeConfig, SkillRegistry,
 };
+use shiioo_core::capacity::CapacityBroker;
 use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
 use shiioo_core::audit::AuditLog;
@@ -200,6 +201,8 @@ pub struct AppState {
     // Agent Runtime (Phase 13-14)
     pub agent_runtime: Arc<ConcreteAgentRuntime>,
     pub agent_orchestrator: Arc<ConcreteAgentOrchestrator>,
+    // LLM Capacity
+    pub capacity_broker: Arc<CapacityBroker>,
     // Skill Registry & Import
     pub skill_registry: Arc<RwLock<SkillRegistry>>,
     pub format_converter_registry: Arc<FormatConverterRegistry>,
@@ -304,6 +307,9 @@ impl AppState {
             event_log.clone(),
         ));
 
+        // LLM Capacity Broker
+        let capacity_broker = Arc::new(CapacityBroker::new());
+
         // Skill Registry & Import
         let skill_registry = Arc::new(RwLock::new(SkillRegistry::new()));
         let format_converter_registry = Arc::new(FormatConverterRegistry::new());
@@ -337,6 +343,7 @@ impl AppState {
             security_scanner,
             agent_runtime,
             agent_orchestrator,
+            capacity_broker,
             skill_registry,
             format_converter_registry,
             skills_cache_dir,

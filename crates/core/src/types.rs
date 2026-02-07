@@ -569,6 +569,178 @@ pub enum LlmError {
     Other { message: String },
 }
 
+// === LLM Messages API (Phase 2) ===
+
+/// Request for the LLM Messages API (multi-turn conversation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmMessagesRequest {
+    /// System prompt (injected separately from messages).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// Conversation messages.
+    pub messages: Vec<LlmMessage>,
+    /// Maximum tokens to generate.
+    pub max_tokens: u32,
+    /// Sampling temperature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// Model to use (overrides source default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Tool definitions available to the model.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tools: Vec<ToolDefinition>,
+}
+
+/// A single message in a conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmMessage {
+    pub role: LlmRole,
+    pub content: Vec<LlmContentBlock>,
+}
+
+impl LlmMessage {
+    /// Create a simple text message.
+    pub fn text(role: LlmRole, text: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: vec![LlmContentBlock::Text { text: text.into() }],
+        }
+    }
+
+    /// Extract the concatenated text content from this message.
+    pub fn text_content(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|block| match block {
+                LlmContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
+
+/// Role of a message in the conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmRole {
+    User,
+    Assistant,
+}
+
+/// Content block within a message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LlmContentBlock {
+    /// Plain text content.
+    Text { text: String },
+    /// Tool use request from the model.
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Result of a tool execution.
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+    },
+}
+
+/// Response from the LLM Messages API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmMessagesResponse {
+    /// Unique message ID.
+    pub id: String,
+    /// Response content blocks.
+    pub content: Vec<LlmContentBlock>,
+    /// Why the model stopped generating.
+    pub stop_reason: Option<String>,
+    /// Token usage.
+    pub usage: LlmUsage,
+    /// Model used.
+    pub model: String,
+}
+
+impl LlmMessagesResponse {
+    /// Extract the concatenated text content from the response.
+    pub fn text_content(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|block| match block {
+                LlmContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Check if the response contains tool use blocks.
+    pub fn has_tool_use(&self) -> bool {
+        self.content.iter().any(|b| matches!(b, LlmContentBlock::ToolUse { .. }))
+    }
+}
+
+/// Token usage information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
+/// Tool definition provided to the model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+/// The type of a content block starting in the SSE stream.
+#[derive(Debug, Clone)]
+pub enum ContentBlockType {
+    Text,
+    ToolUse { id: String, name: String },
+}
+
+/// The delta payload within a content_block_delta SSE event.
+#[derive(Debug, Clone)]
+pub enum DeltaContent {
+    Text(String),
+    InputJson(String),
+}
+
+/// SSE stream events from the Messages API.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    MessageStart {
+        id: String,
+        model: String,
+    },
+    ContentBlockStart {
+        index: u32,
+        block_type: ContentBlockType,
+    },
+    ContentBlockDelta {
+        index: u32,
+        delta: DeltaContent,
+    },
+    ContentBlockStop {
+        index: u32,
+    },
+    MessageDelta {
+        stop_reason: Option<String>,
+    },
+    MessageStop,
+    Usage {
+        input_tokens: u32,
+        output_tokens: u32,
+    },
+}
+
 // === Phase 5: Routines + Approval Boards ===
 
 /// Record of a routine execution

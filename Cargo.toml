@@ -18,6 +18,7 @@ repository = "https://github.com/raskell-io/shiioo"
 # Async runtime
 tokio = { version = "1.42", features = ["full"] }
 tokio-util = "0.7"
+tokio-stream = "0.1"
 
 # Error handling
 anyhow = "1.0"
@@ -70,6 +71,13 @@ walkdir = "2.4"
 
 # Encoding
 base64 = "0.22"
+
+# HTTP client (LLM API calls)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# CLI
+rustyline = "14"
+crossterm = "0.28"
 
 # MCP
 # Note: Will need to add proper MCP protocol dependencies when building that module

@@ -27,6 +27,10 @@ cron = { workspace = true }
 walkdir = { workspace = true }
 base64 = { workspace = true }
 async-trait = "0.1"
+reqwest = { workspace = true }
+futures-core = "0.3"
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 
 # Skills parsing
 serde_yaml = "0.9"
