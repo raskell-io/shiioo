@@ -1,7 +1,7 @@
-//! Example: Managing scheduled routines.
+//! Example: Managing recurring responsibilities.
 //!
 //! This example demonstrates how to create, manage, and monitor
-//! scheduled workflow routines (cron jobs).
+//! recurring responsibilities (cron-scheduled tasks).
 //!
 //! Run with: cargo run --example routines
 
@@ -37,8 +37,8 @@ async fn main() -> ShiiooResult<()> {
         dependencies: HashMap::new(),
     };
 
-    // Create a routine that runs daily at 9 AM
-    println!("Creating scheduled routine...");
+    // Create a recurring responsibility that runs daily at 9 AM
+    println!("Creating recurring responsibility...");
     let response = client
         .routines()
         .create(CreateRoutineRequest {
@@ -54,12 +54,12 @@ async fn main() -> ShiiooResult<()> {
         })
         .await?;
 
-    println!("Created routine: {} - {}", response.routine_id, response.message);
+    println!("Created recurring responsibility: {} - {}", response.routine_id, response.message);
 
-    // List all routines
-    println!("\nListing all routines...");
+    // List all recurring responsibilities
+    println!("\nListing all recurring responsibilities...");
     let routines = client.routines().list().await?;
-    println!("Found {} routines", routines.len());
+    println!("Found {} recurring responsibilities", routines.len());
 
     for routine in &routines {
         println!(
@@ -106,6 +106,6 @@ async fn main() -> ShiiooResult<()> {
         }
     }
 
-    println!("\nRoutines example completed!");
+    println!("\nRecurring responsibilities example completed!");
     Ok(())
 }

@@ -350,7 +350,7 @@
         <!-- Recent Runs -->
         <div class="section">
             <div class="section-header">
-                <div class="section-title">Recent Workflow Runs</div>
+                <div class="section-title">Recent Business Process Runs</div>
                 <button class="btn" onclick="refreshRuns()">Refresh</button>
             </div>
             <div id="runs-content">
@@ -504,7 +504,7 @@
 
                 if (data.runs.length === 0) {
                     document.getElementById('runs-content').innerHTML = `
-                        <div class="empty-state">No workflow runs found</div>
+                        <div class="empty-state">No business process runs found</div>
                     `;
                     return;
                 }

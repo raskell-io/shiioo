@@ -452,14 +452,14 @@ where
         self.agent_store
             .get_agent(&team.lead)
             .await?
-            .ok_or_else(|| anyhow!("Lead agent not found: {}", team.lead.0))?;
+            .ok_or_else(|| anyhow!("Lead employee not found: {}", team.lead.0))?;
 
         // Validate all members exist
         for member in &team.members {
             self.agent_store
                 .get_agent(member)
                 .await?
-                .ok_or_else(|| anyhow!("Member agent not found: {}", member.0))?;
+                .ok_or_else(|| anyhow!("Team member not found: {}", member.0))?;
         }
 
         let mut teams = self.teams.write().await;
@@ -508,13 +508,13 @@ where
             .agent_store
             .get_agent(&request.from_agent)
             .await?
-            .ok_or_else(|| anyhow!("Source agent not found"))?;
+            .ok_or_else(|| anyhow!("Source employee not found"))?;
 
         let target_agent = self
             .agent_store
             .get_agent(&request.to_agent)
             .await?
-            .ok_or_else(|| anyhow!("Target agent not found"))?;
+            .ok_or_else(|| anyhow!("Target employee not found"))?;
 
         // Check if target agent is active
         if target_agent.status != AgentStatus::Active {
@@ -523,7 +523,7 @@ where
                 success: false,
                 task_result: None,
                 error: Some(format!(
-                    "Target agent is not active: {:?}",
+                    "Target employee is not active: {:?}",
                     target_agent.status
                 )),
                 duration_ms: 0,
@@ -646,7 +646,7 @@ where
             .agent_store
             .get_agent(&team.lead)
             .await?
-            .ok_or_else(|| anyhow!("Lead agent not found"))?;
+            .ok_or_else(|| anyhow!("Lead employee not found"))?;
 
         let context = ExecutionContext {
             run_id: task.run_id.clone(),
@@ -701,7 +701,7 @@ where
             .agent_store
             .get_agent(agent_id)
             .await?
-            .ok_or_else(|| anyhow!("Agent not found: {}", agent_id.0))?;
+            .ok_or_else(|| anyhow!("Employee not found: {}", agent_id.0))?;
 
         let task = AgentTask {
             id: format!("{}:{}", run_id.0, step_id.0),

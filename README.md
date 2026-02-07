@@ -2,9 +2,9 @@
 
 # Shiioo
 
-**Agentic Enterprise Orchestrator**
+**Virtual Company OS**
 
-*Run a virtual enterprise of LLM agents with workflows, governance, and transparent event-sourced persistence.*
+*Run a virtual company of AI employees with business processes, governance, and transparent event-sourced persistence.*
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
@@ -40,15 +40,15 @@ The server starts with an embedded web dashboard, GraphQL API, and real-time mon
 | Feature | Description |
 |---------|-------------|
 | **DAG Workflows** | Define multi-step workflows with dependencies, retries, and timeouts |
-| **Agent Primitive** | Virtual employees with skills, policies, MCP bindings, and budgets |
-| **Agent Runtime** | Execute agent tasks with tool calls, budget tracking, and policy enforcement |
-| **Agent Orchestration** | Teams, delegation, supervision with restart policies |
+| **Employee Primitive** | Virtual employees with skills, policies, MCP bindings, and budgets |
+| **Employee Runtime** | Execute employee tasks with tool calls, budget tracking, and policy enforcement |
+| **Employee Orchestration** | Departments, delegation, supervision with restart policies |
 | **Event Sourcing** | Immutable event log with complete audit trail and time-travel replay |
 | **Role-Based Access** | Fine-grained RBAC with permissions, approval gates, and budgets |
 | **MCP Tool Server** | Expose enterprise tools to agent clients with policy enforcement |
 | **Capacity Pooling** | Multi-source LLM capacity with rate limits, failover, and cost tracking |
 | **Cron Scheduler** | Recurring workflows with execution history and enable/disable controls |
-| **Approval Boards** | Multi-person approvals with quorum rules (unanimous, majority, count, %) |
+| **Executive Review Boards** | Multi-person approvals with quorum rules (unanimous, majority, count, %) |
 | **Multi-Tenancy** | Isolated storage, quotas, and resource limits per tenant |
 | **Cluster Management** | Distributed locking, leader election, and node health tracking |
 | **Secret Management** | Encrypted storage with rotation policies and version history |
@@ -125,6 +125,7 @@ blobs/XX/<hash>                       # Content-addressed payloads
 - **Organization**: `/api/organizations`, `/api/templates`
 - **Capacity**: `/api/capacity/sources`, `/api/capacity/usage`, `/api/capacity/cost`
 - **Automation**: `/api/routines`, `/api/approval-boards`, `/api/approvals`, `/api/config-changes`
+- **Employees**: `/api/employees` (alias for `/api/agents`), `/api/job-titles` (alias for `/api/archetypes`)
 - **Observability**: `/api/metrics`, `/api/analytics/*`, `/api/health/status`
 - **Multi-Tenancy**: `/api/tenants`, `/api/cluster/*`
 - **Secrets**: `/api/secrets`, `/api/secrets/{id}/rotate`

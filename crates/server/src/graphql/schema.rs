@@ -338,7 +338,7 @@ impl Query {
         })
     }
 
-    /// Get agent by ID
+    /// Get employee by ID
     async fn agent(&self, ctx: &Context<'_>, id: String) -> Result<Option<Agent>> {
         let state = ctx.data::<Arc<AppState>>()?;
 
@@ -351,7 +351,7 @@ impl Query {
         Ok(agent_opt.map(Agent::from))
     }
 
-    /// List all agents
+    /// List all employees
     async fn agents(&self, ctx: &Context<'_>, status: Option<String>, team_id: Option<String>, limit: Option<i32>) -> Result<Vec<Agent>> {
         let state = ctx.data::<Arc<AppState>>()?;
         let limit = limit.unwrap_or(100) as usize;
@@ -375,7 +375,7 @@ impl Query {
         Ok(agents.into_iter().take(limit).map(Agent::from).collect())
     }
 
-    /// Get archetype by ID
+    /// Get job title by ID
     async fn archetype(&self, ctx: &Context<'_>, id: String) -> Result<Option<Archetype>> {
         let state = ctx.data::<Arc<AppState>>()?;
 
@@ -388,7 +388,7 @@ impl Query {
         Ok(archetype_opt.map(Archetype::from))
     }
 
-    /// List all archetypes
+    /// List all job titles
     async fn archetypes(&self, ctx: &Context<'_>, limit: Option<i32>) -> Result<Vec<Archetype>> {
         let state = ctx.data::<Arc<AppState>>()?;
         let limit = limit.unwrap_or(100) as usize;
@@ -486,7 +486,7 @@ impl Mutation {
         })
     }
 
-    /// Create a new agent
+    /// Hire a new employee
     async fn create_agent(&self, ctx: &Context<'_>, input: CreateAgentInput) -> Result<Agent> {
         let state = ctx.data::<Arc<AppState>>()?;
 
@@ -517,7 +517,7 @@ impl Mutation {
         Ok(Agent::from(new_agent))
     }
 
-    /// Update agent status
+    /// Update employee status
     async fn update_agent_status(&self, ctx: &Context<'_>, id: String, status: String) -> Result<Agent> {
         let state = ctx.data::<Arc<AppState>>()?;
 
@@ -540,12 +540,12 @@ impl Mutation {
             .get_agent(&agent::AgentId::new(&id))
             .await
             .map_err(|e| Error::new(e.to_string()))?
-            .ok_or_else(|| Error::new("Agent not found"))?;
+            .ok_or_else(|| Error::new("Employee not found"))?;
 
         Ok(Agent::from(updated_agent))
     }
 
-    /// Delete an agent
+    /// Offboard an employee
     async fn delete_agent(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let state = ctx.data::<Arc<AppState>>()?;
 
@@ -556,7 +556,7 @@ impl Mutation {
             .map_err(|e| Error::new(e.to_string()))
     }
 
-    /// Create a new archetype
+    /// Create a new job title
     async fn create_archetype(&self, ctx: &Context<'_>, input: CreateArchetypeInput) -> Result<Archetype> {
         let state = ctx.data::<Arc<AppState>>()?;
 
@@ -579,7 +579,7 @@ impl Mutation {
         Ok(Archetype::from(new_archetype))
     }
 
-    /// Delete an archetype
+    /// Delete a job title
     async fn delete_archetype(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let state = ctx.data::<Arc<AppState>>()?;
 

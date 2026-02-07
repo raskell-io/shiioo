@@ -1,7 +1,7 @@
 //! MCP binding manager for agents.
 //!
 //! Manages MCP server connections, tool access, and credential resolution
-//! for agents in the virtual enterprise.
+//! for agents in the virtual company.
 
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;

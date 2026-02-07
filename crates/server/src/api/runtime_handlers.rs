@@ -1,4 +1,4 @@
-//! Agent Runtime and Orchestration API handlers.
+//! Employee Runtime and Orchestration API handlers.
 
 use super::ApiResult;
 use crate::config::AppState;
@@ -21,7 +21,7 @@ use std::sync::Arc;
 // Task Execution Endpoints
 // ============================================================================
 
-/// Execute a task for an agent
+/// Execute a task for an employee
 pub async fn execute_task(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -34,7 +34,7 @@ pub async fn execute_task(
         .agent_store
         .get_agent(&agent_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id.0))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id.0))?;
 
     // Create the task
     let run_id = if let Some(id) = &req.run_id {
@@ -121,7 +121,7 @@ impl From<BudgetConsumed> for BudgetConsumedDto {
     }
 }
 
-/// Get agent's current budget status
+/// Get employee's current budget status
 pub async fn get_agent_budget(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -132,7 +132,7 @@ pub async fn get_agent_budget(
         .agent_store
         .get_agent(&agent_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id.0))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id.0))?;
 
     Ok(Json(AgentBudgetResponse {
         agent_id: agent_id.0.clone(),
@@ -150,7 +150,7 @@ pub struct AgentBudgetResponse {
 // Delegation Endpoints
 // ============================================================================
 
-/// Delegate a task from one agent to another
+/// Delegate a task from one employee to another
 pub async fn delegate_task(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -230,7 +230,7 @@ pub struct TaskResultDto {
 // Team Management Endpoints
 // ============================================================================
 
-/// Create a new agent team
+/// Create a new department
 pub async fn create_team(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateTeamRequest>,
@@ -326,7 +326,7 @@ pub struct ListTeamsResponse {
     pub teams: Vec<TeamResponse>,
 }
 
-/// Broadcast a task to all team members
+/// Broadcast a task to all department members
 pub async fn broadcast_to_team(
     State(state): State<Arc<AppState>>,
     Path(team_id): Path<String>,
@@ -383,7 +383,7 @@ pub struct BroadcastResponse {
 // Supervision Endpoints
 // ============================================================================
 
-/// Create a supervisor for an agent
+/// Create a supervisor for an employee
 pub async fn create_supervisor(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -427,7 +427,7 @@ pub struct SupervisorResponse {
     pub created: bool,
 }
 
-/// Get supervision events for an agent
+/// Get supervision events for an employee
 pub async fn get_supervision_events(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -477,7 +477,7 @@ pub struct SupervisionEventDto {
 // Workflow Adapter Endpoints
 // ============================================================================
 
-/// Execute a workflow step as an agent task
+/// Execute a business process step as an employee task
 pub async fn execute_workflow_step(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExecuteWorkflowStepRequest>,

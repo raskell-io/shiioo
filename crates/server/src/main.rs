@@ -13,7 +13,7 @@ use config::ServerConfig;
 
 #[derive(Parser, Debug)]
 #[command(name = "shiioo")]
-#[command(about = "Virtual Company OS - Agentic Enterprise Orchestrator", long_about = None)]
+#[command(about = "Virtual Company OS — Run your virtual company", long_about = None)]
 struct Args {
     /// Path to configuration file
     #[arg(short, long, default_value = "shiioo.toml")]

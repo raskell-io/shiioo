@@ -283,7 +283,7 @@ impl AgentStore for RedbAgentStore {
         let mut agent = self
             .get_agent(id)
             .await?
-            .context("Agent not found")?;
+            .context("Employee not found")?;
 
         agent.status = status;
         agent.updated_at = chrono::Utc::now();

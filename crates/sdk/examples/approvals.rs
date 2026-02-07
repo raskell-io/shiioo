@@ -1,7 +1,7 @@
-//! Example: Working with approvals and approval boards.
+//! Example: Working with executive review boards.
 //!
 //! This example demonstrates how to manage approval workflows,
-//! create approval boards, and cast votes.
+//! create executive review boards, and cast votes.
 //!
 //! Run with: cargo run --example approvals
 
@@ -19,8 +19,8 @@ async fn main() -> ShiiooResult<()> {
         .base_url("http://localhost:8080")
         .build()?;
 
-    // Create an approval board
-    println!("Creating approval board...");
+    // Create an executive review board
+    println!("Creating executive review board...");
     let board = ApprovalBoard {
         id: ApprovalBoardId::new("security-review-board"),
         name: "Security Review Board".to_string(),
@@ -38,8 +38,8 @@ async fn main() -> ShiiooResult<()> {
     let response = client.approval_boards().create(&board).await?;
     println!("Created board: {} - {}", response.board_id, response.message);
 
-    // List all approval boards
-    println!("\nListing approval boards...");
+    // List all executive review boards
+    println!("\nListing executive review boards...");
     let boards = client.approval_boards().list().await?;
     for b in &boards {
         println!(

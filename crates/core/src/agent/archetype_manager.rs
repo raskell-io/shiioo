@@ -35,7 +35,7 @@ pub enum ArchetypeError {
 impl std::fmt::Display for ArchetypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound(id) => write!(f, "Archetype not found: {}", id),
+            Self::NotFound(id) => write!(f, "Job title not found: {}", id),
             Self::CircularInheritance(chain) => {
                 let chain_str: Vec<_> = chain.iter().map(|id| id.0.as_str()).collect();
                 write!(f, "Circular inheritance detected: {}", chain_str.join(" -> "))

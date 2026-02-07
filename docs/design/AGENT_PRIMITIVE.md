@@ -1,6 +1,8 @@
 # Agent Primitive Design
 
-> The core abstraction for employees in the virtual enterprise.
+> **Note:** Internal Rust types (`Agent`, `AgentId`, `Archetype`, etc.) retain their current names. The company metaphor language (employee, job title, etc.) is used in user-facing surfaces only.
+
+> The core abstraction for employees in the virtual company.
 
 ## Overview
 

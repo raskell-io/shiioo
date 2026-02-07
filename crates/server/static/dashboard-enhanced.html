@@ -382,7 +382,7 @@
         <div class="logo">Shiioo</div>
         <div class="nav-tabs">
             <button class="nav-tab active" onclick="switchTab('overview')">Overview</button>
-            <button class="nav-tab" onclick="switchTab('workflows')">Workflows</button>
+            <button class="nav-tab" onclick="switchTab('workflows')">Business Processes</button>
             <button class="nav-tab" onclick="switchTab('analytics')">Analytics</button>
             <button class="nav-tab" onclick="switchTab('monitoring')">Live Monitor</button>
         </div>
@@ -420,7 +420,7 @@
             </div>
 
             <div class="card">
-                <div class="card-header">Recent Workflow Runs</div>
+                <div class="card-header">Recent Business Process Runs</div>
                 <div id="runs-content">Loading...</div>
             </div>
         </div>
@@ -429,18 +429,18 @@
         <div id="workflows-tab" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    <span>Workflows</span>
+                    <span>Business Processes</span>
                     <button class="btn btn-primary" onclick="showCreateWorkflowModal()">
-                        + Create Workflow
+                        + Create Business Process
                     </button>
                 </div>
                 <div id="workflow-list" class="workflow-list">
-                    <p style="color: var(--text-secondary);">No workflows yet. Create one to get started!</p>
+                    <p style="color: var(--text-secondary);">No business processes yet. Create one to get started!</p>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-header">Workflow Visualization</div>
+                <div class="card-header">Business Process Visualization</div>
                 <div id="workflow-viz"></div>
             </div>
         </div>
@@ -448,7 +448,7 @@
         <!-- Analytics Tab -->
         <div id="analytics-tab" class="tab-content">
             <div class="card">
-                <div class="card-header">Workflow Execution Trends</div>
+                <div class="card-header">Business Process Execution Trends</div>
                 <div class="chart-container">
                     <canvas id="execution-chart"></canvas>
                 </div>
@@ -473,11 +473,11 @@
         <div id="monitoring-tab" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    <span>Active Workflow Executions</span>
+                    <span>Active Business Process Executions</span>
                     <span class="status-pill status-running" id="active-count">0 running</span>
                 </div>
                 <div id="active-workflows">
-                    <p style="color: var(--text-secondary);">No active workflows</p>
+                    <p style="color: var(--text-secondary);">No active business processes</p>
                 </div>
             </div>
 
@@ -491,18 +491,18 @@
     <!-- Create Workflow Modal -->
     <div id="create-workflow-modal" class="modal">
         <div class="modal-content">
-            <div class="modal-header">Create New Workflow</div>
+            <div class="modal-header">Create New Business Process</div>
             <form id="workflow-form">
                 <div class="form-group">
-                    <label>Workflow Name</label>
-                    <input type="text" id="workflow-name" placeholder="My Workflow" required>
+                    <label>Business Process Name</label>
+                    <input type="text" id="workflow-name" placeholder="My Business Process" required>
                 </div>
                 <div class="form-group">
                     <label>Description</label>
-                    <input type="text" id="workflow-description" placeholder="What does this workflow do?">
+                    <input type="text" id="workflow-description" placeholder="What does this business process do?">
                 </div>
                 <div class="form-group">
-                    <label>Workflow Definition (JSON)</label>
+                    <label>Business Process Definition (JSON)</label>
                     <textarea id="workflow-json" placeholder='{"steps": [], "dependencies": {}}'></textarea>
                 </div>
                 <div class="modal-actions">
@@ -966,7 +966,7 @@
 
                 if (running.length === 0) {
                     document.getElementById('active-workflows').innerHTML = `
-                        <p style="color: var(--text-secondary);">No active workflows</p>
+                        <p style="color: var(--text-secondary);">No active business processes</p>
                     `;
                 } else {
                     document.getElementById('active-workflows').innerHTML = running.map(run => `

@@ -1,4 +1,4 @@
-//! Agent primitive for the virtual enterprise.
+//! Agent primitive for the virtual company.
 //!
 //! An Agent is the fundamental unit of work in Shiioo — a virtual employee with
 //! defined skills, governed by policies, and connected to external systems via MCP tools.

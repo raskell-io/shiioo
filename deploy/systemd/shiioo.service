@@ -1,5 +1,5 @@
 [Unit]
-Description=Shiioo - Agentic Enterprise Orchestrator
+Description=Shiioo - Virtual Company OS
 Documentation=https://github.com/raskell-io/shiioo
 After=network-online.target
 Wants=network-online.target

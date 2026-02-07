@@ -1,7 +1,7 @@
 //! # Shiioo Core
 //!
-//! The core library for the Shiioo Agentic Enterprise Orchestrator - a platform for
-//! building and managing AI agent workforces within enterprise environments.
+//! The core library for the Shiioo Virtual Company OS - a platform for
+//! building and managing virtual companies of AI employees.
 //!
 //! ## Overview
 //!

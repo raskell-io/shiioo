@@ -780,7 +780,7 @@ pub struct ListApprovalBoardsResponse {
     pub boards: Vec<ApprovalBoard>,
 }
 
-/// Get a specific approval board
+/// Get a specific executive review board
 pub async fn get_approval_board(
     State(state): State<Arc<AppState>>,
     Path(board_id): Path<String>,
@@ -790,23 +790,23 @@ pub async fn get_approval_board(
     let board = state
         .approval_manager
         .get_board(&board_id)
-        .ok_or_else(|| anyhow::anyhow!("Approval board not found"))?;
+        .ok_or_else(|| anyhow::anyhow!("Executive review board not found"))?;
 
     Ok(Json(board))
 }
 
-/// Create an approval board
+/// Create an executive review board
 pub async fn create_approval_board(
     State(state): State<Arc<AppState>>,
     Json(board): Json<ApprovalBoard>,
 ) -> ApiResult<Json<CreateApprovalBoardResponse>> {
     state.approval_manager.register_board(board.clone())?;
 
-    tracing::info!("Created approval board: {} ({})", board.name, board.id.0);
+    tracing::info!("Created executive review board: {} ({})", board.name, board.id.0);
 
     Ok(Json(CreateApprovalBoardResponse {
         board_id: board.id.0.clone(),
-        message: "Approval board created successfully".to_string(),
+        message: "Executive review board created successfully".to_string(),
     }))
 }
 
@@ -816,7 +816,7 @@ pub struct CreateApprovalBoardResponse {
     pub message: String,
 }
 
-/// Delete an approval board
+/// Delete an executive review board
 pub async fn delete_approval_board(
     State(state): State<Arc<AppState>>,
     Path(board_id): Path<String>,
@@ -825,10 +825,10 @@ pub async fn delete_approval_board(
 
     state.approval_manager.delete_board(&board_id)?;
 
-    tracing::info!("Deleted approval board: {}", board_id.0);
+    tracing::info!("Deleted executive review board: {}", board_id.0);
 
     Ok(Json(DeleteApprovalBoardResponse {
-        message: "Approval board deleted successfully".to_string(),
+        message: "Executive review board deleted successfully".to_string(),
     }))
 }
 

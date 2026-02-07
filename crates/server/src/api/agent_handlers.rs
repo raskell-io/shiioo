@@ -1,4 +1,4 @@
-//! Agent and Archetype API handlers.
+//! Employee and Job Title API handlers.
 
 use super::ApiResult;
 use crate::config::AppState;
@@ -21,7 +21,7 @@ use std::sync::Arc;
 // Agent Endpoints
 // ============================================================================
 
-/// List all agents
+/// List all employees
 pub async fn list_agents(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListAgentsParams>,
@@ -49,7 +49,7 @@ pub struct ListAgentsResponse {
     pub agents: Vec<Agent>,
 }
 
-/// Get an agent by ID
+/// Get an employee by ID
 pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -58,12 +58,12 @@ pub async fn get_agent(
         .agent_store
         .get_agent(&AgentId::new(&agent_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id))?;
 
     Ok(Json(agent))
 }
 
-/// Create a new agent
+/// Hire a new employee
 pub async fn create_agent(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateAgentRequest>,
@@ -75,7 +75,7 @@ pub async fn create_agent(
         .await?
         .is_some()
     {
-        return Err(anyhow::anyhow!("Agent already exists: {}", req.id).into());
+        return Err(anyhow::anyhow!("Employee already exists: {}", req.id).into());
     }
 
     let mut builder = Agent::builder(AgentId::new(&req.id), &req.name)
@@ -110,7 +110,7 @@ pub async fn create_agent(
 
     state.agent_store.store_agent(&agent).await?;
 
-    tracing::info!("Created agent: {} ({})", agent.name, agent.id);
+    tracing::info!("Hired employee: {} ({})", agent.name, agent.id);
 
     Ok(Json(agent))
 }
@@ -132,7 +132,7 @@ pub struct CreateAgentRequest {
     pub budgets: Option<AgentBudgets>,
 }
 
-/// Update an agent
+/// Update an employee
 pub async fn update_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -142,7 +142,7 @@ pub async fn update_agent(
         .agent_store
         .get_agent(&AgentId::new(&agent_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id))?;
 
     // Update fields if provided
     if let Some(name) = req.name {
@@ -174,7 +174,7 @@ pub async fn update_agent(
 
     state.agent_store.store_agent(&agent).await?;
 
-    tracing::info!("Updated agent: {} ({})", agent.name, agent.id);
+    tracing::info!("Updated employee: {} ({})", agent.name, agent.id);
 
     Ok(Json(agent))
 }
@@ -191,7 +191,7 @@ pub struct UpdateAgentRequest {
     pub budgets: Option<AgentBudgets>,
 }
 
-/// Delete an agent
+/// Offboard an employee
 pub async fn delete_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -202,7 +202,7 @@ pub async fn delete_agent(
         .await?;
 
     if deleted {
-        tracing::info!("Deleted agent: {}", agent_id);
+        tracing::info!("Offboarded employee: {}", agent_id);
     }
 
     Ok(Json(DeleteAgentResponse { deleted }))
@@ -213,7 +213,7 @@ pub struct DeleteAgentResponse {
     pub deleted: bool,
 }
 
-/// Activate an agent
+/// Activate an employee
 pub async fn activate_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -227,14 +227,14 @@ pub async fn activate_agent(
         .agent_store
         .get_agent(&AgentId::new(&agent_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id))?;
 
-    tracing::info!("Activated agent: {}", agent_id);
+    tracing::info!("Activated employee: {}", agent_id);
 
     Ok(Json(agent))
 }
 
-/// Suspend an agent
+/// Place an employee on leave
 pub async fn suspend_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -248,14 +248,14 @@ pub async fn suspend_agent(
         .agent_store
         .get_agent(&AgentId::new(&agent_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id))?;
 
-    tracing::info!("Suspended agent: {}", agent_id);
+    tracing::info!("Placed employee on leave: {}", agent_id);
 
     Ok(Json(agent))
 }
 
-/// Pause an agent
+/// Pause an employee
 pub async fn pause_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -269,14 +269,14 @@ pub async fn pause_agent(
         .agent_store
         .get_agent(&AgentId::new(&agent_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id))?;
 
-    tracing::info!("Paused agent: {}", agent_id);
+    tracing::info!("Paused employee: {}", agent_id);
 
     Ok(Json(agent))
 }
 
-/// Archive an agent (soft delete)
+/// Offboard an employee (soft delete)
 pub async fn archive_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
@@ -290,18 +290,18 @@ pub async fn archive_agent(
         .agent_store
         .get_agent(&AgentId::new(&agent_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Employee not found: {}", agent_id))?;
 
-    tracing::info!("Archived agent: {}", agent_id);
+    tracing::info!("Offboarded employee: {}", agent_id);
 
     Ok(Json(agent))
 }
 
 // ============================================================================
-// Archetype Endpoints
+// Job Title Endpoints
 // ============================================================================
 
-/// List all archetypes
+/// List all job titles
 pub async fn list_archetypes(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<ListArchetypesResponse>> {
@@ -314,7 +314,7 @@ pub struct ListArchetypesResponse {
     pub archetypes: Vec<Archetype>,
 }
 
-/// Get an archetype by ID
+/// Get a job title by ID
 pub async fn get_archetype(
     State(state): State<Arc<AppState>>,
     Path(archetype_id): Path<String>,
@@ -323,12 +323,12 @@ pub async fn get_archetype(
         .agent_store
         .get_archetype(&ArchetypeId::new(&archetype_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Archetype not found: {}", archetype_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Job title not found: {}", archetype_id))?;
 
     Ok(Json(archetype))
 }
 
-/// Create a new archetype
+/// Create a new job title
 pub async fn create_archetype(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateArchetypeRequest>,
@@ -340,7 +340,7 @@ pub async fn create_archetype(
         .await?
         .is_some()
     {
-        return Err(anyhow::anyhow!("Archetype already exists: {}", req.id).into());
+        return Err(anyhow::anyhow!("Job title already exists: {}", req.id).into());
     }
 
     let mut builder = Archetype::builder(req.id.clone(), req.name.clone())
@@ -367,7 +367,7 @@ pub async fn create_archetype(
 
     state.agent_store.store_archetype(&archetype).await?;
 
-    tracing::info!("Created archetype: {} ({})", archetype.name, archetype.id);
+    tracing::info!("Created job title: {} ({})", archetype.name, archetype.id);
 
     Ok(Json(archetype))
 }
@@ -385,7 +385,7 @@ pub struct CreateArchetypeRequest {
     pub created_by: Option<String>,
 }
 
-/// Update an archetype
+/// Update a job title
 pub async fn update_archetype(
     State(state): State<Arc<AppState>>,
     Path(archetype_id): Path<String>,
@@ -395,7 +395,7 @@ pub async fn update_archetype(
         .agent_store
         .get_archetype(&ArchetypeId::new(&archetype_id))
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Archetype not found: {}", archetype_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Job title not found: {}", archetype_id))?;
 
     // Rebuild archetype with updated values
     let name = req.name.unwrap_or_else(|| existing.name.clone());
@@ -422,7 +422,7 @@ pub async fn update_archetype(
 
     state.agent_store.store_archetype(&archetype).await?;
 
-    tracing::info!("Updated archetype: {} ({})", archetype.name, archetype.id);
+    tracing::info!("Updated job title: {} ({})", archetype.name, archetype.id);
 
     Ok(Json(archetype))
 }
@@ -438,7 +438,7 @@ pub struct UpdateArchetypeRequest {
     pub budgets: Option<AgentBudgets>,
 }
 
-/// Delete an archetype
+/// Delete a job title
 pub async fn delete_archetype(
     State(state): State<Arc<AppState>>,
     Path(archetype_id): Path<String>,
@@ -449,7 +449,7 @@ pub async fn delete_archetype(
         .await?;
 
     if deleted {
-        tracing::info!("Deleted archetype: {}", archetype_id);
+        tracing::info!("Deleted job title: {}", archetype_id);
     }
 
     Ok(Json(DeleteArchetypeResponse { deleted }))
@@ -470,6 +470,6 @@ fn parse_agent_status(status: &str) -> Result<AgentStatus, anyhow::Error> {
         "paused" => Ok(AgentStatus::Paused),
         "suspended" => Ok(AgentStatus::Suspended),
         "archived" => Ok(AgentStatus::Archived),
-        _ => Err(anyhow::anyhow!("Invalid agent status: {}", status)),
+        _ => Err(anyhow::anyhow!("Invalid employee status: {}", status)),
     }
 }
