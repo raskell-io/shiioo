@@ -41,6 +41,9 @@ mod archetype;
 pub mod skill_parser;
 pub mod skill_manager;
 pub mod builtin_skills;
+pub mod skill_registry;
+pub mod format_converter;
+pub mod git_import;
 pub mod policy_engine;
 pub mod mcp_manager;
 pub mod archetype_manager;
@@ -56,6 +59,12 @@ pub use budgets::*;
 pub use archetype::*;
 pub use skill_parser::SkillParser;
 pub use skill_manager::{DefaultSkillManager, SkillManager, SkillManagerBuilder, SkillManagerConfig};
+pub use skill_registry::{RegistryEntry, RegistryEntrySource, SkillRegistry};
+pub use format_converter::{ContainsStudioConverter, FormatConverter, FormatConverterRegistry};
+pub use git_import::{
+    DiscoveredFile, GitImporter, ImportError, ImportMethod, ImportRequest, ImportResult,
+    ImportedSkill, ScanResult,
+};
 pub use policy_engine::{
     ActionContext, ActionType, AgentAction, AgentPolicyEngine, DefaultPolicyEngine,
     EffectivePolicies, InMemoryPolicyStorage, PolicyDecision, PolicySource, PolicyStorage,

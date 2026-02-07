@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use shiioo_core::agent::{
-    AgentOrchestrator, AgentRuntime, DefaultPolicyEngine, InMemoryMcpResolver,
-    InMemoryToolExecutor, OrchestrationConfig, RuntimeConfig,
+    AgentOrchestrator, AgentRuntime, DefaultPolicyEngine, FormatConverterRegistry,
+    InMemoryMcpResolver, InMemoryToolExecutor, OrchestrationConfig, RuntimeConfig, SkillRegistry,
 };
 use shiioo_core::analytics::PerformanceAnalytics;
 use shiioo_core::approval::ApprovalManager;
@@ -23,6 +23,7 @@ use shiioo_core::tenant::TenantManager;
 use shiioo_core::workflow::WorkflowExecutor;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Environment variable for the encryption key used by SecretManager.
 /// Must be exactly 32 bytes (256 bits) for AES-256 encryption.
@@ -95,6 +96,12 @@ pub struct StorageConfig {
 
     #[serde(default = "default_index_file")]
     pub index_file: String,
+
+    #[serde(default = "default_skills_cache_dir")]
+    pub skills_cache_dir: String,
+
+    #[serde(default = "default_local_skills_dir")]
+    pub local_skills_dir: String,
 }
 
 fn default_blob_dir() -> String {
@@ -109,12 +116,22 @@ fn default_index_file() -> String {
     "index.redb".to_string()
 }
 
+fn default_skills_cache_dir() -> String {
+    "skills_cache".to_string()
+}
+
+fn default_local_skills_dir() -> String {
+    "skills".to_string()
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             blob_dir: default_blob_dir(),
             event_log_dir: default_event_log_dir(),
             index_file: default_index_file(),
+            skills_cache_dir: default_skills_cache_dir(),
+            local_skills_dir: default_local_skills_dir(),
         }
     }
 }
@@ -183,6 +200,11 @@ pub struct AppState {
     // Agent Runtime (Phase 13-14)
     pub agent_runtime: Arc<ConcreteAgentRuntime>,
     pub agent_orchestrator: Arc<ConcreteAgentOrchestrator>,
+    // Skill Registry & Import
+    pub skill_registry: Arc<RwLock<SkillRegistry>>,
+    pub format_converter_registry: Arc<FormatConverterRegistry>,
+    pub skills_cache_dir: PathBuf,
+    pub local_skills_dir: PathBuf,
 }
 
 impl AppState {
@@ -282,6 +304,18 @@ impl AppState {
             event_log.clone(),
         ));
 
+        // Skill Registry & Import
+        let skill_registry = Arc::new(RwLock::new(SkillRegistry::new()));
+        let format_converter_registry = Arc::new(FormatConverterRegistry::new());
+        let skills_cache_dir = config.data_dir.join(&config.storage.skills_cache_dir);
+        let local_skills_dir = config.data_dir.join(&config.storage.local_skills_dir);
+
+        // Ensure skill directories exist
+        std::fs::create_dir_all(&skills_cache_dir)
+            .context("Failed to create skills cache directory")?;
+        std::fs::create_dir_all(&local_skills_dir)
+            .context("Failed to create local skills directory")?;
+
         Ok(Self {
             blob_store,
             event_log,
@@ -303,6 +337,10 @@ impl AppState {
             security_scanner,
             agent_runtime,
             agent_orchestrator,
+            skill_registry,
+            format_converter_registry,
+            skills_cache_dir,
+            local_skills_dir,
         })
     }
 }

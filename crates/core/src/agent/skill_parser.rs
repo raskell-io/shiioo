@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::{Skill, SkillAsset, SkillReference, SkillScript};
+use super::{Skill, SkillAsset, SkillCategory, SkillReference, SkillScript};
 
 /// Raw frontmatter structure from SKILL.md
 #[derive(Debug, Deserialize)]
@@ -29,6 +29,10 @@ struct SkillFrontmatter {
     /// Optional: environment requirements
     #[serde(default)]
     compatibility: Option<String>,
+
+    /// Optional: skill category
+    #[serde(default)]
+    category: Option<String>,
 
     /// Optional: pre-approved tools (space-delimited string)
     #[serde(default, rename = "allowed-tools")]
@@ -66,9 +70,12 @@ impl SkillParser {
             .map(|s| s.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
 
+        let category = fm.category.map(|c| SkillCategory::from_str_loose(&c));
+
         Ok(Skill {
             name: fm.name,
             description: fm.description,
+            category,
             license: fm.license,
             compatibility: fm.compatibility,
             allowed_tools,
@@ -142,15 +149,18 @@ impl SkillParser {
             .map(|s| s.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
 
+        let category = fm.category.map(|c| SkillCategory::from_str_loose(&c));
+
         Ok(super::SkillMetadata {
             name: fm.name,
             description: fm.description,
+            category,
             allowed_tools,
         })
     }
 
     /// Split content into frontmatter and body.
-    fn split_frontmatter(content: &str) -> Result<(String, String)> {
+    pub fn split_frontmatter(content: &str) -> Result<(String, String)> {
         let content = content.trim();
 
         // Must start with ---
@@ -173,7 +183,7 @@ impl SkillParser {
     }
 
     /// Validate skill name according to spec.
-    fn validate_name(name: &str) -> Result<()> {
+    pub fn validate_name(name: &str) -> Result<()> {
         if name.is_empty() || name.len() > 64 {
             return Err(anyhow!("name must be 1-64 characters, got {}", name.len()));
         }
@@ -197,6 +207,48 @@ impl SkillParser {
         }
 
         Ok(())
+    }
+
+    /// Sanitize a raw string into a valid skill name.
+    ///
+    /// Lowercases, replaces non-alphanumeric characters with hyphens,
+    /// collapses consecutive hyphens, and trims leading/trailing hyphens.
+    pub fn sanitize_name(raw: &str) -> String {
+        let lowered = raw.to_lowercase();
+        let mut result = String::with_capacity(lowered.len());
+
+        for c in lowered.chars() {
+            if c.is_ascii_alphanumeric() {
+                result.push(c);
+            } else {
+                result.push('-');
+            }
+        }
+
+        // Collapse consecutive hyphens
+        let mut collapsed = String::with_capacity(result.len());
+        let mut prev_hyphen = false;
+        for c in result.chars() {
+            if c == '-' {
+                if !prev_hyphen {
+                    collapsed.push(c);
+                }
+                prev_hyphen = true;
+            } else {
+                collapsed.push(c);
+                prev_hyphen = false;
+            }
+        }
+
+        // Trim leading/trailing hyphens and truncate to 64 chars
+        let trimmed = collapsed.trim_matches('-');
+        if trimmed.len() > 64 {
+            // Truncate at 64 chars but avoid ending on a hyphen
+            let truncated = &trimmed[..64];
+            truncated.trim_end_matches('-').to_string()
+        } else {
+            trimmed.to_string()
+        }
     }
 
     /// Discover scripts in the scripts/ directory.
@@ -609,16 +661,50 @@ No closing delimiter
     }
 
     #[test]
+    fn test_sanitize_name() {
+        assert_eq!(SkillParser::sanitize_name("Hello World"), "hello-world");
+        assert_eq!(SkillParser::sanitize_name("My--Skill!!"), "my-skill");
+        assert_eq!(SkillParser::sanitize_name("  leading  "), "leading");
+        assert_eq!(SkillParser::sanitize_name("CamelCase"), "camelcase");
+        assert_eq!(
+            SkillParser::sanitize_name("under_score.dot"),
+            "under-score-dot"
+        );
+        assert_eq!(SkillParser::sanitize_name("---"), "");
+        assert_eq!(SkillParser::sanitize_name("a"), "a");
+    }
+
+    #[test]
+    fn test_parse_skill_with_category() {
+        let content = r#"---
+name: my-skill
+description: A categorized skill.
+category: testing
+---
+
+Instructions here.
+"#;
+
+        let skill = SkillParser::parse(content).unwrap();
+        assert_eq!(
+            skill.category,
+            Some(super::super::SkillCategory::Testing)
+        );
+    }
+
+    #[test]
     fn test_skills_to_prompt_xml() {
         let skills = vec![
             super::super::SkillMetadata {
                 name: "skill-one".to_string(),
                 description: "First skill".to_string(),
+                category: None,
                 allowed_tools: vec!["tool1".to_string()],
             },
             super::super::SkillMetadata {
                 name: "skill-two".to_string(),
                 description: "Second skill".to_string(),
+                category: None,
                 allowed_tools: vec![],
             },
         ];

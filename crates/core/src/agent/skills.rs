@@ -5,7 +5,62 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
+
+/// Skill category for organizing and browsing skills.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillCategory {
+    Engineering,
+    Design,
+    Marketing,
+    Product,
+    Operations,
+    Testing,
+    Security,
+    DataAnalysis,
+    Documentation,
+    IncidentResponse,
+    Custom(String),
+}
+
+impl fmt::Display for SkillCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Engineering => write!(f, "engineering"),
+            Self::Design => write!(f, "design"),
+            Self::Marketing => write!(f, "marketing"),
+            Self::Product => write!(f, "product"),
+            Self::Operations => write!(f, "operations"),
+            Self::Testing => write!(f, "testing"),
+            Self::Security => write!(f, "security"),
+            Self::DataAnalysis => write!(f, "data_analysis"),
+            Self::Documentation => write!(f, "documentation"),
+            Self::IncidentResponse => write!(f, "incident_response"),
+            Self::Custom(name) => write!(f, "{}", name),
+        }
+    }
+}
+
+impl SkillCategory {
+    /// Parse a category from a string.
+    pub fn from_str_loose(s: &str) -> Self {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "engineering" => Self::Engineering,
+            "design" => Self::Design,
+            "marketing" => Self::Marketing,
+            "product" => Self::Product,
+            "operations" => Self::Operations,
+            "testing" => Self::Testing,
+            "security" => Self::Security,
+            "data_analysis" | "dataanalysis" => Self::DataAnalysis,
+            "documentation" => Self::Documentation,
+            "incident_response" | "incidentresponse" => Self::IncidentResponse,
+            other => Self::Custom(other.to_string()),
+        }
+    }
+}
 
 /// Skills configuration for an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +239,10 @@ pub struct Skill {
     /// When to use this skill (from frontmatter `description` field).
     pub description: String,
 
+    /// Skill category for organization and browsing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<SkillCategory>,
+
     /// License information.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
@@ -222,6 +281,7 @@ impl Skill {
         Self {
             name: name.into(),
             description: description.into(),
+            category: None,
             license: None,
             compatibility: None,
             allowed_tools: Vec::new(),
@@ -233,11 +293,12 @@ impl Skill {
         }
     }
 
-    /// Get skill metadata (name and description only).
+    /// Get skill metadata (name, description, category).
     pub fn metadata(&self) -> SkillMetadata {
         SkillMetadata {
             name: self.name.clone(),
             description: self.description.clone(),
+            category: self.category.clone(),
             allowed_tools: self.allowed_tools.clone(),
         }
     }
@@ -251,6 +312,10 @@ pub struct SkillMetadata {
 
     /// Skill description.
     pub description: String,
+
+    /// Skill category.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<SkillCategory>,
 
     /// Pre-approved tools.
     pub allowed_tools: Vec<String>,
@@ -380,6 +445,7 @@ impl SkillLoadState {
             Self::Full(s) => SkillMetadata {
                 name: s.name.clone(),
                 description: s.description.clone(),
+                category: s.category.clone(),
                 allowed_tools: s.allowed_tools.clone(),
             },
         }
@@ -446,10 +512,41 @@ mod tests {
     }
 
     #[test]
+    fn test_skill_category_display() {
+        assert_eq!(SkillCategory::Engineering.to_string(), "engineering");
+        assert_eq!(SkillCategory::DataAnalysis.to_string(), "data_analysis");
+        assert_eq!(
+            SkillCategory::Custom("my-cat".to_string()).to_string(),
+            "my-cat"
+        );
+    }
+
+    #[test]
+    fn test_skill_category_from_str() {
+        assert_eq!(
+            SkillCategory::from_str_loose("engineering"),
+            SkillCategory::Engineering
+        );
+        assert_eq!(
+            SkillCategory::from_str_loose("data_analysis"),
+            SkillCategory::DataAnalysis
+        );
+        assert_eq!(
+            SkillCategory::from_str_loose("data-analysis"),
+            SkillCategory::DataAnalysis
+        );
+        assert_eq!(
+            SkillCategory::from_str_loose("unknown"),
+            SkillCategory::Custom("unknown".to_string())
+        );
+    }
+
+    #[test]
     fn test_skill_metadata_tokens() {
         let metadata = SkillMetadata {
             name: "test-skill".to_string(),
             description: "A test skill for testing purposes".to_string(),
+            category: Some(SkillCategory::Testing),
             allowed_tools: vec!["tool1".to_string(), "tool2".to_string()],
         };
 

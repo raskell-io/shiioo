@@ -9,8 +9,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::{
-    skill_parser::SkillParser, Skill, SkillDiscovery, SkillMetadata, SkillRef,
-    SkillSource,
+    git_import::{GitImporter, ImportRequest, ImportResult, ScanResult},
+    skill_parser::SkillParser,
+    skill_registry::SkillRegistry,
+    Skill, SkillCategory, SkillDiscovery, SkillMetadata, SkillRef, SkillSource,
 };
 
 /// Trait for managing skills for an agent.
@@ -39,6 +41,18 @@ pub trait SkillManager: Send + Sync {
 
     /// Get the current context token estimate.
     async fn context_tokens(&self) -> usize;
+
+    /// List all registry entries.
+    async fn registry_entries(&self) -> Vec<SkillMetadata>;
+
+    /// List registry entries filtered by category.
+    async fn registry_by_category(&self, category: &SkillCategory) -> Vec<SkillMetadata>;
+
+    /// Scan a git repository for importable skill files.
+    async fn scan_git_repo(&self, url: &str, git_ref: Option<&str>) -> Result<ScanResult>;
+
+    /// Import selected skills from a scanned git repository.
+    async fn import_git_skills(&self, request: &ImportRequest) -> Result<ImportResult>;
 }
 
 /// Configuration for the skill manager.
@@ -89,6 +103,9 @@ pub struct DefaultSkillManager {
 
     /// Currently active skill IDs.
     active_skill_ids: Arc<RwLock<Vec<String>>>,
+
+    /// Categorized skill registry.
+    registry: Arc<RwLock<SkillRegistry>>,
 }
 
 impl DefaultSkillManager {
@@ -107,7 +124,13 @@ impl DefaultSkillManager {
             metadata_cache: Arc::new(RwLock::new(HashMap::new())),
             skill_cache: Arc::new(RwLock::new(HashMap::new())),
             active_skill_ids: Arc::new(RwLock::new(Vec::new())),
+            registry: Arc::new(RwLock::new(SkillRegistry::new())),
         }
+    }
+
+    /// Get a reference to the skill registry.
+    pub fn registry(&self) -> &Arc<RwLock<SkillRegistry>> {
+        &self.registry
     }
 
     /// Create from an AgentSkills configuration.
@@ -179,9 +202,7 @@ impl DefaultSkillManager {
                 }
             }
 
-            SkillSource::Git { repo, path, git_ref: _ } => {
-                // For git sources, we'd clone/fetch to cache
-                // For now, return an error indicating this needs implementation
+            SkillSource::Git { repo, path, git_ref } => {
                 let cache_dir = self
                     .config
                     .cache_dir
@@ -192,12 +213,35 @@ impl DefaultSkillManager {
                 let repo_dir = cache_dir.join("git").join(&repo_hash);
 
                 if !repo_dir.exists() {
-                    // TODO: Clone the repository
-                    return Err(anyhow!(
-                        "Git skill repository not cached. Clone {} to {}",
-                        repo,
-                        repo_dir.display()
-                    ));
+                    // Clone the repository
+                    let mut cmd = tokio::process::Command::new("git");
+                    cmd.arg("clone").arg("--depth").arg("1");
+
+                    if let Some(r) = git_ref {
+                        cmd.arg("--branch").arg(r);
+                    }
+
+                    tokio::fs::create_dir_all(&repo_dir)
+                        .await
+                        .context("Failed to create cache directory")?;
+
+                    cmd.arg(repo).arg(&repo_dir);
+
+                    let output = cmd
+                        .output()
+                        .await
+                        .context("Failed to execute git clone")?;
+
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(anyhow!(
+                            "git clone of {} failed: {}",
+                            repo,
+                            stderr
+                        ));
+                    }
+
+                    tracing::info!(repo = %repo, dir = %repo_dir.display(), "Cloned git skill repository");
                 }
 
                 let skill_path = if let Some(subpath) = path {
@@ -466,6 +510,102 @@ impl SkillManager for DefaultSkillManager {
     async fn context_tokens(&self) -> usize {
         let active = self.active_skills().await;
         active.iter().map(Self::estimate_skill_tokens).sum()
+    }
+
+    async fn registry_entries(&self) -> Vec<SkillMetadata> {
+        let registry = self.registry.read().await;
+        registry.all_metadata()
+    }
+
+    async fn registry_by_category(&self, category: &SkillCategory) -> Vec<SkillMetadata> {
+        let registry = self.registry.read().await;
+        registry
+            .by_category(category)
+            .into_iter()
+            .map(|e| SkillMetadata {
+                name: e.name.clone(),
+                description: e.description.clone(),
+                category: Some(e.category.clone()),
+                allowed_tools: e.allowed_tools.clone(),
+            })
+            .collect()
+    }
+
+    async fn scan_git_repo(&self, url: &str, git_ref: Option<&str>) -> Result<ScanResult> {
+        let cache_dir = self
+            .config
+            .cache_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("Cache directory not configured"))?;
+        let local_dir = self
+            .config
+            .local_skills_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("Local skills directory not configured"))?;
+
+        let importer = GitImporter::new(cache_dir.clone(), local_dir.clone());
+
+        let repo_path = importer.clone_repo(url, git_ref).await?;
+        let files = importer.scan_repo(&repo_path)?;
+
+        Ok(ScanResult {
+            repo_url: url.to_string(),
+            git_ref: git_ref.unwrap_or("HEAD").to_string(),
+            files,
+        })
+    }
+
+    async fn import_git_skills(&self, request: &ImportRequest) -> Result<ImportResult> {
+        let cache_dir = self
+            .config
+            .cache_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("Cache directory not configured"))?;
+        let local_dir = self
+            .config
+            .local_skills_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("Local skills directory not configured"))?;
+
+        let importer = GitImporter::new(cache_dir.clone(), local_dir.clone());
+        let result = importer.import_files(request).await?;
+
+        // Register imported skills in the registry
+        let mut registry = self.registry.write().await;
+        for imported in &result.imported {
+            if let Some(skill) = super::builtin_skills::get_skill(&imported.skill_name) {
+                // Already a builtin, skip
+                let _ = skill;
+            } else {
+                // Try to load the newly saved skill
+                let skill_dir = local_dir.join(&imported.skill_name);
+                let skill_md = skill_dir.join("SKILL.md");
+                if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                    if let Ok(skill) = SkillParser::parse(&content) {
+                        let category = skill
+                            .category
+                            .clone()
+                            .unwrap_or(SkillCategory::Custom("imported".to_string()));
+
+                        registry.register(
+                            super::skill_registry::RegistryEntry {
+                                name: skill.name.clone(),
+                                description: skill.description.clone(),
+                                category,
+                                allowed_tools: skill.allowed_tools.clone(),
+                                tags: vec!["imported".to_string()],
+                                source: super::skill_registry::RegistryEntrySource::Imported {
+                                    origin: request.repo_url.clone(),
+                                },
+                            },
+                            skill,
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 

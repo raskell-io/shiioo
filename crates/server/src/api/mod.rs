@@ -21,6 +21,7 @@ mod agent_handlers;
 mod handlers;
 mod migration_handlers;
 mod runtime_handlers;
+mod skill_handlers;
 
 /// Start the API server with graceful shutdown
 pub async fn serve(addr: &str, config: ServerConfig) -> Result<()> {
@@ -267,6 +268,12 @@ fn create_router(state: AppState, schema: crate::graphql::ShiiooSchema) -> Route
         .route("/api/teams/{team_id}/broadcast", post(runtime_handlers::broadcast_to_team))
         // Workflow-Agent Integration (Phase 13-14)
         .route("/api/workflow/execute-step", post(runtime_handlers::execute_workflow_step))
+        // Skill Registry & Import
+        .route("/api/skills/registry", get(skill_handlers::list_registry_skills))
+        .route("/api/skills/categories", get(skill_handlers::list_categories))
+        .route("/api/skills/git/scan", post(skill_handlers::scan_git_repo))
+        .route("/api/skills/git/import", post(skill_handlers::import_from_git))
+        .route("/api/skills/convert", post(skill_handlers::convert_format))
         // UI routes (Phase 10)
         .route("/dashboard", get(ui::serve_dashboard))
         .fallback(ui::serve_ui)

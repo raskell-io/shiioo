@@ -3,7 +3,7 @@
 //! These skills provide common capabilities for agents without requiring
 //! external skill sources.
 
-use super::{Skill, SkillMetadata};
+use super::{Skill, SkillCategory, SkillMetadata};
 
 /// Get all builtin skill metadata for discovery.
 pub fn all_metadata() -> Vec<SkillMetadata> {
@@ -59,6 +59,7 @@ fn code_review_metadata() -> SkillMetadata {
         name: "code-review".to_string(),
         description: "Review code changes for correctness, style, security, and best practices. \
             Use when reviewing pull requests, commits, or code snippets.".to_string(),
+        category: Some(SkillCategory::Engineering),
         allowed_tools: vec![
             "repo_read".to_string(),
             "context_search".to_string(),
@@ -72,6 +73,7 @@ fn code_review() -> Skill {
         name: "code-review".to_string(),
         description: "Review code changes for correctness, style, security, and best practices. \
             Use when reviewing pull requests, commits, or code snippets.".to_string(),
+        category: Some(SkillCategory::Engineering),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -155,6 +157,7 @@ fn debugging_metadata() -> SkillMetadata {
         name: "debugging".to_string(),
         description: "Diagnose and fix bugs, errors, and unexpected behavior in code. \
             Use when investigating issues, analyzing stack traces, or troubleshooting problems.".to_string(),
+        category: Some(SkillCategory::Engineering),
         allowed_tools: vec![
             "repo_read".to_string(),
             "context_search".to_string(),
@@ -168,6 +171,7 @@ fn debugging() -> Skill {
         name: "debugging".to_string(),
         description: "Diagnose and fix bugs, errors, and unexpected behavior in code. \
             Use when investigating issues, analyzing stack traces, or troubleshooting problems.".to_string(),
+        category: Some(SkillCategory::Engineering),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -251,6 +255,7 @@ fn testing_metadata() -> SkillMetadata {
         name: "testing".to_string(),
         description: "Write and improve tests for code. \
             Use when creating unit tests, integration tests, or improving test coverage.".to_string(),
+        category: Some(SkillCategory::Testing),
         allowed_tools: vec![
             "repo_read".to_string(),
             "repo_write".to_string(),
@@ -264,6 +269,7 @@ fn testing() -> Skill {
         name: "testing".to_string(),
         description: "Write and improve tests for code. \
             Use when creating unit tests, integration tests, or improving test coverage.".to_string(),
+        category: Some(SkillCategory::Testing),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -349,6 +355,7 @@ fn architecture_review_metadata() -> SkillMetadata {
         name: "architecture-review".to_string(),
         description: "Review and design software architecture decisions. \
             Use when evaluating system design, reviewing RFCs, or planning technical changes.".to_string(),
+        category: Some(SkillCategory::Engineering),
         allowed_tools: vec![
             "repo_read".to_string(),
             "context_search".to_string(),
@@ -362,6 +369,7 @@ fn architecture_review() -> Skill {
         name: "architecture-review".to_string(),
         description: "Review and design software architecture decisions. \
             Use when evaluating system design, reviewing RFCs, or planning technical changes.".to_string(),
+        category: Some(SkillCategory::Engineering),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -430,6 +438,7 @@ fn incident_response_metadata() -> SkillMetadata {
         name: "incident-response".to_string(),
         description: "Handle and resolve production incidents. \
             Use when responding to outages, investigating issues, or coordinating incident response.".to_string(),
+        category: Some(SkillCategory::IncidentResponse),
         allowed_tools: vec![
             "repo_read".to_string(),
             "context_search".to_string(),
@@ -443,6 +452,7 @@ fn incident_response() -> Skill {
         name: "incident-response".to_string(),
         description: "Handle and resolve production incidents. \
             Use when responding to outages, investigating issues, or coordinating incident response.".to_string(),
+        category: Some(SkillCategory::IncidentResponse),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -510,6 +520,7 @@ fn data_analysis_metadata() -> SkillMetadata {
         name: "data-analysis".to_string(),
         description: "Analyze datasets, create visualizations, and generate insights. \
             Use when exploring data, creating reports, or answering data questions.".to_string(),
+        category: Some(SkillCategory::DataAnalysis),
         allowed_tools: vec![
             "db_query".to_string(),
             "data_export".to_string(),
@@ -523,6 +534,7 @@ fn data_analysis() -> Skill {
         name: "data-analysis".to_string(),
         description: "Analyze datasets, create visualizations, and generate insights. \
             Use when exploring data, creating reports, or answering data questions.".to_string(),
+        category: Some(SkillCategory::DataAnalysis),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -578,6 +590,7 @@ fn sql_queries_metadata() -> SkillMetadata {
         name: "sql-queries".to_string(),
         description: "Write and optimize SQL queries. \
             Use when querying databases, writing reports, or optimizing query performance.".to_string(),
+        category: Some(SkillCategory::DataAnalysis),
         allowed_tools: vec![
             "db_query".to_string(),
             "context_search".to_string(),
@@ -590,6 +603,7 @@ fn sql_queries() -> Skill {
         name: "sql-queries".to_string(),
         description: "Write and optimize SQL queries. \
             Use when querying databases, writing reports, or optimizing query performance.".to_string(),
+        category: Some(SkillCategory::DataAnalysis),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -641,6 +655,7 @@ fn security_review_metadata() -> SkillMetadata {
         name: "security-review".to_string(),
         description: "Review code and systems for security vulnerabilities. \
             Use when auditing code, checking for vulnerabilities, or assessing security posture.".to_string(),
+        category: Some(SkillCategory::Security),
         allowed_tools: vec![
             "repo_read".to_string(),
             "context_search".to_string(),
@@ -654,6 +669,7 @@ fn security_review() -> Skill {
         name: "security-review".to_string(),
         description: "Review code and systems for security vulnerabilities. \
             Use when auditing code, checking for vulnerabilities, or assessing security posture.".to_string(),
+        category: Some(SkillCategory::Security),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
@@ -720,6 +736,7 @@ fn documentation_metadata() -> SkillMetadata {
         name: "documentation".to_string(),
         description: "Write and improve technical documentation. \
             Use when creating READMEs, API docs, or technical guides.".to_string(),
+        category: Some(SkillCategory::Documentation),
         allowed_tools: vec![
             "repo_read".to_string(),
             "repo_write".to_string(),
@@ -733,6 +750,7 @@ fn documentation() -> Skill {
         name: "documentation".to_string(),
         description: "Write and improve technical documentation. \
             Use when creating READMEs, API docs, or technical guides.".to_string(),
+        category: Some(SkillCategory::Documentation),
         license: Some("Apache-2.0".to_string()),
         compatibility: None,
         allowed_tools: vec![
