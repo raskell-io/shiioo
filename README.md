@@ -6,9 +6,9 @@
 
 *Run a virtual company of AI employees with business processes, governance, and transparent event-sourced persistence.*
 
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
-[![Phase](https://img.shields.io/badge/phase-16%20complete-green.svg)](https://github.com/raskell-io/shiioo)
+[![Phase](https://img.shields.io/badge/CLI%20phase-4%20(tool%20use)-green.svg)](https://github.com/raskell-io/shiioo)
 
 [Documentation](#quick-start) · [SDK](#rust-sdk) · [API Reference](#api-endpoints) · [Contributing](#community)
 
@@ -19,17 +19,42 @@
 ## Quick Start
 
 ```bash
-# Build and run
+# Build
 cargo build --release
-./target/release/shiioo-server
 
-# Or with mise
-mise run build
-mise run serve
+# Start the CLI — talk to your Chief of Staff
+export ANTHROPIC_API_KEY=sk-ant-...
+./target/release/shiioo
+
+# Or start the API server
+export SHIIOO_ENCRYPTION_KEY=$(openssl rand -base64 32 | head -c 32)
+./target/release/shiioo serve
 
 # Visit the dashboard
 open http://localhost:8080
 ```
+
+### CLI (Chief of Staff)
+
+The `shiioo` command launches an interactive REPL where you talk to your Chief of Staff — an AI assistant that manages your virtual company. It can look up employees, hire new ones, delegate tasks, and report on company status using real tools.
+
+```
+CEO > list my employees
+Chief of Staff
+  [calling list_employees]
+  [list_employees done] Found 3 employee(s):
+...
+
+CEO > hire a frontend engineer named Alice on the engineering team
+Chief of Staff
+  [calling hire_employee] name=Alice, description=Frontend Engineer, team=engineering
+  [hire_employee done] Hired Alice (id: abc-123) on team 'engineering'.
+...
+```
+
+Slash commands: `/help`, `/status`, `/employees`, `/cost`, `/model <name>`, `/clear`, `/quit`
+
+### API Server
 
 The server starts with an embedded web dashboard, GraphQL API, and real-time monitoring at `http://localhost:8080`.
 
@@ -39,6 +64,9 @@ The server starts with an embedded web dashboard, GraphQL API, and real-time mon
 
 | Feature | Description |
 |---------|-------------|
+| **CLI REPL** | Talk to your Chief of Staff — an agentic AI assistant with tool use |
+| **Tool Use** | 7 built-in tools: list/get/hire employees, delegate tasks, check budgets, company status |
+| **LLM Streaming** | Token-by-token SSE streaming via Anthropic Messages API with multi-source capacity |
 | **DAG Workflows** | Define multi-step workflows with dependencies, retries, and timeouts |
 | **Employee Primitive** | Virtual employees with skills, policies, MCP bindings, and budgets |
 | **Employee Runtime** | Execute employee tasks with tool calls, budget tracking, and policy enforcement |
@@ -86,14 +114,19 @@ Shiioo enables you to define **roles**, **processes**, **jobs**, **routines**, a
 
 ## Architecture
 
-Shiioo is a single Rust binary that runs:
+Shiioo is a single Rust binary with two modes:
 
-- **API Server** — RESTful + GraphQL with WebSocket subscriptions
+- **CLI REPL** (`shiioo`) — Interactive Chief of Staff with tool-use agentic loop
+- **API Server** (`shiioo serve`) — RESTful + GraphQL with WebSocket subscriptions
+
+Both share the same core engine:
+
 - **Workflow Engine** — DAG execution with retries, timeouts, idempotency
 - **Policy Engine** — Authorization, governance, and approval workflows
+- **LLM Client** — Anthropic Messages API with SSE streaming and tool use
+- **Capacity Broker** — Routes LLM calls across multiple API keys/providers
 - **MCP Tool Server** — Enterprise tools exposed to agent clients
 - **Scheduler** — Cron + queue for recurring workflows
-- **Capacity Broker** — Routes LLM calls across multiple API keys/providers
 - **Web Dashboard** — Real-time monitoring with embedded static assets
 
 ### Storage Model
@@ -244,7 +277,8 @@ index_file = "index.redb"
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SHIIOO_ENCRYPTION_KEY` | **Yes** | 32-byte key for encrypting secrets (AES-256) |
+| `ANTHROPIC_API_KEY` | **Yes** (CLI) | Anthropic API key for the Chief of Staff. Without it, the CLI uses mock responses |
+| `SHIIOO_ENCRYPTION_KEY` | **Yes** (server) | 32-byte key for encrypting secrets (AES-256) |
 | `SHIIOO_DATA_DIR` | No | Data directory (default: `./data`) |
 | `SHIIOO_PORT` | No | Server port (default: `8080`) |
 | `SHIIOO_RATE_LIMIT_PER_SECOND` | No | API rate limit per second (default: `10`) |
@@ -279,8 +313,9 @@ export SHIIOO_DATA_DIR=./data
 ```
 shiioo/
 ├── crates/
-│   ├── core/          # Domain types, storage, workflow engine, policy engine
-│   ├── server/        # API server, GraphQL, dashboard UI
+│   ├── core/          # Domain types, storage, workflow engine, policy engine, LLM client
+│   ├── server/        # API server, GraphQL, dashboard UI, CLI REPL
+│   │   └── src/cli/   # REPL, conversation, renderer, tool definitions
 │   ├── mcp/           # MCP tool server (JSON-RPC over stdio)
 │   └── sdk/           # Rust SDK client library
 ├── .mise.toml         # Task and dependency management
@@ -329,7 +364,7 @@ cat data/blobs/ab/<full-hash>
 
 ## Current Status
 
-**Phase 16 Complete** ✅
+**CLI Phase 4 Complete** ✅
 
 All core features are production-ready:
 
@@ -350,7 +385,11 @@ All core features are production-ready:
 - ✅ Phase 15: Testing infrastructure (integration + property-based tests)
 - ✅ Phase 16: Documentation and API refinement
 
-**Next:** Production hardening, CI/CD, and deployment guides
+**CLI Phases:**
+- ✅ CLI Phase 1: REPL skeleton with slash commands
+- ✅ CLI Phase 2: Real LLM integration via Anthropic API
+- ✅ CLI Phase 3: Token-by-token streaming
+- ✅ CLI Phase 4: Tool use — 7 tools with agentic loop (up to 10 rounds)
 
 ---
 
