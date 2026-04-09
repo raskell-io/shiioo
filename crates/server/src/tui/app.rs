@@ -1,4 +1,4 @@
-use shiioo_core::agent::{Agent, AgentId, AgentStatus};
+use shiioo_core::agent::{Agent, AgentId, AgentStatus, AgentTeam};
 use shiioo_core::analytics::ExecutionTrace;
 use shiioo_core::storage::AgentStore;
 use shiioo_core::types::ApprovalStatus;
@@ -10,6 +10,8 @@ use crate::config::AppState;
 pub enum View {
     Dashboard,
     EmployeeDetail(AgentId),
+    Logs,
+    Teams,
 }
 
 /// Cached data from the service layer, refreshed on each tick.
@@ -24,6 +26,7 @@ pub struct DashboardData {
     pub capacity_sources: usize,
     pub cost_24h: f64,
     pub recent_traces: Vec<ExecutionTrace>,
+    pub teams: Vec<AgentTeam>,
 }
 
 /// Main TUI application state.
@@ -32,6 +35,7 @@ pub struct App {
     pub current_view: View,
     pub data: DashboardData,
     pub selected: usize,
+    pub log_selected: usize,
     pub should_quit: bool,
 }
 
@@ -42,6 +46,7 @@ impl App {
             current_view: View::Dashboard,
             data: DashboardData::default(),
             selected: 0,
+            log_selected: 0,
             should_quit: false,
         }
     }
@@ -68,6 +73,7 @@ impl App {
         // Teams
         let teams = self.state.agent_orchestrator.list_teams().await;
         self.data.team_count = teams.len();
+        self.data.teams = teams;
 
         // Approvals
         let approvals = self.state.approval_manager.list_approvals();
@@ -82,11 +88,15 @@ impl App {
         self.data.cost_24h = self.state.capacity_broker.get_total_cost(since);
 
         // Recent activity
-        self.data.recent_traces = self.state.analytics.get_recent_traces(20);
+        self.data.recent_traces = self.state.analytics.get_recent_traces(50);
 
-        // Clamp selection
+        // Clamp selections
         if !self.data.employees.is_empty() && self.selected >= self.data.employees.len() {
             self.selected = self.data.employees.len() - 1;
+        }
+        if !self.data.recent_traces.is_empty() && self.log_selected >= self.data.recent_traces.len()
+        {
+            self.log_selected = self.data.recent_traces.len() - 1;
         }
     }
 
@@ -102,6 +112,22 @@ impl App {
                 self.selected = self.data.employees.len() - 1;
             } else {
                 self.selected -= 1;
+            }
+        }
+    }
+
+    pub fn log_select_next(&mut self) {
+        if !self.data.recent_traces.is_empty() {
+            self.log_selected = (self.log_selected + 1) % self.data.recent_traces.len();
+        }
+    }
+
+    pub fn log_select_prev(&mut self) {
+        if !self.data.recent_traces.is_empty() {
+            if self.log_selected == 0 {
+                self.log_selected = self.data.recent_traces.len() - 1;
+            } else {
+                self.log_selected -= 1;
             }
         }
     }

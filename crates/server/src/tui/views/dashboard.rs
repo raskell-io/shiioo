@@ -286,6 +286,10 @@ fn render_status_bar(f: &mut Frame, area: Rect) {
         Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
         Span::styled("Enter", Style::default().fg(Color::Yellow)),
         Span::styled(" detail  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("l", Style::default().fg(Color::Yellow)),
+        Span::styled(" logs  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("t", Style::default().fg(Color::Yellow)),
+        Span::styled(" teams  ", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
         Span::styled(" refresh", Style::default().fg(Color::DarkGray)),
     ]);

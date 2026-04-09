@@ -17,7 +17,7 @@ use ratatui::Terminal;
 use crate::config::{AppState, ServerConfig};
 use app::{App, View};
 use event::{AppEvent, EventHandler};
-use views::{render_dashboard, render_employee_detail};
+use views::{render_dashboard, render_employee_detail, render_logs, render_teams};
 
 /// Run the TUI dashboard.
 pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
@@ -52,6 +52,8 @@ pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
         terminal.draw(|f| match app.current_view {
             View::Dashboard => render_dashboard(f, &app),
             View::EmployeeDetail(_) => render_employee_detail(f, &app),
+            View::Logs => render_logs(f, &app),
+            View::Teams => render_teams(f, &app),
         })?;
 
         // Handle events
@@ -63,10 +65,24 @@ pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
                         KeyCode::Char('j') | KeyCode::Down => app.select_next(),
                         KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
                         KeyCode::Enter => app.open_employee_detail(),
+                        KeyCode::Char('l') => app.current_view = View::Logs,
+                        KeyCode::Char('t') => app.current_view = View::Teams,
                         KeyCode::Char('r') => app.refresh().await,
                         _ => {}
                     },
                     View::EmployeeDetail(_) => match key.code {
+                        KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                        KeyCode::Char('q') => app.should_quit = true,
+                        _ => {}
+                    },
+                    View::Logs => match key.code {
+                        KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                        KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Char('j') | KeyCode::Down => app.log_select_next(),
+                        KeyCode::Char('k') | KeyCode::Up => app.log_select_prev(),
+                        _ => {}
+                    },
+                    View::Teams => match key.code {
                         KeyCode::Esc | KeyCode::Backspace => app.go_back(),
                         KeyCode::Char('q') => app.should_quit = true,
                         _ => {}
