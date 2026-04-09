@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod graphql;
 mod middleware;
+mod tui;
 mod ui;
 mod websocket;
 
@@ -43,6 +44,13 @@ enum Commands {
         /// Host to bind to
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+    },
+
+    /// Launch the CEO command center (TUI dashboard)
+    Dashboard {
+        /// Refresh interval in seconds
+        #[arg(short, long, default_value = "2")]
+        refresh: u64,
     },
 }
 
@@ -102,6 +110,11 @@ async fn main() -> Result<()> {
             api::serve(&addr, config).await?;
 
             tracing::info!("Shiioo shutdown complete");
+        }
+        Some(Commands::Dashboard { refresh }) => {
+            // TUI mode: CEO command center
+            let config = ServerConfig::load(&cli.config, cli.data_dir)?;
+            tui::run(config, refresh).await?;
         }
         None => {
             // REPL mode: conversational Chief of Staff

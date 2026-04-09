@@ -79,5 +79,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rustyline = "14"
 crossterm = "0.28"
 
+# TUI
+ratatui = { version = "0.29", features = ["crossterm"] }
+
 # MCP
 # Note: Will need to add proper MCP protocol dependencies when building that module

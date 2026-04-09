@@ -41,6 +41,9 @@ http = "1.1"
 # CLI REPL
 rustyline = { workspace = true }
 crossterm = { workspace = true }
+
+# TUI Dashboard
+ratatui = { workspace = true }
 tokio-stream = { workspace = true }
 futures-core = "0.3"
 

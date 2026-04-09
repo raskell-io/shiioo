@@ -1,0 +1,90 @@
+mod app;
+mod event;
+mod views;
+
+use std::io;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use crossterm::{
+    event::KeyCode,
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::prelude::CrosstermBackend;
+use ratatui::Terminal;
+
+use crate::config::{AppState, ServerConfig};
+use app::App;
+use event::{AppEvent, EventHandler};
+use views::render_dashboard;
+
+/// Run the TUI dashboard.
+pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
+    let state = AppState::new(&config).context("Failed to initialize application state")?;
+    let mut app = App::new(state);
+
+    // Initial data load
+    app.refresh().await;
+
+    // Setup terminal
+    enable_raw_mode().context("Failed to enable raw mode")?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen).context("Failed to enter alternate screen")?;
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
+
+    // Install panic hook to restore terminal
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        original_hook(panic_info);
+    }));
+
+    // Event loop
+    let tick_rate = Duration::from_secs(refresh_secs);
+    let mut events = EventHandler::new(tick_rate);
+
+    loop {
+        // Draw
+        terminal.draw(|f| render_dashboard(f, &app))?;
+
+        // Handle events
+        if let Some(event) = events.next().await {
+            match event {
+                AppEvent::Key(key) => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        app.should_quit = true;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.select_next();
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.select_prev();
+                    }
+                    KeyCode::Char('r') => {
+                        app.refresh().await;
+                    }
+                    _ => {}
+                },
+                AppEvent::Tick => {
+                    app.refresh().await;
+                }
+            }
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    // Restore terminal
+    disable_raw_mode().context("Failed to disable raw mode")?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)
+        .context("Failed to leave alternate screen")?;
+    terminal.show_cursor().context("Failed to show cursor")?;
+
+    Ok(())
+}
