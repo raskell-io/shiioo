@@ -1,4 +1,4 @@
-use shiioo_core::agent::{Agent, AgentStatus};
+use shiioo_core::agent::{Agent, AgentId, AgentStatus};
 use shiioo_core::storage::AgentStore;
 use shiioo_core::types::ApprovalStatus;
 
@@ -8,6 +8,7 @@ use crate::config::AppState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum View {
     Dashboard,
+    EmployeeDetail(AgentId),
 }
 
 /// Cached data from the service layer, refreshed on each tick.
@@ -97,6 +98,27 @@ impl App {
             } else {
                 self.selected -= 1;
             }
+        }
+    }
+
+    /// Open the detail view for the currently selected employee.
+    pub fn open_employee_detail(&mut self) {
+        if let Some(agent) = self.data.employees.get(self.selected) {
+            self.current_view = View::EmployeeDetail(agent.id.clone());
+        }
+    }
+
+    /// Go back to the dashboard.
+    pub fn go_back(&mut self) {
+        self.current_view = View::Dashboard;
+    }
+
+    /// Get the employee for the current detail view.
+    pub fn selected_employee(&self) -> Option<&Agent> {
+        if let View::EmployeeDetail(ref id) = self.current_view {
+            self.data.employees.iter().find(|a| &a.id == id)
+        } else {
+            None
         }
     }
 }

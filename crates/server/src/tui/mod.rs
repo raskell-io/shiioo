@@ -15,9 +15,9 @@ use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::config::{AppState, ServerConfig};
-use app::App;
+use app::{App, View};
 use event::{AppEvent, EventHandler};
-use views::render_dashboard;
+use views::{render_dashboard, render_employee_detail};
 
 /// Run the TUI dashboard.
 pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
@@ -48,26 +48,29 @@ pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
     let mut events = EventHandler::new(tick_rate);
 
     loop {
-        // Draw
-        terminal.draw(|f| render_dashboard(f, &app))?;
+        // Draw based on current view
+        terminal.draw(|f| match app.current_view {
+            View::Dashboard => render_dashboard(f, &app),
+            View::EmployeeDetail(_) => render_employee_detail(f, &app),
+        })?;
 
         // Handle events
         if let Some(event) = events.next().await {
             match event {
-                AppEvent::Key(key) => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        app.should_quit = true;
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        app.select_next();
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        app.select_prev();
-                    }
-                    KeyCode::Char('r') => {
-                        app.refresh().await;
-                    }
-                    _ => {}
+                AppEvent::Key(key) => match app.current_view {
+                    View::Dashboard => match key.code {
+                        KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Char('j') | KeyCode::Down => app.select_next(),
+                        KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+                        KeyCode::Enter => app.open_employee_detail(),
+                        KeyCode::Char('r') => app.refresh().await,
+                        _ => {}
+                    },
+                    View::EmployeeDetail(_) => match key.code {
+                        KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                        KeyCode::Char('q') => app.should_quit = true,
+                        _ => {}
+                    },
                 },
                 AppEvent::Tick => {
                     app.refresh().await;
