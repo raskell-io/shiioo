@@ -54,6 +54,18 @@ Chief of Staff
 
 Slash commands: `/help`, `/status`, `/employees`, `/cost`, `/model <name>`, `/clear`, `/quit`
 
+### TUI Dashboard (CEO Command Center)
+
+A terminal-based dashboard for monitoring and managing your company at a glance.
+
+```bash
+shiioo dashboard
+```
+
+Navigate employees with `j`/`k`, press `Enter` for details, `l` for logs, `t` for teams, `:` to run commands. Data auto-refreshes every 2 seconds.
+
+See [docs/TUI_DASHBOARD.md](docs/TUI_DASHBOARD.md) for the full reference.
+
 ### API Server
 
 The server starts with an embedded web dashboard, GraphQL API, and real-time monitoring at `http://localhost:8080`.
