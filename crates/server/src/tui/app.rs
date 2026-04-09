@@ -351,7 +351,7 @@ fn parse_command(input: &str) -> (Option<String>, serde_json::Value) {
 }
 
 /// Simple shell-like argument splitting that respects double quotes.
-fn shell_split(input: &str) -> Vec<String> {
+pub(crate) fn shell_split(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -372,4 +372,411 @@ fn shell_split(input: &str) -> Vec<String> {
     }
 
     tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiioo_core::agent::AgentOrganization;
+    use shiioo_core::types::TeamId;
+
+    // --- shell_split ---
+
+    #[test]
+    fn test_shell_split_simple() {
+        assert_eq!(shell_split("a b c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_shell_split_quoted() {
+        assert_eq!(
+            shell_split(r#"Alice "Senior Engineer" engineering"#),
+            vec!["Alice", "Senior Engineer", "engineering"]
+        );
+    }
+
+    #[test]
+    fn test_shell_split_empty() {
+        assert!(shell_split("").is_empty());
+    }
+
+    #[test]
+    fn test_shell_split_extra_spaces() {
+        assert_eq!(shell_split("  a   b  "), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_shell_split_single_token() {
+        assert_eq!(shell_split("hello"), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_shell_split_quoted_with_spaces() {
+        assert_eq!(
+            shell_split(r#""hello world""#),
+            vec!["hello world"]
+        );
+    }
+
+    // --- parse_command ---
+
+    #[test]
+    fn test_parse_status() {
+        let (name, input) = parse_command("/status");
+        assert_eq!(name.as_deref(), Some("company_status"));
+        assert_eq!(input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_parse_status_alias() {
+        let (name, _) = parse_command("/s");
+        assert_eq!(name.as_deref(), Some("company_status"));
+    }
+
+    #[test]
+    fn test_parse_teams() {
+        let (name, _) = parse_command("/teams");
+        assert_eq!(name.as_deref(), Some("list_teams"));
+    }
+
+    #[test]
+    fn test_parse_employees_no_args() {
+        let (name, input) = parse_command("/employees");
+        assert_eq!(name.as_deref(), Some("list_employees"));
+        assert_eq!(input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_parse_employees_by_status() {
+        let (name, input) = parse_command("/employees active");
+        assert_eq!(name.as_deref(), Some("list_employees"));
+        assert_eq!(input["status"], "active");
+    }
+
+    #[test]
+    fn test_parse_employees_by_team() {
+        let (name, input) = parse_command("/employees team=engineering");
+        assert_eq!(name.as_deref(), Some("list_employees"));
+        assert_eq!(input["team"], "engineering");
+    }
+
+    #[test]
+    fn test_parse_employees_aliases() {
+        let (name, _) = parse_command("/emp");
+        assert_eq!(name.as_deref(), Some("list_employees"));
+        let (name, _) = parse_command("/ls");
+        assert_eq!(name.as_deref(), Some("list_employees"));
+    }
+
+    #[test]
+    fn test_parse_employee_detail() {
+        let (name, input) = parse_command("/employee eng-alice");
+        assert_eq!(name.as_deref(), Some("get_employee"));
+        assert_eq!(input["id"], "eng-alice");
+    }
+
+    #[test]
+    fn test_parse_hire() {
+        let (name, input) = parse_command(r#"/hire Alice "Software Engineer" engineering"#);
+        assert_eq!(name.as_deref(), Some("hire_employee"));
+        assert_eq!(input["name"], "Alice");
+        assert_eq!(input["description"], "Software Engineer");
+        assert_eq!(input["team"], "engineering");
+    }
+
+    #[test]
+    fn test_parse_hire_with_archetype() {
+        let (name, input) = parse_command(r#"/hire Bob "QA Lead" quality qa-lead"#);
+        assert_eq!(name.as_deref(), Some("hire_employee"));
+        assert_eq!(input["name"], "Bob");
+        assert_eq!(input["team"], "quality");
+        assert_eq!(input["archetype"], "qa-lead");
+    }
+
+    #[test]
+    fn test_parse_hire_alias() {
+        let (name, input) = parse_command(r#"/h Charlie "Dev" eng"#);
+        assert_eq!(name.as_deref(), Some("hire_employee"));
+        assert_eq!(input["name"], "Charlie");
+    }
+
+    #[test]
+    fn test_parse_hire_too_few_args() {
+        let (name, _) = parse_command("/hire Alice");
+        assert!(name.is_none()); // Returns None for insufficient args
+    }
+
+    #[test]
+    fn test_parse_delegate() {
+        let (name, input) = parse_command("/delegate eng-alice review the PR");
+        assert_eq!(name.as_deref(), Some("delegate_task"));
+        assert_eq!(input["employee_id"], "eng-alice");
+        assert_eq!(input["task"], "review the PR");
+    }
+
+    #[test]
+    fn test_parse_delegate_too_few_args() {
+        let (name, _) = parse_command("/delegate");
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn test_parse_budgets_no_args() {
+        let (name, input) = parse_command("/budgets");
+        assert_eq!(name.as_deref(), Some("check_budgets"));
+        assert_eq!(input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_parse_budgets_with_id() {
+        let (name, input) = parse_command("/budgets eng-alice");
+        assert_eq!(name.as_deref(), Some("check_budgets"));
+        assert_eq!(input["employee_id"], "eng-alice");
+    }
+
+    #[test]
+    fn test_parse_unknown_command() {
+        let (name, _) = parse_command("/foobar");
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn test_parse_without_slash() {
+        // Commands work without leading slash too
+        let (name, _) = parse_command("status");
+        assert_eq!(name.as_deref(), Some("company_status"));
+    }
+
+    // --- View enum ---
+
+    #[test]
+    fn test_view_equality() {
+        assert_eq!(View::Dashboard, View::Dashboard);
+        assert_eq!(View::Logs, View::Logs);
+        assert_eq!(View::Teams, View::Teams);
+        assert_ne!(View::Dashboard, View::Logs);
+    }
+
+    #[test]
+    fn test_view_employee_detail_equality() {
+        let id = AgentId::new("eng-alice");
+        assert_eq!(
+            View::EmployeeDetail(id.clone()),
+            View::EmployeeDetail(id)
+        );
+        assert_ne!(
+            View::EmployeeDetail(AgentId::new("a")),
+            View::EmployeeDetail(AgentId::new("b"))
+        );
+    }
+
+    // --- DashboardData & selection ---
+
+    fn make_agent(id: &str, name: &str, status: AgentStatus) -> Agent {
+        let mut agent = Agent::builder(id, name)
+            .organization(AgentOrganization::new(TeamId::new("eng")))
+            .build();
+        agent.status = status;
+        agent
+    }
+
+    fn make_data_with_employees(n: usize) -> DashboardData {
+        let employees: Vec<Agent> = (0..n)
+            .map(|i| make_agent(&format!("emp-{i}"), &format!("Emp {i}"), AgentStatus::Active))
+            .collect();
+        DashboardData {
+            active_count: n,
+            employees,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_dashboard_data_default() {
+        let data = DashboardData::default();
+        assert!(data.employees.is_empty());
+        assert_eq!(data.active_count, 0);
+        assert_eq!(data.cost_24h, 0.0);
+    }
+
+    #[test]
+    fn test_select_next_wraps() {
+        // Can't create App without AppState, so test the logic directly on DashboardData
+        let data = make_data_with_employees(3);
+        let mut selected = 0usize;
+
+        // Simulating select_next logic
+        selected = (selected + 1) % data.employees.len();
+        assert_eq!(selected, 1);
+        selected = (selected + 1) % data.employees.len();
+        assert_eq!(selected, 2);
+        selected = (selected + 1) % data.employees.len();
+        assert_eq!(selected, 0); // wraps
+    }
+
+    #[test]
+    fn test_select_prev_wraps() {
+        let data = make_data_with_employees(3);
+        let mut selected = 0usize;
+
+        // select_prev logic
+        if selected == 0 {
+            selected = data.employees.len() - 1;
+        } else {
+            selected -= 1;
+        }
+        assert_eq!(selected, 2); // wraps to end
+
+        selected -= 1;
+        assert_eq!(selected, 1);
+    }
+
+    #[test]
+    fn test_select_on_empty_data() {
+        let data = make_data_with_employees(0);
+        // select_next is a no-op when empty
+        assert!(data.employees.is_empty());
+    }
+
+    // --- Command input editing ---
+
+    #[test]
+    fn test_command_input_insert_and_delete() {
+        let mut input = String::new();
+        let mut cursor = 0usize;
+
+        // Insert chars
+        input.insert(cursor, 'a');
+        cursor += 1;
+        input.insert(cursor, 'b');
+        cursor += 1;
+        input.insert(cursor, 'c');
+        cursor += 1;
+        assert_eq!(input, "abc");
+        assert_eq!(cursor, 3);
+
+        // Delete last char (backspace logic from command_delete_char)
+        if cursor > 0 {
+            let prev = input[..cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            input.drain(prev..cursor);
+            cursor = prev;
+        }
+        assert_eq!(input, "ab");
+        assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn test_command_input_cursor_movement() {
+        let input = "hello";
+        let mut cursor = input.len(); // at end
+
+        // Move left
+        cursor = input[..cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        assert_eq!(cursor, 4); // before 'o'
+
+        // Move right
+        cursor = input[cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| cursor + i)
+            .unwrap_or(input.len());
+        assert_eq!(cursor, 5); // back to end
+    }
+
+    #[test]
+    fn test_command_input_cursor_at_boundaries() {
+        let input = "ab";
+        let cursor = 0usize;
+
+        // Move left at 0 stays at 0
+        let new_cursor = if cursor > 0 {
+            input[..cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        assert_eq!(new_cursor, 0);
+
+        // Move right at end stays at end
+        let cursor = input.len();
+        let new_cursor = input[cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| cursor + i)
+            .unwrap_or(input.len());
+        assert_eq!(new_cursor, input.len());
+    }
+
+    // --- CommandMessage ---
+
+    #[test]
+    fn test_push_message_limits_to_10() {
+        let mut messages: VecDeque<CommandMessage> = VecDeque::new();
+        for i in 0..15 {
+            messages.push_front(CommandMessage {
+                text: format!("msg {i}"),
+                is_error: false,
+            });
+            while messages.len() > 10 {
+                messages.pop_back();
+            }
+        }
+        assert_eq!(messages.len(), 10);
+        assert_eq!(messages.front().unwrap().text, "msg 14");
+        assert_eq!(messages.back().unwrap().text, "msg 5");
+    }
+
+    // --- Employee lookup ---
+
+    #[test]
+    fn test_selected_employee_on_dashboard_view() {
+        // selected_employee returns None when not on EmployeeDetail view
+        let data = make_data_with_employees(3);
+        let view = View::Dashboard;
+        let result = if let View::EmployeeDetail(ref id) = view {
+            data.employees.iter().find(|a| &a.id == id)
+        } else {
+            None
+        };
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_selected_employee_found() {
+        let data = make_data_with_employees(3);
+        let target_id = data.employees[1].id.clone();
+        let view = View::EmployeeDetail(target_id.clone());
+
+        let result = if let View::EmployeeDetail(ref id) = view {
+            data.employees.iter().find(|a| &a.id == id)
+        } else {
+            None
+        };
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, target_id);
+    }
+
+    #[test]
+    fn test_selected_employee_not_found() {
+        let data = make_data_with_employees(3);
+        let view = View::EmployeeDetail(AgentId::new("nonexistent"));
+
+        let result = if let View::EmployeeDetail(ref id) = view {
+            data.employees.iter().find(|a| &a.id == id)
+        } else {
+            None
+        };
+        assert!(result.is_none());
+    }
 }

@@ -1,6 +1,8 @@
-mod app;
+pub(crate) mod app;
 mod event;
-mod views;
+#[cfg(test)]
+mod tests;
+pub(crate) mod views;
 
 use std::io;
 use std::time::Duration;
