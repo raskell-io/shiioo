@@ -1,4 +1,5 @@
 use shiioo_core::agent::{Agent, AgentId, AgentStatus};
+use shiioo_core::analytics::ExecutionTrace;
 use shiioo_core::storage::AgentStore;
 use shiioo_core::types::ApprovalStatus;
 
@@ -22,6 +23,7 @@ pub struct DashboardData {
     pub pending_approvals: usize,
     pub capacity_sources: usize,
     pub cost_24h: f64,
+    pub recent_traces: Vec<ExecutionTrace>,
 }
 
 /// Main TUI application state.
@@ -78,6 +80,9 @@ impl App {
         self.data.capacity_sources = self.state.capacity_broker.list_sources().len();
         let since = chrono::Utc::now() - chrono::Duration::days(1);
         self.data.cost_24h = self.state.capacity_broker.get_total_cost(since);
+
+        // Recent activity
+        self.data.recent_traces = self.state.analytics.get_recent_traces(20);
 
         // Clamp selection
         if !self.data.employees.is_empty() && self.selected >= self.data.employees.len() {

@@ -2,10 +2,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState},
     Frame,
 };
 use shiioo_core::agent::AgentStatus;
+use shiioo_core::analytics::TraceStatus;
 
 use crate::tui::app::App;
 
@@ -15,13 +16,21 @@ pub fn render_dashboard(f: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),  // Company overview
-            Constraint::Min(10),   // Employee table
+            Constraint::Min(10),   // Employee table + activity feed
             Constraint::Length(2), // Status bar
         ])
         .split(f.area());
 
     render_overview(f, app, chunks[0]);
-    render_employee_table(f, app, chunks[1]);
+
+    // Split middle area: employee table (left) + activity feed (right)
+    let middle = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(chunks[1]);
+
+    render_employee_table(f, app, middle[0]);
+    render_activity_feed(f, app, middle[1]);
     render_status_bar(f, chunks[2]);
 }
 
@@ -114,7 +123,6 @@ fn render_employee_table(f: &mut Frame, app: &App, area: Rect) {
         Cell::from("Status"),
         Cell::from("Team"),
         Cell::from("Role"),
-        Cell::from("Reports To"),
     ])
     .style(
         Style::default()
@@ -162,14 +170,6 @@ fn render_employee_table(f: &mut Frame, app: &App, area: Rect) {
                         .map(|a| a.0.clone())
                         .unwrap_or_default(),
                 ),
-                Cell::from(
-                    agent
-                        .organization
-                        .reports_to
-                        .as_ref()
-                        .map(|id| id.0.clone())
-                        .unwrap_or_else(|| "—".into()),
-                ),
             ])
             .style(row_style)
         })
@@ -186,11 +186,10 @@ fn render_employee_table(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray));
 
     let widths = [
-        Constraint::Percentage(20),
-        Constraint::Percentage(12),
-        Constraint::Percentage(20),
-        Constraint::Percentage(25),
-        Constraint::Percentage(23),
+        Constraint::Percentage(28),
+        Constraint::Percentage(18),
+        Constraint::Percentage(27),
+        Constraint::Percentage(27),
     ];
 
     let table = Table::new(rows, widths)
@@ -210,6 +209,74 @@ fn render_employee_table(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
+/// Activity feed showing recent execution traces.
+fn render_activity_feed(f: &mut Frame, app: &App, area: Rect) {
+    let items: Vec<ListItem> = if app.data.recent_traces.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "  No recent activity",
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        app.data
+            .recent_traces
+            .iter()
+            .map(|trace| {
+                let (status_icon, status_color) = match trace.status {
+                    TraceStatus::Running => (">>", Color::Blue),
+                    TraceStatus::Completed => ("ok", Color::Green),
+                    TraceStatus::Failed => ("!!", Color::Red),
+                    TraceStatus::Cancelled => ("--", Color::DarkGray),
+                };
+
+                let time = trace.started_at.format("%H:%M:%S");
+
+                let duration = trace
+                    .duration_secs
+                    .map(|d| {
+                        if d < 1.0 {
+                            format!("{:.0}ms", d * 1000.0)
+                        } else if d < 60.0 {
+                            format!("{:.1}s", d)
+                        } else {
+                            format!("{:.0}m", d / 60.0)
+                        }
+                    })
+                    .unwrap_or_default();
+
+                let line = Line::from(vec![
+                    Span::styled(format!(" {time} "), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{status_icon}"),
+                        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(&trace.workflow_id, Style::default().fg(Color::White)),
+                    if !duration.is_empty() {
+                        Span::styled(format!(" ({duration})"), Style::default().fg(Color::DarkGray))
+                    } else {
+                        Span::raw("")
+                    },
+                ]);
+
+                ListItem::new(line)
+            })
+            .collect()
+    };
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Activity ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
 /// Bottom status bar with key bindings.
 fn render_status_bar(f: &mut Frame, area: Rect) {
     let keys = Line::from(vec![
@@ -217,6 +284,8 @@ fn render_status_bar(f: &mut Frame, area: Rect) {
         Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
         Span::styled("j/k", Style::default().fg(Color::Yellow)),
         Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Yellow)),
+        Span::styled(" detail  ", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
         Span::styled(" refresh", Style::default().fg(Color::DarkGray)),
     ]);
