@@ -8,6 +8,7 @@ use ratatui::{
 use shiioo_core::agent::AgentStatus;
 use shiioo_core::analytics::TraceStatus;
 
+use super::render_command_area;
 use crate::tui::app::App;
 
 /// Render the main CEO dashboard.
@@ -17,7 +18,7 @@ pub fn render_dashboard(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(9),  // Company overview
             Constraint::Min(10),   // Employee table + activity feed
-            Constraint::Length(2), // Status bar
+            Constraint::Length(2), // Command bar / status bar
         ])
         .split(f.area());
 
@@ -31,7 +32,7 @@ pub fn render_dashboard(f: &mut Frame, app: &App) {
 
     render_employee_table(f, app, middle[0]);
     render_activity_feed(f, app, middle[1]);
-    render_status_bar(f, chunks[2]);
+    render_command_area(f, app, chunks[2]);
 }
 
 /// Company overview panel.
@@ -277,23 +278,3 @@ fn render_activity_feed(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(list, area);
 }
 
-/// Bottom status bar with key bindings.
-fn render_status_bar(f: &mut Frame, area: Rect) {
-    let keys = Line::from(vec![
-        Span::styled(" q", Style::default().fg(Color::Yellow)),
-        Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("j/k", Style::default().fg(Color::Yellow)),
-        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Yellow)),
-        Span::styled(" detail  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("l", Style::default().fg(Color::Yellow)),
-        Span::styled(" logs  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("t", Style::default().fg(Color::Yellow)),
-        Span::styled(" teams  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("r", Style::default().fg(Color::Yellow)),
-        Span::styled(" refresh", Style::default().fg(Color::DarkGray)),
-    ]);
-
-    let paragraph = Paragraph::new(keys);
-    f.render_widget(paragraph, area);
-}

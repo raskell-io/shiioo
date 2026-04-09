@@ -59,35 +59,57 @@ pub async fn run(config: ServerConfig, refresh_secs: u64) -> Result<()> {
         // Handle events
         if let Some(event) = events.next().await {
             match event {
-                AppEvent::Key(key) => match app.current_view {
-                    View::Dashboard => match key.code {
-                        KeyCode::Char('q') => app.should_quit = true,
-                        KeyCode::Char('j') | KeyCode::Down => app.select_next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-                        KeyCode::Enter => app.open_employee_detail(),
-                        KeyCode::Char('l') => app.current_view = View::Logs,
-                        KeyCode::Char('t') => app.current_view = View::Teams,
-                        KeyCode::Char('r') => app.refresh().await,
-                        _ => {}
-                    },
-                    View::EmployeeDetail(_) => match key.code {
-                        KeyCode::Esc | KeyCode::Backspace => app.go_back(),
-                        KeyCode::Char('q') => app.should_quit = true,
-                        _ => {}
-                    },
-                    View::Logs => match key.code {
-                        KeyCode::Esc | KeyCode::Backspace => app.go_back(),
-                        KeyCode::Char('q') => app.should_quit = true,
-                        KeyCode::Char('j') | KeyCode::Down => app.log_select_next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.log_select_prev(),
-                        _ => {}
-                    },
-                    View::Teams => match key.code {
-                        KeyCode::Esc | KeyCode::Backspace => app.go_back(),
-                        KeyCode::Char('q') => app.should_quit = true,
-                        _ => {}
-                    },
-                },
+                AppEvent::Key(key) => {
+                    // Command mode captures all input
+                    if app.command_mode {
+                        match key.code {
+                            KeyCode::Esc => app.exit_command_mode(),
+                            KeyCode::Enter => app.execute_command().await,
+                            KeyCode::Backspace => app.command_delete_char(),
+                            KeyCode::Left => app.command_move_left(),
+                            KeyCode::Right => app.command_move_right(),
+                            KeyCode::Char(c) => app.command_insert_char(c),
+                            _ => {}
+                        }
+                    } else {
+                        match app.current_view {
+                            View::Dashboard => match key.code {
+                                KeyCode::Char('q') => app.should_quit = true,
+                                KeyCode::Char(':') | KeyCode::Char('/') => {
+                                    app.enter_command_mode();
+                                    // If activated with /, pre-fill it
+                                    if key.code == KeyCode::Char('/') {
+                                        app.command_insert_char('/');
+                                    }
+                                }
+                                KeyCode::Char('j') | KeyCode::Down => app.select_next(),
+                                KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+                                KeyCode::Enter => app.open_employee_detail(),
+                                KeyCode::Char('l') => app.current_view = View::Logs,
+                                KeyCode::Char('t') => app.current_view = View::Teams,
+                                KeyCode::Char('r') => app.refresh().await,
+                                _ => {}
+                            },
+                            View::EmployeeDetail(_) => match key.code {
+                                KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                                KeyCode::Char('q') => app.should_quit = true,
+                                _ => {}
+                            },
+                            View::Logs => match key.code {
+                                KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                                KeyCode::Char('q') => app.should_quit = true,
+                                KeyCode::Char('j') | KeyCode::Down => app.log_select_next(),
+                                KeyCode::Char('k') | KeyCode::Up => app.log_select_prev(),
+                                _ => {}
+                            },
+                            View::Teams => match key.code {
+                                KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                                KeyCode::Char('q') => app.should_quit = true,
+                                _ => {}
+                            },
+                        }
+                    }
+                }
                 AppEvent::Tick => {
                     app.refresh().await;
                 }
