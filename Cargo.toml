@@ -44,27 +44,27 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 
 # Embedded DB
-redb = "2.3"
+redb = "4.1"
 
 # Blob storage
-object_store = { version = "0.11", features = ["aws", "http"] }
+object_store = { version = "0.13", features = ["aws", "http"] }
 bytes = "1.9"
 
 # Graph algorithms (DAG execution)
-petgraph = "0.6"
+petgraph = "0.8"
 
 # Configuration
-toml = "0.8"
+toml = "1.1"
 
 # Compression (for event logs)
 flate2 = "1.0"
 
 # Hashing (content-addressed storage)
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 
 # Cron scheduling
-cron = "0.13"
+cron = "0.16"
 
 # Directory walking
 walkdir = "2.4"
@@ -73,7 +73,7 @@ walkdir = "2.4"
 base64 = "0.22"
 
 # HTTP client (LLM API calls)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # CLI
 rustyline = "14"
