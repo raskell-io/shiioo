@@ -1,0 +1,26 @@
+[package]
+name = "shiioo-runtime"
+description = "Shiioo's agent loop: workers, model providers, tools and the local machine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shiioo-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tokio = { workspace = true, features = ["process", "time", "sync", "fs", "io-util"] }
+reqwest.workspace = true
+
+[dev-dependencies]
+shiioo-store = { workspace = true, features = ["redb"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

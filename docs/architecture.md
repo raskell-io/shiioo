@@ -113,7 +113,7 @@ Details: [design/fork-and-replay.md](design/fork-and-replay.md).
 | `shiioo-core` | Event model, hash chain, `RunHead` rules, leases, recovery, `EventStore` trait. No I/O | built |
 | `shiioo-store` | `MemoryStore`, `RedbStore`, `PostgresStore` | built |
 | `shiioo-blob` | Content-addressed blob store over `object_store` | planned |
-| `shiioo-runtime` | The agent loop: context building, turns, tool dispatch, recovery on takeover | planned |
+| `shiioo-runtime` | The agent loop: context building, turns, tool dispatch, recovery on takeover; Anthropic provider; built-in tools; local machine with call journal and epoch fencing | built (spike) |
 | `shiioo-providers` | Model adapters and the capacity broker (key pooling, failover, cost) | planned |
 | `shiioo-tools` | Tool trait, built-in tools, MCP client, ACP harness adapters | planned |
 | `shiioo-policy` | Cedar evaluation, approvals, quorum, budgets, change management | planned |
@@ -121,7 +121,7 @@ Details: [design/fork-and-replay.md](design/fork-and-replay.md).
 | `shiioo-protocol` | Daemon ↔ gateway wire protocol (protobuf) | planned |
 | `shiioo-api` | REST + SSE handlers, OpenAPI | planned |
 | `shiioo-sim` | Deterministic whole-system simulation tests | planned |
-| `shiioo` | The binary: `up`, `serve`, `daemon`, CLI | planned |
+| `shiioo` | The binary: `up`, `serve`, `daemon`, CLI | built: `run`, `resume`, `log`; planned: the rest |
 
 Dependency direction: `core` ← everything; nothing depends on `api` or the binary. `core` stays free of I/O so the simulator can drive it.
 
@@ -134,7 +134,7 @@ Dependency direction: `core` ← everything; nothing depends on `api` or the bin
 
 ## 10. Roadmap
 
-1. **Kernel spike** *(in progress)*: done: event model, chain, fencing, recovery rules, memory/redb/Postgres backends. Next: agent loop with one provider, shell and file tools, in-process daemon, SSE, simulation harness. Exit test: `kill -9` a worker mid-turn; the run still finishes correctly.
+1. **Kernel spike** *(in progress)*: done: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the agent loop with the Anthropic provider, shell and file tools, an in-process machine with a call journal and epoch fencing, and the `shiioo` CLI. The exit test passes: a worker killed at any point of a turn is taken over and the run finishes, with no side effect repeated (`crates/shiioo-runtime/tests/crash_recovery.rs`). Next: SSE streaming and the deterministic simulation harness.
 2. **MVP**: multiple providers, MCP tools, Cedar policies, approvals, secrets, CLI, dashboard, TypeScript SDK, `shiioo up`, Docker Compose.
 3. **The differentiator**: workspace snapshots, fork/rewind/diff, replay as evals, ACP harness adapters (Claude Code, Codex).
 4. **Trust**: signed checkpoints, Biscuit delegation, Firecracker sandbox pools.

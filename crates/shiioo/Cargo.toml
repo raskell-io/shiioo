@@ -1,0 +1,21 @@
+[package]
+name = "shiioo"
+description = "Shiioo, the Virtual Company OS: an open-source agent platform."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shiioo-core.workspace = true
+shiioo-store = { workspace = true, features = ["redb"] }
+shiioo-runtime.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+
+[lints]
+workspace = true

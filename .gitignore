@@ -3,3 +3,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Shiioo workspace data when running the CLI in this repo
+.shiioo/

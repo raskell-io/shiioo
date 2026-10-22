@@ -65,7 +65,7 @@ then call `acquire_lease`. If the lease fails (`LeaseHeld`, `RunClosed`), the cl
 
 **Timers.** Parked runs with `wake_at` are kept in a timer wheel (on-device) or as `run_queue` rows with a future `ready_at` (cluster).
 
-## 3. The worker loop *(planned)*
+## 3. The worker loop *(spike built in `shiioo-runtime`; policy, budgets and parking planned)*
 
 One iteration handles one runnable run until it parks, finishes, or loses its lease.
 
@@ -94,6 +94,7 @@ claim run ──► acquire_lease ──► read log ──► fold state ──
 Rules:
 
 - **Write before acting.** The intent is durable before dispatch; the model response is durable before any tool runs. A crash at any point leaves a log that says exactly what was and wasn't done.
+- **On takeover, finish the last response before calling the model.** After recovering dangling intents, the worker acts on the latest recorded model response: tool calls it requested that have no intent yet are run, and a response with no tool calls completes the run. Without this, a crash between recording a response and recording its first intent would silently drop those tool calls (the crash tests caught exactly this).
 - **Every append presents the lease and `expected_next`.** A `Fenced` or `LeaseExpired` error means another worker owns the run: stop at once, drop all in-flight work, write nothing.
 - **Parallel tool calls.** When a model response contains several calls, intents are appended as one batch, then dispatched concurrently, and results appended as they arrive. Order of results in the log is arrival order; each result names its `call_id`.
 - **Turn limits.** A max-turns limit and a wall-clock limit per run; hitting one appends `RunFailed { reason }` or parks for a human, per agent configuration.
@@ -113,7 +114,7 @@ Tool calls run either on a Machine, through the gateway and its daemon, or in th
 - Pure and idempotent tools may be retried freely on transport errors. Side-effecting tools are sent once; a transport error after sending leads to reconciliation (§6), not a retry.
 - Tool results above the blob threshold are uploaded by the daemon and returned as a `BlobRef`.
 
-## 6. Recovery after takeover *(rules built, runtime planned)*
+## 6. Recovery after takeover *(rules built; spike runtime built for the local machine)*
 
 When a worker acquires a lease, it reads the log and calls `dangling_tool_calls`, which returns, in log order:
 
@@ -128,6 +129,8 @@ For `MarkUnknown`, the worker first **asks the daemon**: "what happened to `call
 | started, still running | waits or parks with `RunParked { tool }` |
 | never received | safe to dispatch now: the call never left the gateway |
 | unreachable / journal lost | `ToolOutcomeUnknown`, then route to the tool's reconcile hook or a human |
+
+**In the spike** (`Worker::recover`, `LocalMachine`), every dangling intent consults the machine's journal, whatever its class: finished → its journaled `ToolResult`; never received → dispatched now (the machine's epoch fence refuses the old worker's late copy); started but not finished → pure and idempotent calls run again, side-effecting ones get `ToolOutcomeUnknown` and the run stops with `NeedsAttention`. On a single machine "started" always means the machine stopped mid-call, so there is no "still running" case yet, and the result comes from the journal directly as a `ToolResult` rather than with `ToolReconciled`.
 
 A run with an unresolved `ToolOutcomeUnknown` does not continue on its own. The reconcile hook (for example "check whether the branch was pushed") or a person resolves it with `ToolReconciled`, and the run becomes runnable again.
 
