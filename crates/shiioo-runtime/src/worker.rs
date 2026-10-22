@@ -4,6 +4,7 @@ use crate::model::{
     ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
 };
 use crate::spec::RunSpec;
+use crate::status::{as_text, unresolved_unknown};
 use crate::tools::ToolOutput;
 use serde_json::{Value, json};
 use shiioo_core::{
@@ -477,26 +478,4 @@ fn parse_spec(log: &[Event]) -> Result<RunSpec, WorkerError> {
             "log does not start with RunCreated".into(),
         )),
     }
-}
-
-/// A side-effecting call marked unknown that nobody has resolved yet.
-fn unresolved_unknown(log: &[Event]) -> Option<String> {
-    let mut open: Vec<&CallId> = Vec::new();
-    for ev in log {
-        match &*ev.payload {
-            Payload::ToolOutcomeUnknown { call_id } => open.push(call_id),
-            Payload::ToolResult { call_id, .. } => open.retain(|id| *id != call_id),
-            _ => {}
-        }
-    }
-    open.first().map(|id| {
-        format!(
-            "tool call {} has an unknown outcome; check its effects, then record its result",
-            id.0
-        )
-    })
-}
-
-fn as_text(v: &Value) -> String {
-    v.as_str().map_or_else(|| v.to_string(), str::to_owned)
 }

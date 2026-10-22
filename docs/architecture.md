@@ -119,9 +119,9 @@ Details: [design/fork-and-replay.md](design/fork-and-replay.md).
 | `shiioo-policy` | Cedar evaluation, approvals, quorum, budgets, change management | planned |
 | `shiioo-auth` | OIDC, API keys, Biscuit tokens, RBAC | planned |
 | `shiioo-protocol` | Daemon ↔ gateway wire protocol (protobuf) | planned |
-| `shiioo-api` | REST + SSE handlers, OpenAPI | planned |
+| `shiioo-api` | REST + SSE handlers, OpenAPI | built: runs, events, resumable SSE, token auth, problem+json; planned: OpenAPI, the remaining resources |
 | `shiioo-sim` | Deterministic whole-system simulation tests | planned |
-| `shiioo` | The binary: `up`, `serve`, `daemon`, CLI | built: `run`, `resume`, `log`; planned: the rest |
+| `shiioo` | The binary: `up`, `serve`, `daemon`, CLI | built: `run`, `resume`, `log`, `serve`; planned: `up`, `daemon`, the rest |
 
 Dependency direction: `core` ← everything; nothing depends on `api` or the binary. `core` stays free of I/O so the simulator can drive it.
 
@@ -134,7 +134,7 @@ Dependency direction: `core` ← everything; nothing depends on `api` or the bin
 
 ## 10. Roadmap
 
-1. **Kernel spike** *(in progress)*: done: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the agent loop with the Anthropic provider, shell and file tools, an in-process machine with a call journal and epoch fencing, and the `shiioo` CLI. The exit test passes: a worker killed at any point of a turn is taken over and the run finishes, with no side effect repeated (`crates/shiioo-runtime/tests/crash_recovery.rs`). Next: SSE streaming and the deterministic simulation harness.
+1. **Kernel spike** *(in progress)*: done: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the agent loop with the Anthropic provider, shell and file tools, an in-process machine with a call journal and epoch fencing, and the `shiioo` CLI. The exit test passes: a worker killed at any point of a turn is taken over and the run finishes, with no side effect repeated (`crates/shiioo-runtime/tests/crash_recovery.rs`). SSE streaming is built: event ids are seqs, `Last-Event-ID` resumes from the log, and in-process writes wake streams through the `Notifying` store wrapper (Postgres `LISTEN/NOTIFY` next). The deterministic simulation harness is in `crates/shiioo-sim`.
 2. **MVP**: multiple providers, MCP tools, Cedar policies, approvals, secrets, CLI, dashboard, TypeScript SDK, `shiioo up`, Docker Compose.
 3. **The differentiator**: workspace snapshots, fork/rewind/diff, replay as evals, ACP harness adapters (Claude Code, Codex).
 4. **Trust**: signed checkpoints, Biscuit delegation, Firecracker sandbox pools.

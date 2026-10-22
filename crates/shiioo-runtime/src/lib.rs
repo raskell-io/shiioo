@@ -12,6 +12,7 @@ pub mod machine;
 pub mod model;
 pub mod scripted;
 pub mod spec;
+pub mod status;
 pub mod tools;
 pub mod worker;
 
@@ -23,5 +24,6 @@ pub use model::{
 };
 pub use scripted::ScriptedProvider;
 pub use spec::{AgentSpec, RunSpec};
+pub use status::{RunStatus, run_status};
 pub use tools::{Tool, ToolOutput, Toolbox};
 pub use worker::{CrashPoint, Faults, RunOutcome, Worker, WorkerError};

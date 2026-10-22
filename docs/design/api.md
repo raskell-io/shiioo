@@ -78,7 +78,7 @@ POST /v1/runs/run_01J9…/fork
 
 `at_seq` must be a turn boundary. Returns the new run. Semantics in [fork-and-replay.md](fork-and-replay.md).
 
-## 3. Streaming *(planned)*
+## 3. Streaming *(run stream built in `shiioo-api`; deltas, project stream and fan-out planned)*
 
 ### 3.1 Run stream
 
@@ -103,6 +103,8 @@ data: {"kind":"tool_output","call_id":"c_12","stream":"stdout","chunk":"Compilin
 - `?from={seq}` works like `Last-Event-ID` for clients that can't set headers.
 - A comment line every 15 s keeps proxies from closing idle connections.
 - The stream ends with `event: end` after a terminal event.
+
+**Built today** (`crates/shiioo-api`): `GET /v1/runs/{id}/events/stream` sends each log event as `event: event` with `id: <seq>` and the event JSON as data, resumes after `Last-Event-ID` (or from `?from=`), and ends after the terminal event. The handler subscribes to change notifications before its first read, then alternates reading the log and waiting; the `Notifying` store wrapper wakes it on every write in the same process, and a 2-second re-read covers writes from other processes until Postgres `LISTEN/NOTIFY` is wired in. No `delta` frames yet: the provider is not streaming. Also built: `POST /v1/runs` (with `Idempotency-Key`, kept in memory for now), `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events?from=`, `POST /v1/runs/{id}/resume`, bearer-token auth and problem+json errors.
 
 ### 3.2 Project stream
 

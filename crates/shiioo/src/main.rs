@@ -7,12 +7,13 @@
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;
+use shiioo_api::ApiState;
 use shiioo_core::{Event, EventStore, Payload, RunId, Seq, verify_chain};
 use shiioo_runtime::{
     AgentSpec, AnthropicProvider, LocalMachine, RunOutcome, RunSpec, Toolbox, Worker,
     anthropic::DEFAULT_MODEL,
 };
-use shiioo_store::RedbStore;
+use shiioo_store::{Notifying, RedbStore};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -60,6 +61,25 @@ enum Command {
     },
     /// Print a run's events and verify its hash chain.
     Log { run: String },
+    /// Serve the HTTP API (runs over REST, live events over SSE) on this
+    /// machine. Requests need the token stored in `.shiioo/api-token`.
+    Serve {
+        /// Address to listen on. Loopback by default: the API runs tools on
+        /// this machine.
+        #[arg(long, default_value = "127.0.0.1:7878")]
+        listen: String,
+        /// Model for runs that don't name an agent.
+        #[arg(long, default_value = DEFAULT_MODEL)]
+        model: String,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            default_value = "read_file,write_file,shell"
+        )]
+        tools: Vec<String>,
+        #[arg(long, default_value = "high")]
+        effort: String,
+    },
 }
 
 #[tokio::main]
@@ -117,7 +137,87 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let worker = worker(&store, &workspace, &data, &effort)?;
             drive(&worker, parse_run(&run)?).await
         }
+        Command::Serve {
+            listen,
+            model,
+            tools,
+            effort,
+        } => serve(&store, &workspace, &data, &listen, model, tools, &effort).await,
     }
+}
+
+async fn serve(
+    store: &Arc<RedbStore>,
+    workspace: &Path,
+    data: &Path,
+    listen: &str,
+    model: String,
+    tools: Vec<String>,
+    effort: &str,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let store = Arc::new(Notifying::new(RedbStore::clone(store)));
+    let mut provider = AnthropicProvider::from_env()?;
+    provider.effort = effort.to_owned();
+    let provider = Arc::new(provider);
+    let machine = Arc::new(LocalMachine::open(
+        workspace,
+        data.join("journal.jsonl"),
+        Toolbox::builtin(),
+    )?);
+    let worker_store = Arc::clone(&store);
+    let workers = Arc::new(move || {
+        Worker::new(
+            Arc::clone(&worker_store),
+            Arc::clone(&provider) as _,
+            Arc::clone(&machine),
+            format!("local-{}", std::process::id()).as_str(),
+        )
+    });
+    let token_path = data.join("api-token");
+    let token = api_token(&token_path)?;
+    let state = ApiState::new(
+        store,
+        workers,
+        token,
+        AgentSpec {
+            model,
+            system: String::new(),
+            tools,
+            max_turns: 50,
+        },
+    );
+    let listener = tokio::net::TcpListener::bind(listen).await?;
+    println!(
+        "listening on http://{}  (token: {})",
+        listener.local_addr()?,
+        token_path.display()
+    );
+    axum::serve(listener, shiioo_api::router(state))
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+        })
+        .await?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Reads the API token, creating a random one (readable only by this user)
+/// on first use.
+fn api_token(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    if let Ok(token) = std::fs::read_to_string(path) {
+        return Ok(token.trim().to_owned());
+    }
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    std::fs::write(path, &token)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(token)
 }
 
 fn worker(

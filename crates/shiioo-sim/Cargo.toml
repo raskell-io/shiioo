@@ -1,0 +1,21 @@
+[package]
+name = "shiioo-sim"
+description = "Seeded, reproducible crash-recovery simulation for Shiioo's runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shiioo-core.workspace = true
+shiioo-store = { workspace = true, features = ["redb"] }
+shiioo-runtime.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "sync"] }
+
+[lints]
+workspace = true

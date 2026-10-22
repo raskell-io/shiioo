@@ -178,20 +178,26 @@ Every channel between tasks is bounded. Nothing in the system queues work in an 
 | Duplicate delivery (queue, notify, gateway retry) | Second `acquire_lease` fails, or append gets `SeqConflict`, or daemon dedups by `call_id` | Every path is idempotent by `seq` or `call_id` |
 | Disk full / store unavailable | Appends fail; worker stops the turn and releases nothing it doesn't own | Nothing is acted on without a durable record |
 
-## 11. Simulation testing *(planned)*
+## 11. Simulation testing *(single-process harness built; distributed harness planned)*
 
-`shiioo-sim` runs whole deployments (api, scheduler, N workers, gateways, daemons, `MemoryStore` or Postgres) under `turmoil`/`madsim` with a seeded RNG. Each seed is a reproducible scenario; failing seeds become regression tests.
+### Built: `shiioo-sim`
 
-Faults injected: process kill at any await point, network partitions between any two components, message delay and duplication, clock jumps, store write failures, slow disks.
+`crates/shiioo-sim` drives the real runtime (`Worker`, `LocalMachine` with a file journal, `MemoryStore` or `RedbStore`) through seeded scenarios. Each seed picks a script of 0–5 tool-calling turns (1–3 calls each, mixing side-effecting, pure and idempotent tools) followed by a final answer, then drives the run with a sequence of worker lives, each a single-threaded Tokio runtime so scheduling is reproducible:
 
-Invariants checked after every step and at the end:
+- a life may crash at any `CrashPoint` (the dead worker keeps its lease; the clock then advances past the TTL);
+- two workers may race for the same run (memory store only; tools yield mid-call so the rival is polled while the lease is held, and must get `LeaseHeld`);
+- the machine may be restarted, reopening its journal from disk;
+- a worker that crashed right after recording an intent is treated as stalled: after another worker has taken over, its invocation is replayed against the machine and must be `Fenced` without running the tool.
 
-1. Every log passes `verify_chain`.
-2. No two events in a run share a `seq`; epochs never decrease.
-3. No event was accepted from a lease that wasn't current (cross-checked against the simulator's own record of grants).
-4. Every side-effecting tool, as observed by a fake daemon, executed **at most once** per `call_id`.
-5. Every `ToolIntent` eventually has exactly one outcome: `ToolResult`, `ToolOutcomeUnknown` followed by `ToolReconciled`, or the run is terminal.
-6. Every run whose inputs stop eventually reaches a terminal or parked state (liveness, with a bounded number of faults).
-7. A subscriber that reconnects with `Last-Event-ID` receives every event exactly once, in order.
+Invariants checked after every life and at the end: `verify_chain` passes and epochs never decrease; one `LeaseAcquired` event per lease the workers actually acquired; at most one `ToolResult` per call (unless it resolves a `ToolOutcomeUnknown`); every side-effecting call executed at most once, as counted by the tool; the run either completes with the scripted answer, every call having exactly one result and every side-effecting call having run exactly once, or stops with `NeedsAttention` only when a crash hit a side-effecting call mid-execution and the machine's journal says it started but never finished.
 
-The kernel spike's exit test is the simplest instance: kill a worker mid-turn and check invariants 1–5.
+`cargo test -p shiioo-sim` runs 200 seeds; `SHIIOO_SIM_SEEDS=N` runs more, and `SHIIOO_SIM_SEED=n … -- --nocapture` reproduces one. A failure prints the seed, the reproduction command, the scenario and the log. As a check on the harness itself, making recovery rerun side-effecting calls that started but never finished makes about 5% of seeds fail with a double charge.
+
+### Planned: distributed simulation
+
+Once there are separate processes (api, scheduler, workers, gateways, remote daemons), the harness moves onto `turmoil`/`madsim` to add what a single process can't express: network partitions between components, message delay and duplication between gateway and daemon, clock skew between hosts, store write failures and slow disks, Postgres failover. Additional invariants then:
+
+1. No event was accepted from a lease that wasn't current (cross-checked against the simulator's own record of grants).
+2. Every `ToolIntent` eventually has exactly one outcome: `ToolResult`, `ToolOutcomeUnknown` followed by a resolution, or the run is terminal.
+3. Every run whose inputs stop eventually reaches a terminal or parked state (liveness, with a bounded number of faults).
+4. A subscriber that reconnects with `Last-Event-ID` receives every event exactly once, in order.

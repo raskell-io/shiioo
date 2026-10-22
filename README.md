@@ -32,7 +32,8 @@ Shiioo runs AI agents on any model and any machine, with tools, secrets, approva
 | `shiioo-core` | Event types, hash chain, leases, recovery rules, the `EventStore` trait. No I/O. |
 | `shiioo-store` | Store backends: `RedbStore` (embedded, default), `PostgresStore` (cluster, `postgres` feature), `MemoryStore` (reference and simulation). |
 | `shiioo-runtime` | The agent loop: workers, the Anthropic provider, built-in tools (`read_file`, `write_file`, `shell`), and the local machine with its call journal. |
-| `shiioo` | The binary. Today: `run`, `resume` and `log` on this machine. |
+| `shiioo-api` | HTTP API: create, inspect and resume runs; events as JSON or as a resumable SSE stream. Bearer-token auth, problem+json errors. |
+| `shiioo` | The binary. Today: `run`, `resume`, `log` and `serve` on this machine. |
 
 ## Try it
 
@@ -42,6 +43,18 @@ cargo run -p shiioo -- --workspace /path/to/project run "Summarise what this pro
 cargo run -p shiioo -- --workspace /path/to/project log <run-id>      # events + chain check
 cargo run -p shiioo -- --workspace /path/to/project resume <run-id>   # after Ctrl-C or kill -9
 ```
+
+Or serve the API and watch a run live:
+
+```sh
+cargo run -p shiioo -- --workspace /path/to/project serve        # http://127.0.0.1:7878
+TOKEN=$(cat /path/to/project/.shiioo/api-token)
+curl -s -H "Authorization: Bearer $TOKEN" -d '{"task":"List the files"}' \
+     -H 'content-type: application/json' http://127.0.0.1:7878/v1/runs
+curl -N -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7878/v1/runs/<run-id>/events/stream
+```
+
+The stream is resumable: reconnect with `Last-Event-ID: <seq>` and it continues right after that event. `serve` and `run` can't share a workspace at the same time (the embedded database allows one process).
 
 The agent can read, write and run shell commands in the workspace, with no sandbox yet: use a directory you don't mind it changing. Shiioo keeps its data in `.shiioo/` there. The default model is `claude-opus-5-5`, with server-side refusal fallback enabled.
 

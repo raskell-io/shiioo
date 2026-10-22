@@ -10,7 +10,7 @@ repository.workspace = true
 
 [features]
 default = ["redb"]
-redb = ["dep:redb", "dep:tokio"]
+redb = ["dep:redb"]
 postgres = ["dep:sqlx"]
 
 [dependencies]
@@ -18,7 +18,7 @@ shiioo-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 redb = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync"] }
 sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]

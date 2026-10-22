@@ -4,6 +4,8 @@ members = [
     "crates/shiioo-core",
     "crates/shiioo-store",
     "crates/shiioo-runtime",
+    "crates/shiioo-api",
+    "crates/shiioo-sim",
     "crates/shiioo",
 ]
 
@@ -19,6 +21,7 @@ repository = "https://github.com/raskell-io/shiioo"
 shiioo-core = { path = "crates/shiioo-core" }
 shiioo-store = { path = "crates/shiioo-store", default-features = false }
 shiioo-runtime = { path = "crates/shiioo-runtime" }
+shiioo-api = { path = "crates/shiioo-api" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
@@ -29,6 +32,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 clap = { version = "4", features = ["derive", "env"] }
+axum = "0.8"
+futures-util = "0.3"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "migrate", "macros"] }
 redb = "4"
 tempfile = "3"
