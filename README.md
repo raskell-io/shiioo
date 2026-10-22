@@ -21,9 +21,9 @@ Shiioo runs AI agents on any model and any machine, with tools, secrets, approva
 - **Provable.** Every event is hash-chained to the one before it. Tampering, gaps and reordering are detectable.
 - **Bring your own harness.** Run Claude Code, Codex and others as runtimes through the Agent Client Protocol, with the same log, policies and replay *(planned)*.
 
-> **Status: early.** This is a ground-up rewrite. Today the repo contains the execution kernel (event model, hash chain, leases with fencing, crash-recovery rules) and three store backends (redb, Postgres, in-memory) that pass one shared conformance suite. See [`docs/architecture.md`](docs/architecture.md) and the [roadmap](docs/architecture.md#roadmap).
+> **Status: early.** This is a ground-up rewrite. Today the repo contains the execution kernel (event model, hash chain, leases with fencing, crash-recovery rules) and three store backends (redb, Postgres, in-memory) that pass one shared conformance suite. Start with the [architecture overview](docs/architecture.md), the [design docs](docs/README.md) and the [roadmap](docs/architecture.md#10-roadmap).
 >
-> The previous Shiioo ("Virtual Company OS") lives at [raskell-io/shiioo-legacy](https://github.com/raskell-io/shiioo-legacy). Its governance features are being ported onto the new kernel; see [`docs/legacy-port.md`](docs/legacy-port.md).
+> The previous Shiioo codebase lives at [raskell-io/shiioo-legacy](https://github.com/raskell-io/shiioo-legacy). Its governance features are being ported onto the new kernel; see [`docs/legacy-port.md`](docs/legacy-port.md).
 
 ## Layout
 

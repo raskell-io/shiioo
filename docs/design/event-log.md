@@ -1,0 +1,225 @@
+# Event log
+
+The per-run, append-only event log is Shiioo's only state ([ADR-0001](../adr/0001-event-log-is-the-only-state.md)). This document defines the event format, the hash chain, the payload catalogue, the storage backends, blobs, schema evolution, archival and how logs are read and streamed. How workers use the log to execute runs is in [execution.md](execution.md).
+
+## 1. Event format *(built)*
+
+`shiioo_core::Event`:
+
+```rust
+pub struct Event {
+    pub run_id: RunId,              // UUID v4
+    pub seq: Seq,                   // u64, contiguous from 0 within the run
+    pub epoch: Epoch,               // u64, lease epoch the event was written under
+    pub recorded_at: Timestamp,     // u64, Unix milliseconds, from the store's clock
+    pub schema: u16,                // payload schema version (SCHEMA_VERSION = 1)
+    pub prev_hash: Option<EventHash>, // None only at seq 0
+    pub hash: EventHash,            // SHA-256, hex in JSON
+    pub payload: Payload,           // tagged enum, `"type": "snake_case_name"`
+}
+```
+
+| Field | Rule |
+|---|---|
+| `seq` | Assigned by the store. Event `n` is the `n`th event of the run. No gaps, no reuse. Also the SSE event id. |
+| `epoch` | `Epoch(0)` only for `RunCreated`. Every other event carries the epoch of the lease it was written under. Never decreases along the log. |
+| `recorded_at` | The store's clock at append time, not the worker's. On Postgres it is the database clock. |
+| `schema` | The payload schema version the writer used. See §6. |
+| `prev_hash` | The `hash` of event `seq - 1`. |
+
+### Hash construction *(built)*
+
+`hash = SHA-256` over, in order:
+
+```
+"shiioo/event/v1\0"            domain separator
+run_id                          16 bytes (UUID)
+seq, epoch, recorded_at         u64 big-endian each
+schema                          u16 big-endian
+0x00 | 0x01 ‖ prev_hash         presence flag, then 32 bytes if present
+serde_json bytes of payload
+```
+
+The payload encoding is stable: serde writes struct fields in declaration order, and `serde_json::Value` objects are sorted maps (the `preserve_order` feature is off). `float_roundtrip` is on, so floats survive a decode and re-encode unchanged.
+
+`verify_chain(&[Event])` checks, for a full log from `Seq(0)`: one run id, contiguous `seq`, correct `prev_hash` links, non-decreasing epochs, and that every recomputed hash matches. Errors: `ChainError::{WrongRun, Gap, BrokenLink, Tampered, EpochRegressed, Encoding}`.
+
+Today verification re-encodes the typed payload. *(planned)* Verification will hash the stored payload bytes directly, so that verifying a log never depends on the current build's encoder (see §6).
+
+## 2. Write rules *(built)*
+
+All rules live in `shiioo_core::RunHead`, so every backend enforces the same ones. A backend loads the head under a lock, calls one method, and persists the returned events plus the new head atomically.
+
+```rust
+pub struct RunHead {
+    pub run_id: RunId,
+    pub next_seq: Seq,
+    pub last_hash: Option<EventHash>,
+    pub closed: bool,
+    pub lease: Option<Lease>, // latest lease granted; its epoch stays current after expiry
+}
+```
+
+| Operation | Checks | Writes | Errors |
+|---|---|---|---|
+| `create_run(spec)` | — | `RunCreated` at seq 0, epoch 0 | — |
+| `acquire_lease(run, worker, ttl)` | run open; no other worker holds an unexpired lease | `LeaseAcquired` at the new epoch (`current + 1`, always new, even for the same worker id) | `RunNotFound`, `RunClosed`, `LeaseHeld` |
+| `renew_lease(lease, ttl)` | presented epoch is current and unexpired | head only (no event) | `Fenced`, `LeaseExpired` |
+| `append(lease, expected_next, payloads)` | batch valid; lease current and unexpired; run open; `expected_next == next_seq` | the batch, all or nothing | `InvalidPayload`, `Fenced`, `LeaseExpired`, `RunClosed`, `SeqConflict` |
+| `read(run, from)` | — | — | `RunNotFound` |
+
+Batch validation: workers may not append `RunCreated` or `LeaseAcquired` (store-written), and a terminal event must be last in its batch. A terminal event closes the run; later appends and lease requests get `RunClosed`.
+
+Renewals are not logged: they carry no information a reader needs, and logging them would grow every long run by one event per 10 s. Takeovers are logged (`LeaseAcquired`) because they explain epoch changes. Lease semantics are in [ADR-0002](../adr/0002-leases-with-fencing.md) and [execution.md §4](execution.md#4-leases-in-the-worker-planned).
+
+## 3. Payload catalogue
+
+`Payload` is `#[serde(tag = "type", rename_all = "snake_case")]`. "Writer" is the component that appends it; the store rejects writes from anyone without the current lease, except where the writer is the store itself or the api writes through a short lease (see below).
+
+### Built
+
+| Variant | Fields | Writer | Meaning |
+|---|---|---|---|
+| `RunCreated` | `spec: Value` | store | Seq 0. The run's input: agent id, task, parent link, options. |
+| `LeaseAcquired` | `worker, expires_at` | store | A worker took the run; starts epoch `n`. |
+| `ModelResponseRecorded` | `model, response: Value` | worker | The complete model response, recorded before any tool in it runs. |
+| `ToolIntent` | `call_id, tool, class: ToolClass, input` | worker | About to dispatch a tool call. `class` is `Pure`, `Idempotent { key }` or `SideEffecting`. |
+| `ToolResult` | `call_id, output, is_error` | worker | The tool's outcome. |
+| `ToolOutcomeUnknown` | `call_id` | worker | A side-effecting call may or may not have happened. Blocks the run until reconciled. |
+| `RunCompleted` | `output` | worker | Terminal. |
+| `RunFailed` | `reason` | worker | Terminal. |
+
+### Planned
+
+| Variant | Fields (sketch) | Writer | Meaning |
+|---|---|---|---|
+| `UserMessage` | `author, content: Content` | api | Input from a person or integration. Makes the run runnable. |
+| `ModelRequested` | `provider, model, params_digest, context_digest, turn` | worker | Digest of exactly what was sent. Replay matches on it ([fork-and-replay.md](fork-and-replay.md)). |
+| `PolicyDecision` | `call_id, decision: allow\|deny\|require_approval, policy_version, reasons` | worker | Result of evaluating Cedar policies for a tool call ([governance.md](governance.md)). |
+| `ApprovalRequested` | `call_id, board, summary, expires_at` | worker | Run waits for a decision. |
+| `ApprovalDecided` | `call_id, decision, approvers, quorum` | api | Recorded when the board's quorum is met or someone rejects. |
+| `BudgetCharged` | `call_id?, tokens_in, tokens_out, cost_micros, budget_ids` | worker | Usage after each model or tool call. |
+| `ChildRunStarted` | `child_run_id, agent, task_digest` | worker | Parent spawned a subagent. |
+| `ChildRunFinished` | `child_run_id, outcome, output_ref` | scheduler | Copied into the parent when the child reaches a terminal event. |
+| `SnapshotTaken` | `machine, snapshot_id, method, digest` | worker (from daemon reply) | Workspace snapshot at a turn boundary. |
+| `ForkedFrom` | `parent_run_id, parent_seq, parent_hash, changes` | store (at create) | First own event of a forked run, instead of `RunCreated`. Written at `parent_seq + 1` with `prev_hash = parent_hash`, so seqs and the hash chain continue from the parent's prefix ([fork-and-replay.md](fork-and-replay.md)). |
+| `ReplayOf` | `source_run_id, mode: strict\|live_on_divergence\|stop_on_divergence, changes` | store (at create) | Seq 0 of a replay run ([fork-and-replay.md](fork-and-replay.md)). |
+| `ReplayDiverged` | `turn, expected_digest, actual_digest` | worker | A replayed turn no longer matches the recording. |
+| `RunParked` | `waiting_for: input\|approval\|tool\|timer, wake_at?` | worker | The worker releases the run; no lease is held while parked. |
+| `RunWoken` | `reason` | worker | First event after a parked run is picked up again. |
+| `CancelRequested` | `by, reason` | api | The worker stops at the next step boundary and writes `RunCancelled`. |
+| `RunCancelled` | `reason` | worker | Terminal. |
+| `ToolReconciled` | `call_id, outcome, source: daemon\|hook\|human` | worker | Resolves a `ToolOutcomeUnknown`. |
+| `BudgetWarning` / `BudgetExceeded` | `budget_id, used, limit` | worker | Soft limit crossed; hard limit hit (the run parks or fails, per budget) ([governance.md](governance.md)). |
+| `ConfigUpdated` | `kind, from_version, to_version` | worker | A change marked `applies_to_running` took effect mid-run ([governance.md](governance.md)). |
+| `SecretResolved` | `call_id, secret_name` | worker | A tool call was given a secret. Name only, never the value ([tools-and-machines.md](tools-and-machines.md)). |
+| `SecretRedacted` | `call_id, count` | worker | Secret values were removed from a tool output before it was recorded ([security.md](security.md)). |
+| `ContextCompacted` | `from_seq, to_seq, summary_ref` | worker | A summary that stands in for a range of events when building context; the originals stay ([runtimes-and-providers.md](runtimes-and-providers.md)). |
+| `HarnessMessageRecorded` | `harness, content` | worker | Final message from an external harness run through ACP ([runtimes-and-providers.md](runtimes-and-providers.md)). |
+
+Project-level events that are not part of a run (machine enrolment and revocation such as `MachineRevoked`, config changes, signed checkpoints, archival) go to a per-project audit log with the same format and chain rules.
+
+**Writes by the api.** `UserMessage`, `ApprovalDecided` and `CancelRequested` come from the api, which does not hold the run's lease. These go through a separate store operation, `append_external(run, payload)`, that does not take a lease and accepts only those external variants. It serializes with the run's head lock like any other write. The worker sees them on its next read. This keeps workers the only writers of execution events while still letting outside input in without waiting for a lease.
+
+## 4. Blobs *(planned)*
+
+Events stay small. Anything over ~64 KiB (tool outputs, file contents, attachments, model responses with images) goes to the blob store, and the event carries a reference:
+
+```rust
+pub struct BlobRef {
+    pub sha256: [u8; 32],   // content address
+    pub size: u64,
+    pub media_type: String,
+}
+```
+
+- Blobs are written **before** the event that references them. A blob without an event is garbage, collected later; an event without its blob cannot happen.
+- Because `sha256` is inside the hashed payload, the hash chain covers blob content transitively. Anyone verifying the log can fetch and check each blob.
+- `shiioo-blob` wraps `object_store` (S3, R2, GCS, Azure, local disk). On-device, blobs go to a directory next to the redb file.
+- Blobs are per project, so deleting a project can delete its blobs without scanning other projects.
+
+## 5. Backends
+
+### redb *(built, default)*
+
+A single file, no server ([ADR-0003](../adr/0003-redb-default-postgres-for-clusters.md)).
+
+| Table | Key | Value |
+|---|---|---|
+| `run_heads` | run id (16 bytes) | JSON-encoded `RunHead` |
+| `events` | `(run id, seq: u64)` | JSON `StoredEvent { epoch, recorded_at, schema, prev_hash, hash, payload: RawValue }` |
+
+- Every operation is one redb write transaction, run on Tokio's blocking pool (`spawn_blocking`): load head, apply the `RunHead` rule, insert events, write head, commit. Errors drop the transaction.
+- The `(run, seq)` key makes `read(run, from)` a range scan.
+- `payload` is kept as `RawValue`, the exact JSON text that was hashed.
+- Inserting over an existing key aborts the transaction, a backstop for the `seq` rule.
+- **One writer per file**: writes to different runs queue behind each other. Readers never block. Fine for one device; it is why clusters use Postgres.
+- Lease expiry uses the local clock; on one machine there is no skew to worry about.
+- `RunHead` is serialized as JSON, so its field names are part of the file format. Renaming a field needs a migration.
+
+### Postgres *(built, `postgres` feature)*
+
+```sql
+runs   (run_id uuid PK, next_seq, last_hash bytea, closed,
+        lease_worker, lease_epoch, lease_expires_at_ms, created_at)
+events (run_id, seq, epoch, recorded_at_ms, schema, prev_hash, hash,
+        payload json,               -- json, not jsonb: keeps the hashed text
+        PRIMARY KEY (run_id, seq))
+```
+
+- Each write is a transaction that locks the run's head row (`SELECT … FOR UPDATE`). Writes to one run serialize; different runs proceed in parallel.
+- Lease expiry and `recorded_at` use the database clock (`clock_timestamp()`), so skew between worker machines can't extend a lease.
+- A trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` on `events`.
+- Check constraints mirror the core rules (`prev_hash` present iff `seq > 0`, hashes are 32 bytes, lease fields consistent).
+- *(planned)* Batch inserts with `UNNEST` instead of one statement per event; time-or-hash partitioning of `events` once tables grow.
+
+### Memory *(built)*
+
+`MemoryStore`: one mutex over a map of runs. The reference implementation and the backend for simulation tests.
+
+### Conformance *(built)*
+
+`crates/shiioo-store/tests/common` holds the suite every backend runs: chain validity, lease blocking, fencing after takeover, expiry without takeover, renewal, sequence conflicts, concurrent appends to the same slot, crash recovery of tool calls, closed runs, failed batches writing nothing, forged store events, unknown runs, offset reads. redb adds a reopen test; Postgres adds the append-only trigger test.
+
+### Future: Turso
+
+Turso, the Rust rewrite of SQLite, would give one embedded engine with concurrent writers (MVCC). It was beta (v0.7) in mid-2026. Revisit when it's stable; it would slot in behind the same trait and suite.
+
+## 6. Schema evolution *(planned)*
+
+- Every event records the `schema` version its writer used. Stored bytes are **never rewritten**: the hash covers them.
+- Readers verify the chain first, then **upcast** old payloads to the current types with pure functions, one step per version (`v1 → v2 → …`).
+- Adding a payload variant or an optional field does not need a version bump. Renaming, removing or changing the meaning of a field does.
+- A reader that meets a newer `schema` than it knows refuses the run instead of guessing. Rolling upgrades therefore upgrade readers (api, workers) before any writer emits the new version; see [deployment.md](deployment.md).
+
+## 7. Reading and streaming
+
+- `read(run, from: Seq)` returns events with `seq >= from` in order *(built)*.
+- *(planned)* `subscribe(run, from)` returns a stream: first the stored events from `from`, then new events as they are committed. A subscriber that falls behind is dropped and resumes with `read`.
+  - **Postgres:** after commit, the writer runs `NOTIFY shiioo_run, '<run_id>:<seq>'`. Gateways `LISTEN` and fan out to their SSE subscribers.
+  - **redb / on-device:** an in-process `tokio::sync::broadcast` channel per active run.
+- The api serves SSE with `id: <seq>`. A reconnecting client sends `Last-Event-ID` and gets everything after it, so no output is ever missed ([api.md](api.md), [ADR-0004](../adr/0004-rest-and-sse-api.md)).
+- Token-by-token model output is streamed to subscribers as **ephemeral deltas**, which are not events and carry no `seq`. The complete response is recorded as `ModelResponseRecorded`. A client that reconnects mid-response sees the final event, not the deltas it missed.
+
+## 8. Projections *(planned)*
+
+Run lists, cost per agent, full-text search and dashboards are **projections**: tables fed by consuming events, keyed by `(run_id, seq)` so they are idempotent. They are never a source of truth. Any projection can be dropped and rebuilt from the logs, and a bug in one can never corrupt a run.
+
+Each projection stores the last `(run_id, seq)` it applied per run. On Postgres they live in the same database; on-device they live in separate redb tables.
+
+## 9. Retention and archival *(planned)*
+
+Finished runs stay hot for a configurable time (default 30 days), then are archived:
+
+1. Verify the chain.
+2. Write the run's events to object storage as a segment (JSONL, or Parquet for analytics), plus a **signed checkpoint**: run id, last `seq`, last `hash`, signer key id.
+3. Write an `ArchivedRun` entry to the project's audit log (itself a hash-chained log).
+4. Replace the run's hot events with a **tombstone head**: run id, final `seq` and `hash`, archive location, checkpoint signature.
+
+Archival is the **only** path that removes events from the hot store. It runs through a dedicated, audited code path (on Postgres, as a role allowed to bypass the append-only trigger for archived runs only). Reading an archived run fetches the segment and verifies it against the tombstone. Legal holds block archival.
+
+## 10. Open questions
+
+- Per-project logs for project-level events (policy changes, approvals config): reuse the run log machinery with a "project run", or a separate log type?
+- Whether `ModelResponseRecorded` should always store the response as a blob, so the event stays fixed-size.
+- Segment format for archives: JSONL is simpler to verify, Parquet is better for analytics. Possibly both.

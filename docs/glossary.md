@@ -1,0 +1,50 @@
+# Glossary
+
+Shiioo has two vocabularies. The **platform terms** are what the API, code and docs use. The **company terms** are the "Virtual Company OS" layer: a way of setting up and talking about a project, built entirely from platform primitives. Neither hides the other; the dashboard can show either.
+
+## Company terms → platform terms
+
+| Company term | Platform term | Meaning |
+|---|---|---|
+| Company | Project | A self-contained unit with its own agents, policies, budgets, machines and runs. |
+| CEO | Project owner | The human who sets direction and holds final approval. |
+| Employee | Agent | A configured agent: model, instructions, tools, skills, policy, budget. |
+| Job title / role | Agent definition (template) | A reusable agent configuration, versioned. Legacy name: archetype. |
+| Department | Agent label / group | A grouping of agents for policies, budgets and reporting. |
+| Chief of Staff | Planner agent | An agent that turns direction documents into a roadmap and work items. |
+| Vision, mission, strategy | Direction documents | Files in the project the planner reads. Inputs, not platform objects. |
+| Task / assignment | Run | One agent working on one goal, with its own event log. |
+| Delegating to a colleague | Child run (subagent) | A run started by another run, with narrower credentials. |
+| Company policy | Policy | Cedar rules: what is allowed, denied, or needs approval. |
+| Executive review | Approval board | A group of approvers with quorum rules. |
+| Department budget | Budget | Token, cost and time limits, enforced by the server. |
+| Office / workstation | Machine | A host or sandbox running `shiioo daemon`, where tools execute. |
+| System credentials | Secret | Credentials injected into tools at execution time, never shown to the model. |
+| Recurring duty | Trigger (cron) | Starts runs on a schedule or on external events. |
+| Proposal for a policy change | Change request | An agent-proposed diff to agent definitions, policies or skills, approved by a board. |
+| The company's records | Event logs + audit | Hash-chained logs of every decision and action. |
+
+## Platform terms
+
+- **Event**: one entry in a run's log. Has `seq`, `epoch`, `recorded_at`, `schema`, `prev_hash`, `hash` and a payload.
+- **Event log**: a run's append-only, hash-chained sequence of events. The only source of truth ([ADR-0001](adr/0001-event-log-is-the-only-state.md)).
+- **Seq**: an event's position in its run, contiguous from 0. Also the stream resume point.
+- **Epoch**: the fencing token of the lease an event was written under ([ADR-0002](adr/0002-leases-with-fencing.md)).
+- **Lease**: a worker's time-limited right to append to one run.
+- **Fenced**: rejected because the presented lease is no longer the current one.
+- **Run head**: the small per-run record every write is checked against: next `seq`, last hash, lease, closed flag.
+- **Turn**: one model call plus the tool calls it requested.
+- **Tool class**: `Pure`, `Idempotent { key }` or `SideEffecting`; decides what happens to a tool call whose outcome was not recorded.
+- **Tool intent / result**: the events written before dispatching a tool call and after it returns.
+- **Outcome unknown**: a side-effecting call that may or may not have run; resolved by reconciling with the machine's journal or by a human.
+- **Parked**: a run waiting for input, approval or a timer, holding no lease.
+- **Worker**: a stateless process that leases runs and executes turns.
+- **Gateway**: a process that holds daemon connections and stream subscribers.
+- **Scheduler**: finds runnable runs, fires triggers and timers.
+- **Daemon**: `shiioo daemon`, the tool host on a machine. Dials out to a gateway.
+- **Snapshot**: a saved copy of a run's workspace at a turn boundary.
+- **Fork**: a new run that starts from another run's state at a given `seq`.
+- **Replay**: re-executing a recorded run, serving recorded tool outputs back, typically against a different model or prompt.
+- **Harness**: an external agent program (Claude Code, Codex, …) run as a Shiioo runtime through the Agent Client Protocol.
+- **Projection**: a derived, rebuildable view over event logs (run lists, cost totals, search). Never a source of truth.
+- **Checkpoint**: a signed statement of a log's head hash, published outside the system to make tampering detectable.
