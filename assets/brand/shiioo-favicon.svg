@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128" shape-rendering="crispEdges">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128">
+<g shape-rendering="crispEdges">
 <rect x="12" y="4" width="1" height="1" fill="#020102"/>
 <rect x="13" y="4" width="1" height="1" fill="#070001"/>
 <rect x="14" y="4" width="3" height="1" fill="#0b0606"/>
@@ -392,4 +393,5 @@
 <rect x="26" y="31" width="1" height="1" fill="#070001"/>
 <rect x="27" y="31" width="1" height="1" fill="#020102"/>
 <rect x="28" y="31" width="3" height="1" fill="#343236"/>
+</g>
 </svg>

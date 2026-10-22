@@ -44,7 +44,7 @@ SHIIOO_TEST_DATABASE_URL=postgres://user:pass@localhost/shiioo cargo test --all-
 
 ## Brand
 
-The mascot is an original character: a seasoned strategist in a three-piece suit who runs the company while you set the direction. "Virtual Company OS" is the tagline; "agent platform" is what Shiioo technically is. Marks, icons and the favicon are in [`assets/brand`](assets/brand), generated from the pixel-art sources in `assets/brand/source` by `python3 assets/brand/build.py`.
+The mascot is an original character: a seasoned strategist in a three-piece suit who runs the company while you set the direction. "Virtual Company OS" is the tagline; "agent platform" is what Shiioo technically is. The wordmark is set in [Fraunces](https://github.com/undercasetype/Fraunces) and the tagline in [Inter](https://github.com/rsms/inter), both under the SIL Open Font License (see `assets/brand/fonts`). Marks, icons and the favicon are in [`assets/brand`](assets/brand), generated from the sources there by `python3 assets/brand/build.py` (needs fontTools, ImageMagick and resvg).
 
 ## License
 
