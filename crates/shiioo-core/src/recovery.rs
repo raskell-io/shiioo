@@ -17,7 +17,7 @@ pub enum Recovery {
 pub fn dangling_tool_calls(events: &[Event]) -> Vec<Recovery> {
     let mut open: Vec<(CallId, ToolClass)> = Vec::new();
     for ev in events {
-        match &ev.payload {
+        match &*ev.payload {
             Payload::ToolIntent { call_id, class, .. } => {
                 open.push((call_id.clone(), class.clone()));
             }

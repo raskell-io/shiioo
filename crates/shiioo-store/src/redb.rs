@@ -2,8 +2,8 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, WriteTran
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use shiioo_core::{
-    Clock, Epoch, Event, EventHash, EventStore, Lease, Payload, RunHead, RunId, Seq, StoreError,
-    SystemClock, Timestamp, WorkerId,
+    Clock, Epoch, Event, EventHash, EventPayload, EventStore, Lease, Payload, RunHead, RunId, Seq,
+    StoreError, SystemClock, Timestamp, WorkerId,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -197,14 +197,13 @@ impl EventStore for RedbStore {
 }
 
 fn encode_event(ev: &Event) -> Result<Vec<u8>, StoreError> {
-    let payload = serde_json::to_string(&ev.payload).map_err(backend)?;
     serde_json::to_vec(&StoredEvent {
         epoch: ev.epoch,
         recorded_at: ev.recorded_at,
         schema: ev.schema,
         prev_hash: ev.prev_hash,
         hash: ev.hash,
-        payload: RawValue::from_string(payload).map_err(backend)?,
+        payload: ev.payload.raw().to_owned(),
     })
     .map_err(backend)
 }
@@ -219,7 +218,7 @@ fn decode_event(run_id: RunId, seq: Seq, bytes: &[u8]) -> Result<Event, StoreErr
         schema: stored.schema,
         prev_hash: stored.prev_hash,
         hash: stored.hash,
-        payload: serde_json::from_str(stored.payload.get()).map_err(backend)?,
+        payload: EventPayload::from_raw(stored.schema, stored.payload).map_err(backend)?,
     })
 }
 

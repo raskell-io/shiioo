@@ -25,8 +25,6 @@ pub enum ChainError {
         previous: Epoch,
         found: Epoch,
     },
-    #[error("event {seq:?} could not be encoded: {reason}")]
-    Encoding { seq: Seq, reason: String },
 }
 
 /// Checks a run's full log from `Seq(0)`: contiguous, linked, unmodified,
@@ -66,10 +64,7 @@ pub fn verify_chain(events: &[Event]) -> Result<(), ChainError> {
                 found: ev.epoch,
             });
         }
-        let recomputed = ev.recompute_hash().map_err(|e| ChainError::Encoding {
-            seq: ev.seq,
-            reason: e.to_string(),
-        })?;
+        let recomputed = ev.recompute_hash();
         if recomputed != ev.hash {
             return Err(ChainError::Tampered { seq: ev.seq });
         }
@@ -81,9 +76,10 @@ pub fn verify_chain(events: &[Event]) -> Result<(), ChainError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Payload;
+    use crate::event::{EventPayload, Payload};
     use crate::ids::Timestamp;
     use serde_json::json;
+    use serde_json::value::RawValue;
 
     fn log(n: u64) -> Vec<Event> {
         let run_id = RunId::new();
@@ -116,13 +112,58 @@ mod tests {
     #[test]
     fn edited_payload_is_detected() {
         let mut events = log(3);
-        events[1].payload = Payload::RunFailed {
+        events[1].payload = encode(Payload::RunFailed {
             reason: "rewritten history".into(),
-        };
+        });
         assert_eq!(
             verify_chain(&events),
             Err(ChainError::Tampered { seq: Seq(1) })
         );
+    }
+
+    /// The hash covers the stored bytes, not a re-encoding: bytes that are
+    /// valid but not in serde's canonical form (older writers, other
+    /// languages) still verify, as long as nobody changed them.
+    #[test]
+    fn non_canonical_stored_bytes_verify() {
+        let raw = r#"{ "reason" : "written by an older build",  "type": "run_failed" }"#;
+        let payload = from_raw(raw);
+        let reencoded = serde_json::to_string(&*payload).unwrap_or_default();
+        assert_ne!(
+            reencoded, raw,
+            "test needs bytes that differ from a re-encoding"
+        );
+
+        let mut events = log(1);
+        let mut ev = events[0].clone();
+        ev.seq = Seq(1);
+        ev.prev_hash = Some(events[0].hash);
+        ev.payload = payload;
+        ev.hash = ev.recompute_hash();
+        events.push(ev);
+        assert_eq!(verify_chain(&events), Ok(()));
+    }
+
+    /// Even a change that keeps the decoded value identical (here: only
+    /// whitespace) is a change to the record, and is detected.
+    #[test]
+    fn reformatted_stored_bytes_are_detected() {
+        let mut events = log(2);
+        let pretty = serde_json::to_string_pretty(&*events[1].payload).unwrap_or_default();
+        events[1].payload = from_raw(&pretty);
+        assert_eq!(
+            verify_chain(&events),
+            Err(ChainError::Tampered { seq: Seq(1) })
+        );
+    }
+
+    fn encode(p: Payload) -> EventPayload {
+        EventPayload::encode(p).unwrap_or_else(|e| panic!("encode: {e}"))
+    }
+
+    fn from_raw(raw: &str) -> EventPayload {
+        let raw = RawValue::from_string(raw.to_owned()).unwrap_or_else(|e| panic!("raw: {e}"));
+        EventPayload::from_raw(1, raw).unwrap_or_else(|e| panic!("decode: {e}"))
     }
 
     #[test]

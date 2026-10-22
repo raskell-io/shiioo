@@ -40,11 +40,11 @@ schema                          u16 big-endian
 serde_json bytes of payload
 ```
 
-The payload encoding is stable: serde writes struct fields in declaration order, and `serde_json::Value` objects are sorted maps (the `preserve_order` feature is off). `float_roundtrip` is on, so floats survive a decode and re-encode unchanged.
+The hash covers the payload's **stored bytes**, not a re-encoding of the decoded value. `Event::payload` is an `EventPayload`, which carries the exact JSON text (`raw()`) next to the decoded `Payload` (via `Deref`). New events are encoded once, at seal time, with serde (struct fields in declaration order, `Value` objects as sorted maps, `float_roundtrip` on); from then on only those bytes are stored, hashed and verified.
 
-`verify_chain(&[Event])` checks, for a full log from `Seq(0)`: one run id, contiguous `seq`, correct `prev_hash` links, non-decreasing epochs, and that every recomputed hash matches. Errors: `ChainError::{WrongRun, Gap, BrokenLink, Tampered, EpochRegressed, Encoding}`.
+`verify_chain(&[Event])` checks, for a full log from `Seq(0)`: one run id, contiguous `seq`, correct `prev_hash` links, non-decreasing epochs, and that every recomputed hash matches. Errors: `ChainError::{WrongRun, Gap, BrokenLink, Tampered, EpochRegressed}`.
 
-Today verification re-encodes the typed payload. *(planned)* Verification will hash the stored payload bytes directly, so that verifying a log never depends on the current build's encoder (see §6).
+Because verification hashes stored bytes, it never depends on the current build's encoder: bytes in a non-canonical form (an older writer, another language) still verify, and any change to them, even whitespace only, is `Tampered` (see §6).
 
 ## 2. Write rules *(built)*
 

@@ -1,6 +1,7 @@
 use crate::ids::{CallId, Epoch, RunId, Seq, Timestamp, WorkerId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
@@ -103,6 +104,78 @@ impl Payload {
     }
 }
 
+/// A payload together with the exact JSON text it was hashed over.
+///
+/// The hash covers these bytes, not a re-encoding of the decoded value, so
+/// what a backend stored is exactly what verification checks. Decoding
+/// (and, later, upcasting older schema versions) never changes the bytes.
+#[derive(Clone, Debug)]
+pub struct EventPayload {
+    raw: Box<RawValue>,
+    typed: Payload,
+}
+
+impl EventPayload {
+    /// Encodes a payload written by this build.
+    pub fn encode(payload: Payload) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            raw: serde_json::value::to_raw_value(&payload)?,
+            typed: payload,
+        })
+    }
+
+    /// Decodes stored bytes written under payload schema `schema`.
+    pub fn from_raw(schema: u16, raw: Box<RawValue>) -> Result<Self, PayloadError> {
+        if schema > SCHEMA_VERSION {
+            return Err(PayloadError::NewerSchema(schema));
+        }
+        // Only schema 1 exists. Upcasters for older versions go here, and
+        // they produce `typed` only: `raw` stays as stored.
+        let typed = serde_json::from_str(raw.get()).map_err(PayloadError::Decode)?;
+        Ok(Self { raw, typed })
+    }
+
+    /// The exact stored JSON text.
+    pub fn raw(&self) -> &RawValue {
+        &self.raw
+    }
+}
+
+impl std::ops::Deref for EventPayload {
+    type Target = Payload;
+
+    fn deref(&self) -> &Payload {
+        &self.typed
+    }
+}
+
+impl PartialEq for EventPayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw.get() == other.raw.get()
+    }
+}
+
+impl Serialize for EventPayload {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.raw.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for EventPayload {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = Box::<RawValue>::deserialize(d)?;
+        Self::from_raw(SCHEMA_VERSION, raw).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PayloadError {
+    #[error("payload schema {0} is newer than this build supports ({SCHEMA_VERSION})")]
+    NewerSchema(u16),
+    #[error("decoding payload: {0}")]
+    Decode(serde_json::Error),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub run_id: RunId,
@@ -112,11 +185,12 @@ pub struct Event {
     pub schema: u16,
     pub prev_hash: Option<EventHash>,
     pub hash: EventHash,
-    pub payload: Payload,
+    pub payload: EventPayload,
 }
 
 impl Event {
-    /// Builds an event and computes its hash over everything but the hash.
+    /// Builds an event from a payload written by this build and computes its
+    /// hash over everything but the hash.
     pub fn seal(
         run_id: RunId,
         seq: Seq,
@@ -125,6 +199,7 @@ impl Event {
         prev_hash: Option<EventHash>,
         payload: Payload,
     ) -> Result<Self, serde_json::Error> {
+        let payload = EventPayload::encode(payload)?;
         let hash = compute_hash(
             run_id,
             seq,
@@ -132,8 +207,8 @@ impl Event {
             recorded_at,
             SCHEMA_VERSION,
             prev_hash,
-            &payload,
-        )?;
+            payload.raw(),
+        );
         Ok(Self {
             run_id,
             seq,
@@ -146,7 +221,7 @@ impl Event {
         })
     }
 
-    pub fn recompute_hash(&self) -> Result<EventHash, serde_json::Error> {
+    pub fn recompute_hash(&self) -> EventHash {
         compute_hash(
             self.run_id,
             self.seq,
@@ -154,15 +229,11 @@ impl Event {
             self.recorded_at,
             self.schema,
             self.prev_hash,
-            &self.payload,
+            self.payload.raw(),
         )
     }
 }
 
-// serde_json writes struct fields in declaration order and `Value` objects
-// as sorted maps (no `preserve_order` feature), so this encoding is stable.
-// A backend must store the payload bytes as written, so that a later
-// upcast or re-encoding never changes what was hashed.
 fn compute_hash(
     run_id: RunId,
     seq: Seq,
@@ -170,8 +241,8 @@ fn compute_hash(
     recorded_at: Timestamp,
     schema: u16,
     prev_hash: Option<EventHash>,
-    payload: &Payload,
-) -> Result<EventHash, serde_json::Error> {
+    payload: &RawValue,
+) -> EventHash {
     let mut h = Sha256::new();
     h.update(HASH_DOMAIN);
     h.update(run_id.0.as_bytes());
@@ -186,6 +257,6 @@ fn compute_hash(
         }
         None => h.update([0u8]),
     }
-    h.update(serde_json::to_vec(payload)?);
-    Ok(EventHash(h.finalize().into()))
+    h.update(payload.get().as_bytes());
+    EventHash(h.finalize().into())
 }

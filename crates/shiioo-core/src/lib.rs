@@ -21,7 +21,7 @@ pub mod store;
 
 pub use chain::{ChainError, verify_chain};
 pub use clock::{Clock, ManualClock, SystemClock};
-pub use event::{Event, EventHash, Payload, SCHEMA_VERSION, ToolClass};
+pub use event::{Event, EventHash, EventPayload, Payload, PayloadError, SCHEMA_VERSION, ToolClass};
 pub use head::RunHead;
 pub use ids::{CallId, Epoch, RunId, Seq, Timestamp, WorkerId};
 pub use lease::Lease;

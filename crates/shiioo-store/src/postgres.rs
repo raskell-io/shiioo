@@ -1,6 +1,7 @@
+use serde_json::value::RawValue;
 use shiioo_core::{
-    Clock, Epoch, Event, EventHash, EventStore, Lease, Payload, RunHead, RunId, Seq, StoreError,
-    Timestamp, WorkerId,
+    Clock, Epoch, Event, EventHash, EventPayload, EventStore, Lease, Payload, RunHead, RunId, Seq,
+    StoreError, Timestamp, WorkerId,
 };
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Postgres, Row, Transaction};
@@ -70,8 +71,6 @@ impl PostgresStore {
         events: &[Event],
     ) -> Result<(), StoreError> {
         for ev in events {
-            let payload = serde_json::to_string(&ev.payload)
-                .map_err(|e| StoreError::Backend(format!("encoding payload: {e}")))?;
             sqlx::query(
                 "INSERT INTO events
                    (run_id, seq, epoch, recorded_at_ms, schema, prev_hash, hash, payload)
@@ -84,7 +83,7 @@ impl PostgresStore {
             .bind(ev.schema as i16)
             .bind(ev.prev_hash.map(|h| h.0.to_vec()))
             .bind(ev.hash.0.to_vec())
-            .bind(payload)
+            .bind(ev.payload.raw().get())
             .execute(&mut **tx)
             .await
             .map_err(backend)?;
@@ -226,16 +225,17 @@ fn head_from_row(run_id: RunId, row: &PgRow) -> Result<RunHead, StoreError> {
 fn event_from_row(run_id: RunId, row: &PgRow) -> Result<Event, StoreError> {
     let payload: String = row.try_get("payload").map_err(backend)?;
     let schema: i16 = row.try_get("schema").map_err(backend)?;
+    let schema = u16::try_from(schema).map_err(backend)?;
     Ok(Event {
         run_id,
         seq: Seq(from_i64(row.try_get("seq").map_err(backend)?)?),
         epoch: Epoch(from_i64(row.try_get("epoch").map_err(backend)?)?),
         recorded_at: Timestamp(from_i64(row.try_get("recorded_at_ms").map_err(backend)?)?),
-        schema: u16::try_from(schema).map_err(backend)?,
+        schema,
         prev_hash: hash_opt(row.try_get("prev_hash").map_err(backend)?)?,
         hash: hash(row.try_get("hash").map_err(backend)?)?,
-        payload: serde_json::from_str(&payload)
-            .map_err(|e| StoreError::Backend(format!("decoding payload: {e}")))?,
+        payload: EventPayload::from_raw(schema, RawValue::from_string(payload).map_err(backend)?)
+            .map_err(backend)?,
     })
 }
 
