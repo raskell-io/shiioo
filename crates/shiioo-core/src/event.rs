@@ -96,7 +96,10 @@ pub enum Payload {
 impl Payload {
     /// Nothing may be appended after a terminal event.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Payload::RunCompleted { .. } | Payload::RunFailed { .. })
+        matches!(
+            self,
+            Payload::RunCompleted { .. } | Payload::RunFailed { .. }
+        )
     }
 }
 

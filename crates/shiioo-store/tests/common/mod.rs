@@ -1,30 +1,59 @@
-//! Behaviour every `EventStore` backend must have. Run against `MemoryStore`
-//! today; the Postgres backend will run the same cases.
+//! Behaviour every `EventStore` backend must have. Each backend's test file
+//! calls `conformance_suite!(setup)`, where `setup` returns the store and the
+//! `ManualClock` it reads time from (or `None` to skip).
 
 use serde_json::json;
 use shiioo_core::{
     CallId, Epoch, EventStore, ManualClock, Payload, Recovery, Seq, StoreError, ToolClass,
     WorkerId, dangling_tool_calls, verify_chain,
 };
-use shiioo_store::MemoryStore;
 
-const TTL: u64 = 30_000;
+pub const TTL: u64 = 30_000;
+pub const START_MS: u64 = 1_700_000_000_000;
 
-fn store() -> (MemoryStore<ManualClock>, ManualClock) {
-    let clock = ManualClock::at(1_700_000_000_000);
-    (MemoryStore::new(clock.clone()), clock)
+#[macro_export]
+macro_rules! conformance_suite {
+    ($setup:path) => {
+        $crate::conformance_suite!(@cases $setup;
+            log_is_a_valid_hash_chain,
+            live_lease_blocks_other_workers,
+            stale_worker_is_fenced_after_takeover,
+            expired_lease_cannot_write_even_without_takeover,
+            renewal_keeps_the_epoch,
+            stale_view_gets_seq_conflict,
+            concurrent_appends_exactly_one_wins,
+            takeover_after_crash_recovers_tool_calls_safely,
+            finished_run_is_closed,
+            failed_batch_writes_nothing,
+            workers_cannot_forge_store_events,
+            unknown_run_is_not_found,
+            read_from_offset,
+        );
+    };
+    (@cases $setup:path; $($case:ident),* $(,)?) => {
+        $(
+            #[tokio::test]
+            async fn $case() -> Result<(), shiioo_core::StoreError> {
+                let Some((store, clock)) = $setup().await else {
+                    return Ok(());
+                };
+                common::$case(&store, &clock).await
+            }
+        )*
+    };
 }
 
 fn model_step(n: u64) -> Payload {
     Payload::ModelResponseRecorded {
         model: "test-model".into(),
-        response: json!({ "turn": n }),
+        response: json!({ "turn": n, "ratio": 0.1 + 0.2, "text": "héllo\n\"quoted\"" }),
     }
 }
 
-#[tokio::test]
-async fn log_is_a_valid_hash_chain() -> Result<(), StoreError> {
-    let (store, _) = store();
+pub async fn log_is_a_valid_hash_chain<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({ "goal": "test" })).await?;
     let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
     store
@@ -37,22 +66,26 @@ async fn log_is_a_valid_hash_chain() -> Result<(), StoreError> {
     Ok(())
 }
 
-#[tokio::test]
-async fn live_lease_blocks_other_workers() -> Result<(), StoreError> {
-    let (store, _) = store();
+pub async fn live_lease_blocks_other_workers<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     store.acquire_lease(run, "w1".into(), TTL).await?;
 
     let err = store.acquire_lease(run, "w2".into(), TTL).await;
-    assert!(matches!(err, Err(StoreError::LeaseHeld { holder, .. }) if holder == WorkerId::from("w1")));
+    assert!(
+        matches!(err, Err(StoreError::LeaseHeld { holder, .. }) if holder == WorkerId::from("w1"))
+    );
     Ok(())
 }
 
 /// The split-brain case: w1 stalls (GC pause, partition), its lease expires,
 /// w2 takes over, then w1 wakes up and tries to write.
-#[tokio::test]
-async fn stale_worker_is_fenced_after_takeover() -> Result<(), StoreError> {
-    let (store, clock) = store();
+pub async fn stale_worker_is_fenced_after_takeover<S: EventStore>(
+    store: &S,
+    clock: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let w1 = store.acquire_lease(run, "w1".into(), TTL).await?;
 
@@ -74,9 +107,10 @@ async fn stale_worker_is_fenced_after_takeover() -> Result<(), StoreError> {
     Ok(())
 }
 
-#[tokio::test]
-async fn expired_lease_cannot_write_even_without_takeover() -> Result<(), StoreError> {
-    let (store, clock) = store();
+pub async fn expired_lease_cannot_write_even_without_takeover<S: EventStore>(
+    store: &S,
+    clock: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
 
@@ -86,9 +120,10 @@ async fn expired_lease_cannot_write_even_without_takeover() -> Result<(), StoreE
     Ok(())
 }
 
-#[tokio::test]
-async fn renewal_keeps_the_epoch() -> Result<(), StoreError> {
-    let (store, clock) = store();
+pub async fn renewal_keeps_the_epoch<S: EventStore>(
+    store: &S,
+    clock: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
 
@@ -100,9 +135,10 @@ async fn renewal_keeps_the_epoch() -> Result<(), StoreError> {
     Ok(())
 }
 
-#[tokio::test]
-async fn stale_view_gets_seq_conflict() -> Result<(), StoreError> {
-    let (store, _) = store();
+pub async fn stale_view_gets_seq_conflict<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
     store.append(&lease, Seq(2), vec![model_step(1)]).await?;
@@ -118,12 +154,42 @@ async fn stale_view_gets_seq_conflict() -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Two writers race for the same slot (for example a worker and its own
+/// retried request). Exactly one wins; the log stays a valid chain.
+pub async fn concurrent_appends_exactly_one_wins<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
+
+    for round in 0..10u64 {
+        let next = Seq(2 + round);
+        let (a, b) = tokio::join!(
+            store.append(&lease, next, vec![model_step(round)]),
+            store.append(&lease, next, vec![model_step(round + 100)]),
+        );
+        let wins = [&a, &b].iter().filter(|r| r.is_ok()).count();
+        assert_eq!(wins, 1, "round {round}: {a:?} / {b:?}");
+        for r in [a, b] {
+            if let Err(e) = r {
+                assert!(matches!(e, StoreError::SeqConflict { .. }), "{e:?}");
+            }
+        }
+    }
+    let events = store.read(run, Seq(0)).await?;
+    assert_eq!(events.len(), 12);
+    assert_eq!(verify_chain(&events), Ok(()));
+    Ok(())
+}
+
 /// The kill -9 case: a worker records two tool intents and dies before
 /// recording either result. The next worker must re-run the idempotent one
 /// and must not re-run the side-effecting one.
-#[tokio::test]
-async fn takeover_after_crash_recovers_tool_calls_safely() -> Result<(), StoreError> {
-    let (store, clock) = store();
+pub async fn takeover_after_crash_recovers_tool_calls_safely<S: EventStore>(
+    store: &S,
+    clock: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let w1 = store.acquire_lease(run, "w1".into(), TTL).await?;
     store
@@ -198,9 +264,10 @@ async fn takeover_after_crash_recovers_tool_calls_safely() -> Result<(), StoreEr
     Ok(())
 }
 
-#[tokio::test]
-async fn finished_run_is_closed() -> Result<(), StoreError> {
-    let (store, _) = store();
+pub async fn finished_run_is_closed<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
     store
@@ -220,9 +287,34 @@ async fn finished_run_is_closed() -> Result<(), StoreError> {
     Ok(())
 }
 
-#[tokio::test]
-async fn workers_cannot_forge_store_events() -> Result<(), StoreError> {
-    let (store, _) = store();
+pub async fn failed_batch_writes_nothing<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
+
+    let err = store
+        .append(
+            &lease,
+            Seq(2),
+            vec![
+                model_step(1),
+                Payload::RunFailed { reason: "x".into() },
+                model_step(2),
+            ],
+        )
+        .await;
+    assert!(matches!(err, Err(StoreError::InvalidPayload(_))));
+    assert_eq!(store.read(run, Seq(0)).await?.len(), 2);
+    store.append(&lease, Seq(2), vec![model_step(1)]).await?;
+    Ok(())
+}
+
+pub async fn workers_cannot_forge_store_events<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
     let run = store.create_run(json!({})).await?;
     let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
 
@@ -237,5 +329,37 @@ async fn workers_cannot_forge_store_events() -> Result<(), StoreError> {
         )
         .await;
     assert!(matches!(err, Err(StoreError::InvalidPayload(_))));
+    Ok(())
+}
+
+pub async fn unknown_run_is_not_found<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let ghost = shiioo_core::RunId::new();
+    assert_eq!(
+        store.read(ghost, Seq(0)).await,
+        Err(StoreError::RunNotFound(ghost))
+    );
+    assert_eq!(
+        store.acquire_lease(ghost, "w1".into(), TTL).await,
+        Err(StoreError::RunNotFound(ghost))
+    );
+    Ok(())
+}
+
+pub async fn read_from_offset<S: EventStore>(store: &S, _: &ManualClock) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
+    store
+        .append(&lease, Seq(2), vec![model_step(1), model_step(2)])
+        .await?;
+
+    let tail = store.read(run, Seq(2)).await?;
+    assert_eq!(
+        tail.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![Seq(2), Seq(3)]
+    );
+    assert!(store.read(run, Seq(10)).await?.is_empty());
     Ok(())
 }

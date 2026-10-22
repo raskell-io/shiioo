@@ -1,6 +1,6 @@
 [package]
 name = "shiioo-store"
-description = "Event store backends for Shiioo (in-memory today, Postgres next)."
+description = "Event store backends for Shiioo: in-memory reference and Postgres."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,14 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["postgres"]
+postgres = ["dep:sqlx"]
+
 [dependencies]
 shiioo-core.workspace = true
 serde_json.workspace = true
+sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
