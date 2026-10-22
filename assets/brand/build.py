@@ -3,7 +3,7 @@
 
 The mascot and icons are pixel art, written as SVG <rect> runs so they stay
 crisp at any size. The wordmark and tagline are set in real typefaces
-(Fraunces and Inter, both SIL OFL, see ./fonts) and converted to outlines,
+(Bricolage Grotesque and Inter, both SIL OFL, see ./fonts) and converted to outlines,
 because GitHub does not load fonts inside SVG images.
 
 Requires fontTools (`pip install fonttools`), ImageMagick (`magick`) for
@@ -31,7 +31,8 @@ PAPER = (244, 241, 234)
 INK_ON_DARK = (236, 233, 226)
 TEAL_ON_DARK = (94, 180, 166)
 
-WORDMARK = ("Fraunces.ttf", (("wght", 640), ("opsz", 144), ("SOFT", 100), ("WONK", 0)))
+WORDMARK = ("BricolageGrotesque.ttf", (("wght", 760), ("opsz", 96), ("wdth", 100)))
+WORDMARK_TRACKING = -0.018  # em; negative tightens
 TAGLINE = ("Inter.ttf", (("wght", 600), ("opsz", 14)))
 
 
@@ -171,7 +172,7 @@ def tracked_to_width(font, text, size, width):
 def lockup(mascot, ink, accent, pad=8):
     """Mascot (pixel art) beside the wordmark and tagline (outlined type).
     Returns the SVG body and its size, in mascot-pixel units."""
-    word = Text(WORDMARK, "shiioo", size=mascot.h * 0.62)
+    word = Text(WORDMARK, "shiioo", size=mascot.h * 0.62, tracking=WORDMARK_TRACKING)
     tag = tracked_to_width(TAGLINE, "VIRTUAL COMPANY OS", size=word.height * 0.2, width=word.width)
     gap_x, gap_y = mascot.w * 0.14, word.height * 0.24
     text_h = word.height + gap_y + tag.height
