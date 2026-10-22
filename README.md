@@ -1,6 +1,16 @@
-# Shiioo
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/shiioo-mark-dark.svg">
+    <img src="assets/brand/shiioo-mark-light.svg" alt="Shiioo: Virtual Company OS" width="560">
+  </picture>
+</p>
 
-**The open-source agent platform where every run is governed, replayable, forkable and provable.**
+<h1 align="center">Shiioo</h1>
+
+<p align="center">
+  <strong>Virtual Company OS.</strong> Hire AI agents, give them policies and budgets, and keep every decision on the record.<br>
+  The open-source agent platform where every run is governed, replayable, forkable and provable.
+</p>
 
 Shiioo runs AI agents on any model and any machine, with tools, secrets, approvals and live streaming. It's built in Rust on Tokio, runs on-device from a single embedded database file (redb) or as a cluster on Postgres, and is designed around one rule: **the per-run event log is the only state.** Everything else follows from that:
 
@@ -32,6 +42,10 @@ cargo clippy --all-targets --all-features
 SHIIOO_TEST_DATABASE_URL=postgres://user:pass@localhost/shiioo cargo test --all-features
 ```
 
+## Brand
+
+The mascot is an original character: a seasoned strategist in a three-piece suit who runs the company while you set the direction. "Virtual Company OS" is the tagline; "agent platform" is what Shiioo technically is. Marks, icons and the favicon are in [`assets/brand`](assets/brand), generated from the pixel-art sources in `assets/brand/source` by `python3 assets/brand/build.py`.
+
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE). The brand assets in `assets/brand` are covered by the same license, but the name and mascot identify the project: please don't use them to suggest endorsement.
