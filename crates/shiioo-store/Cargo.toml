@@ -1,0 +1,19 @@
+[package]
+name = "shiioo-store"
+description = "Event store backends for Shiioo (in-memory today, Postgres next)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shiioo-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

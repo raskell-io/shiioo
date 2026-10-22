@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/shiioo-core",
+    "crates/shiioo-store",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Raskell Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/raskell-io/shiioo"
+
+[workspace.dependencies]
+shiioo-core = { path = "crates/shiioo-core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
