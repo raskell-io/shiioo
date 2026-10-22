@@ -20,7 +20,7 @@ Each event carries:
 3. **Model output recorded before acting.** The full model response is appended before any tool in it runs, which makes replay deterministic.
 4. **Explicit side effects.** Tools declare a `ToolClass`: `Pure`, `Idempotent { key }` or `SideEffecting`. Every call is an intent event first and a result event after. On takeover, `dangling_tool_calls` turns unmatched intents into `Rerun` (pure and idempotent) or `MarkUnknown` (side-effecting). Unknown outcomes go to a reconcile hook or a human, and are never retried blindly.
 5. **Closed runs stay closed.** Nothing may be appended after `RunCompleted` or `RunFailed`.
-6. **Time is injected.** `Clock` is a trait, so simulations control time. The Postgres backend decides lease expiry with the database clock, so clock skew between workers can't extend a lease.
+6. **Time is injected.** `Clock` is a trait, so simulations control time. The Postgres backend decides lease expiry with the database clock, so clock skew between workers can't extend a lease. The embedded backend runs on one machine, so it uses that machine's clock.
 
 ## Components (target)
 
@@ -31,26 +31,28 @@ clients (CLI, dashboard, SDKs, Slack/GitHub)
 │ api │ gateway (daemon + SSE conns) │ workers (agent loop) │ scheduler    │
 └───────┬───────────────────────────────────────────────┬────────────────────┘
         │ sqlx                                          │ QUIC/WebSocket, mTLS, outbound
-   Postgres (log, queue via SKIP LOCKED,             shiioo daemon on machines
+   redb file (on-device) or Postgres (cluster)       shiioo daemon on machines
    LISTEN/NOTIFY)  + object storage (blobs,          and sandboxes (tools run here)
    snapshots, cold runs as Parquet)
 ```
 
 - **One binary, roles by flag:** `shiioo server --roles api,worker,scheduler,gateway`. Scale out by running more of a role.
-- **Postgres only** to start: it serves as the event log, the job queue and the notification bus. No Redis. NATS is optional later.
-- **An embedded backend** (redb or SQLite) behind the same `EventStore` trait, for single-node use. Only Postgres supports more than one worker.
+- **Storage backends** behind one `EventStore` trait, all passing the same conformance suite:
+  - **redb** (default): a pure-Rust, crash-safe, ACID embedded store in a single file, with no server to run. For on-device and single-node use. redb allows one writer per file, which serializes writes across runs; readers never block.
+  - **Postgres** (`postgres` feature): for clusters with many workers. It also serves as the job queue (`SKIP LOCKED`) and the notification bus (`LISTEN/NOTIFY`). No Redis. NATS is optional later.
+  - **Turso** (the Rust rewrite of SQLite, beta at v0.7 as of 2026-07, with MVCC concurrent writes) is a candidate to revisit once it's stable. It could give one embedded engine with concurrent writers.
 - **Policies** in Cedar. **Agent credentials** as Biscuit tokens, so a subagent gets a strictly narrower token than its parent.
 - **Observability:** `tracing` + OpenTelemetry, one span per step, trace ID = run ID.
 
 ## Testing
 
-- `shiioo-store/tests/conformance.rs`: every backend must pass it.
+- `shiioo-store/tests/common`: the conformance suite every backend must pass (`tests/memory.rs`, `tests/redb.rs`, `tests/postgres.rs`).
 - Next: deterministic simulation of the whole cluster (`turmoil`/`madsim`) with partitions, worker kills and clock skew. Plus `loom` for concurrency primitives and property tests on the state machine.
 - A CI chaos job: kill workers at random, then assert every run finishes and no side-effecting call ran twice.
 
 ## Roadmap
 
-1. **Kernel spike** *(in progress)*: event model, hash chain, fencing and recovery in `MemoryStore` are done. Still to do: Postgres backend, agent loop with one provider, shell and file tools, local daemon, SSE, simulation harness. Exit test: kill -9 a worker mid-turn and the run still finishes correctly.
+1. **Kernel spike** *(in progress)*: event model, hash chain, fencing and recovery are done, with memory, redb and Postgres backends. Still to do: agent loop with one provider, shell and file tools, local daemon, SSE, simulation harness. Exit test: kill -9 a worker mid-turn and the run still finishes correctly.
 2. **MVP:** multiple providers (ported capacity broker), MCP tools, Cedar policies, approvals, secrets, CLI, basic dashboard, TypeScript SDK, Docker Compose self-hosting.
 3. **The USP:** workspace snapshots (overlayfs/btrfs, Firecracker), then fork, rewind and diff, then replay as evals, then ACP harness adapters (Claude Code, Codex).
 4. **Trust:** signed audit checkpoints anchored outside the system, Biscuit delegation for subagents, Firecracker sandbox pools.

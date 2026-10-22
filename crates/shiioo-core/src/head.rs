@@ -2,12 +2,13 @@ use crate::event::{Event, EventHash, Payload};
 use crate::ids::{Epoch, RunId, Seq, Timestamp, WorkerId};
 use crate::lease::Lease;
 use crate::store::StoreError;
+use serde::{Deserialize, Serialize};
 
 /// Everything a backend needs to know about a run to accept or reject a
 /// write. Backends load it (under a lock or row lock), call one method, and
 /// persist the returned events plus the updated head in one transaction.
 /// Keeping the rules here means every backend enforces exactly the same ones.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunHead {
     pub run_id: RunId,
     pub next_seq: Seq,
