@@ -6,11 +6,14 @@ Each ADR records one decision: the context, what we chose, what we gave up, and 
 |---|---|---|
 | [0001](0001-event-log-is-the-only-state.md) | The per-run event log is the only state | Accepted |
 | [0002](0002-leases-with-fencing.md) | Run ownership through leases with fencing tokens | Accepted |
-| [0003](0003-redb-default-postgres-for-clusters.md) | redb by default, Postgres for clusters | Accepted |
+| [0003](0003-redb-default-postgres-for-clusters.md) | redb by default, Postgres for clusters | Accepted, cluster part superseded by 0010 |
 | [0004](0004-rest-and-sse-api.md) | REST + resumable SSE as the only public API | Accepted |
 | [0005](0005-cedar-policies-and-biscuit-credentials.md) | Cedar for policies, Biscuit for agent credentials | Accepted |
 | [0006](0006-daemon-dials-out-over-websocket.md) | Machines run a daemon that dials out over WebSocket | Accepted |
 | [0007](0007-rewrite-under-apache-2.md) | Rewrite Shiioo from scratch under Apache-2.0 | Accepted |
+| [0008](0008-personal-workforce-not-managed-cloud.md) | The product is a personal agent workforce, not a managed agent cloud | Accepted |
+| [0009](0009-harness-first-runtimes.md) | Harnesses are the primary runtime; the native loop serves local models | Accepted |
+| [0010](0010-single-binary-server-and-nodes.md) | One binary: a server, nodes that dial out, an embedded store | Accepted |
 
 ## Template
 

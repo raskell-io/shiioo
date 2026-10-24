@@ -49,24 +49,25 @@ Organization (tenant, billing, SSO)
 ## 4. Components
 
 ```
-  CLI · dashboard · SDKs · Slack/GitHub/webhooks
-                 │  REST + resumable SSE  (OpenAPI, /v1)
-┌────────────────▼──────────────── shiioo serve ──────────────────────────────┐
+  phone (Telegram, web dashboard over Tailscale) · GitHub · CLI
+                 │  REST + resumable SSE  (/v1), Telegram long-polling
+┌────────────────▼──────────────── shiioo server ─────────────────────────────┐
 │  api        auth, validation, writes commands as events, serves streams      │
-│  scheduler  finds runnable runs, fires triggers and timers                   │
-│  worker     leases a run, executes turns: context → model → policy → tools   │
-│  gateway    holds daemon connections and SSE subscribers, routes tool calls  │
+│  scheduler  finds runnable runs, fires triggers and timers, places work      │
+│  worker     leases a run, executes turns: context → model → rules → tools    │
+│  gateway    holds node connections and SSE subscribers, routes tool calls    │
+│  telegram   delegation, approvals and notifications for the owner            │
 └───────┬──────────────────────────────┬─────────────────────────┬─────────────┘
         │ EventStore                   │ BlobStore               │ WebSocket + TLS, dialed out
-   redb file (on-device)         object storage             shiioo daemon on each Machine
-   or Postgres (cluster)         (S3/R2/GCS/disk)           runs tools, owns the workspace,
-                                                             takes workspace snapshots
+   redb file (the only source     local disk (object           shiioo node on each machine
+   of truth; Postgres optional)   storage optional)            runs harnesses, tools and
+                                                               sandboxes; owns workspaces
 ```
 
-- **One binary, `shiioo`.** `shiioo up` (everything in one process plus a local daemon, for on-device use), `shiioo serve --roles …` (server roles), `shiioo daemon` (tool host), and the CLI commands. Scale out by running more processes with a given role.
+- **One binary, `shiioo`, three roles** ([ADR-0010](adr/0010-single-binary-server-and-nodes.md)). `shiioo up` runs server and node in one process (the whole system on one Mac); `shiioo server` and `shiioo node --server …` split them across machines; the CLI is the same binary. Like Nomad: the server decides, nodes execute and dial out.
 - **Workers are stateless.** Any worker can run any turn of any run. A worker crash costs at most the current turn, which the next lease holder recovers from the log.
-- **Tools run on Machines, not in workers.** The worker records the intent, the gateway forwards the call to the machine's daemon, the daemon executes and returns the result, the worker records it. Remote tools without a machine (HTTP APIs, remote MCP servers) run in the worker.
-- **Daemons dial out.** No inbound ports on machines; works behind NAT and corporate proxies.
+- **Work runs on nodes, not in workers.** For harness runs the node starts the harness and streams its steps back; for tool calls the worker records the intent, the gateway forwards the call to the node, the node executes and returns the result, the worker records it.
+- **Nodes dial out.** No inbound ports on machines; works behind NAT, and over Tailscale needs no public address at all.
 
 Details: [design/execution.md](design/execution.md), [design/tools-and-machines.md](design/tools-and-machines.md), [design/runtimes-and-providers.md](design/runtimes-and-providers.md).
 
@@ -134,11 +135,14 @@ Dependency direction: `core` ← everything; nothing depends on `api` or the bin
 
 ## 10. Roadmap
 
-1. **Kernel spike** *(in progress)*: done: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the agent loop with the Anthropic provider, shell and file tools, an in-process machine with a call journal and epoch fencing, and the `shiioo` CLI. The exit test passes: a worker killed at any point of a turn is taken over and the run finishes, with no side effect repeated (`crates/shiioo-runtime/tests/crash_recovery.rs`). SSE streaming is built: event ids are seqs, `Last-Event-ID` resumes from the log, and in-process writes wake streams through the `Notifying` store wrapper (Postgres `LISTEN/NOTIFY` next). The deterministic simulation harness is in `crates/shiioo-sim`.
-2. **MVP**: multiple providers, MCP tools, Cedar policies, approvals, secrets, CLI, dashboard, TypeScript SDK, `shiioo up`, Docker Compose.
-3. **The differentiator**: workspace snapshots, fork/rewind/diff, replay as evals, ACP harness adapters (Claude Code, Codex).
-4. **Trust**: signed checkpoints, Biscuit delegation, Firecracker sandbox pools.
-5. **Cloud and ecosystem**: multi-tenancy, triggers and integrations, archival, metering, the "virtual company" template.
+The product roadmap lives in [positioning.md](positioning.md#roadmap). In kernel terms:
+
+0. **Kernel spike** *(done)*: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the native agent loop with the Anthropic provider, built-in tools, an in-process machine with a call journal and epoch fencing, the HTTP API with resumable SSE, the `shiioo` CLI, and the deterministic simulation harness (`crates/shiioo-sim`). The exit test passes: a worker killed at any point of a turn is taken over and the run finishes with no side effect repeated.
+1. **Harness runtime** ([ADR-0009](adr/0009-harness-first-runtimes.md)): Claude Code driven headless on a node, its steps recorded as events, a git worktree and branch per run, the dashboard over Tailscale.
+2. **Rules, approvals, Telegram**: allow / ask / deny per tool, repo and action; harness permission requests routed to the owner's phone; notifications.
+3. **Capacity**: Codex and local-model employees, the broker across subscriptions and endpoints, budgets, GitHub-issue intake.
+4. **Isolation levels**: `container` and `openshell` on nodes, secrets injection, egress rules.
+5. **Planner, routines, roles**; then remote nodes, asset and mail machines; then replay and forks.
 
 ## Document index
 

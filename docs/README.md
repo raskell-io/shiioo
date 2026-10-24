@@ -1,9 +1,10 @@
 # Shiioo documentation
 
-Shiioo is a **Virtual Company OS**: an open-source agent platform where every run is governed, replayable, forkable and provable.
+Shiioo is a **Virtual Company OS**: a staff of AI agents that work on your own machines around the clock, which you direct and supervise from your phone.
 
 ## Start here
 
+- [What Shiioo is](positioning.md): the product definition, principles, topology, and the roadmap. Read this first.
 - [Architecture overview](architecture.md): the one rule, the guarantees, components, storage, crate map and roadmap.
 - [Glossary](glossary.md): platform terms, and how the "virtual company" vocabulary maps onto them.
 

@@ -12,7 +12,7 @@
   The open-source agent platform where every run is governed, replayable, forkable and provable.
 </p>
 
-Shiioo runs AI agents on any model and any machine, with tools, secrets, approvals and live streaming. It's built in Rust on Tokio, runs on-device from a single embedded database file (redb) or as a cluster on Postgres, and is designed around one rule: **the per-run event log is the only state.** Everything else follows from that:
+Shiioo is a staff of AI agents (Claude Code, Codex, local models) that work on your own machines around the clock, which you direct and supervise from your phone. It's one Rust binary with an embedded database: a server that keeps the record and makes decisions, nodes that run the work and dial out to it. It is designed around one rule: **the per-run event log is the only state.** Everything else follows from that:
 
 - **Rock-solid execution.** Workers are stateless and hold fenced leases. Every write carries an epoch, and a stalled worker that wakes up after a takeover is rejected. Side-effecting tool calls are recorded as an intent before they run, so a crash never causes a blind retry of a `git push` or a payment.
 - **Governed.** Policies as code, approval boards with quorum rules, budgets, and change management for configuration an agent proposes.
