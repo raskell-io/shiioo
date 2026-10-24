@@ -10,8 +10,9 @@ use serde_json::Value;
 use shiioo_api::ApiState;
 use shiioo_core::{Event, EventStore, Payload, RunId, Seq, verify_chain};
 use shiioo_runtime::{
-    AgentSpec, AnthropicProvider, LocalMachine, RunOutcome, RunSpec, Toolbox, Worker,
-    anthropic::DEFAULT_MODEL,
+    AgentSpec, AnthropicProvider, HarnessBilling, HarnessSpec, LocalMachine, ModelProvider,
+    RunOutcome, RunSpec, Runtime, Toolbox, UnconfiguredProvider, Worker, anthropic::DEFAULT_MODEL,
+    branch_for,
 };
 use shiioo_store::{Notifying, RedbStore};
 use std::path::{Path, PathBuf};
@@ -35,23 +36,42 @@ enum Command {
     Run {
         /// What the agent should do.
         task: String,
-        #[arg(long, default_value = DEFAULT_MODEL)]
-        model: String,
-        /// Tools the agent may use.
-        #[arg(
-            long,
-            value_delimiter = ',',
-            default_value = "read_file,write_file,shell"
-        )]
-        tools: Vec<String>,
+        /// Run the task with an external agent harness (`claude-code`)
+        /// instead of Shiioo's own loop. Uses the harness's own login.
+        #[arg(long, value_parser = ["claude-code"])]
+        harness: Option<String>,
+        /// Git repository the harness works on. The run gets its own
+        /// worktree under .shiioo/worktrees and a `shiioo/<run>` branch.
+        #[arg(long, requires = "harness")]
+        repo: Option<PathBuf>,
+        /// Model. Native runs default to claude-opus-5-5; harness runs to
+        /// the harness's own default.
+        #[arg(long)]
+        model: Option<String>,
+        /// Tools the agent may use. Native: Shiioo tool names (default
+        /// read_file,write_file,shell). Harness: its allow rules (default
+        /// "Read,Edit,Write,Glob,Grep,Bash(git *)").
+        #[arg(long, value_delimiter = ',')]
+        tools: Option<Vec<String>>,
         /// Extra instructions for the agent.
         #[arg(long, default_value = "")]
         system: String,
         #[arg(long, default_value_t = 50)]
         max_turns: u32,
-        /// Reasoning effort: low, medium, high, xhigh or max.
+        /// Reasoning effort for native runs: low, medium, high, xhigh or max.
         #[arg(long, default_value = "high")]
         effort: String,
+        /// Harness permission mode (Claude Code: default, acceptEdits,
+        /// plan, dontAsk, bypassPermissions).
+        #[arg(long, default_value = "acceptEdits", requires = "harness")]
+        permission_mode: String,
+        /// Bill the harness to API credits (ANTHROPIC_API_KEY) instead of
+        /// the subscription login.
+        #[arg(long, requires = "harness")]
+        api_billing: bool,
+        /// Stop a harness run at this estimated spend (API billing only).
+        #[arg(long, requires = "harness")]
+        max_budget_usd: Option<f64>,
     },
     /// Continue a run, for example after the process was killed.
     Resume {
@@ -113,24 +133,69 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Command::Run {
             task,
+            harness,
+            repo,
             model,
             tools,
             system,
             max_turns,
             effort,
+            permission_mode,
+            api_billing,
+            max_budget_usd,
         } => {
             let worker = worker(&store, &workspace, &data, &effort)?;
+            let runtime = match harness.as_deref() {
+                Some(_) => {
+                    let mut h = HarnessSpec::claude_code();
+                    h.repo = repo.as_ref().map(std::fs::canonicalize).transpose()?;
+                    h.permission_mode = permission_mode;
+                    h.max_budget_usd = max_budget_usd;
+                    h.billing = if api_billing {
+                        HarnessBilling::ApiKey
+                    } else {
+                        HarnessBilling::Subscription
+                    };
+                    Runtime::Harness(h)
+                }
+                None => Runtime::Native,
+            };
+            let is_harness = matches!(runtime, Runtime::Harness(_));
             let spec = RunSpec {
                 task,
                 agent: AgentSpec {
-                    model,
+                    model: model.unwrap_or_else(|| {
+                        if is_harness {
+                            String::new()
+                        } else {
+                            DEFAULT_MODEL.into()
+                        }
+                    }),
                     system,
-                    tools,
+                    tools: tools.unwrap_or_else(|| {
+                        if is_harness {
+                            ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)"]
+                                .map(String::from)
+                                .to_vec()
+                        } else {
+                            ["read_file", "write_file", "shell"]
+                                .map(String::from)
+                                .to_vec()
+                        }
+                    }),
                     max_turns,
                 },
+                runtime,
             };
             let run = worker.create(&spec).await?;
             println!("run {run}");
+            if repo.is_some() {
+                println!(
+                    "branch {} in {}",
+                    branch_for(run),
+                    data.join("worktrees").join(run.to_string()).display()
+                );
+            }
             drive(&worker, run).await
         }
         Command::Resume { run, effort } => {
@@ -156,19 +221,16 @@ async fn serve(
     effort: &str,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let store = Arc::new(Notifying::new(RedbStore::clone(store)));
-    let mut provider = AnthropicProvider::from_env()?;
-    provider.effort = effort.to_owned();
-    let provider = Arc::new(provider);
-    let machine = Arc::new(LocalMachine::open(
-        workspace,
-        data.join("journal.jsonl"),
-        Toolbox::builtin(),
-    )?);
+    let provider = provider(effort);
+    let machine = Arc::new(
+        LocalMachine::open(workspace, data.join("journal.jsonl"), Toolbox::builtin())?
+            .with_worktrees(data.join("worktrees")),
+    );
     let worker_store = Arc::clone(&store);
     let workers = Arc::new(move || {
         Worker::new(
             Arc::clone(&worker_store),
-            Arc::clone(&provider) as _,
+            Arc::clone(&provider),
             Arc::clone(&machine),
             format!("local-{}", std::process::id()).as_str(),
         )
@@ -226,16 +288,28 @@ fn worker(
     data: &Path,
     effort: &str,
 ) -> Result<Worker<RedbStore>, Box<dyn std::error::Error>> {
-    let mut provider = AnthropicProvider::from_env()?;
-    provider.effort = effort.to_owned();
-    let machine = LocalMachine::open(workspace, data.join("journal.jsonl"), Toolbox::builtin())?;
+    let provider = provider(effort);
+    let machine = LocalMachine::open(workspace, data.join("journal.jsonl"), Toolbox::builtin())?
+        .with_worktrees(data.join("worktrees"));
     Ok(Worker::new(
         Arc::clone(store),
-        Arc::new(provider),
+        provider,
         Arc::new(machine),
         format!("local-{}", std::process::id()).as_str(),
     )
     .with_observer(Arc::new(print_event)))
+}
+
+/// The native runtime's model provider. Without API credentials, native
+/// runs fail with a clear message while harness runs still work.
+fn provider(effort: &str) -> Arc<dyn ModelProvider> {
+    match AnthropicProvider::from_env() {
+        Ok(mut p) => {
+            p.effort = effort.to_owned();
+            Arc::new(p)
+        }
+        Err(_) => Arc::new(UnconfiguredProvider),
+    }
 }
 
 async fn drive(
@@ -293,6 +367,27 @@ fn print_event(ev: &Event) {
             one_line(output, 120)
         ),
         Payload::ToolOutcomeUnknown { call_id } => format!("? outcome of {} unknown", call_id.0),
+        Payload::HarnessSessionStarted {
+            harness,
+            session_id,
+            model,
+            ..
+        } => format!("{harness} session {session_id} ({model})"),
+        Payload::HarnessResult {
+            subtype,
+            cost_usd,
+            permission_denials,
+            ..
+        } => format!(
+            "harness result: {subtype}, cost ${:.4}, {} permission denial(s)",
+            cost_usd.unwrap_or(0.0),
+            permission_denials.as_array().map_or(0, Vec::len)
+        ),
+        Payload::CapacityObserved { provider, windows } => format!(
+            "capacity {provider}: 5h {:.0}%, 7d {:.0}% used",
+            windows["five_hour"]["utilization"].as_f64().unwrap_or(0.0) * 100.0,
+            windows["seven_day"]["utilization"].as_f64().unwrap_or(0.0) * 100.0
+        ),
         Payload::RunCompleted { .. } => "completed".into(),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
     };

@@ -22,7 +22,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shiioo_core::{Event, EventStore, RunId, Seq, StoreError};
-use shiioo_runtime::{AgentSpec, RunOutcome, RunSpec, RunStatus, Worker, run_status};
+use shiioo_runtime::{AgentSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, run_status};
 use shiioo_store::Notifying;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -133,6 +133,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 struct CreateRun {
     task: String,
     agent: Option<AgentSpec>,
+    /// `{"kind":"native"}` (default) or `{"kind":"harness", …}`.
+    runtime: Option<Runtime>,
 }
 
 #[derive(Serialize)]
@@ -161,6 +163,7 @@ async fn create_run<S: EventStore + 'static>(
     let spec = RunSpec {
         task: body.task,
         agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
+        runtime: body.runtime.unwrap_or_default(),
     };
     let spec = serde_json::to_value(&spec).map_err(|e| ApiError::Internal(e.to_string()))?;
     let run_id = state.store.create_run(spec).await?;

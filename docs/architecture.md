@@ -114,9 +114,9 @@ Details: [design/fork-and-replay.md](design/fork-and-replay.md).
 | `shiioo-core` | Event model, hash chain, `RunHead` rules, leases, recovery, `EventStore` trait. No I/O | built |
 | `shiioo-store` | `MemoryStore`, `RedbStore`, `PostgresStore` | built |
 | `shiioo-blob` | Content-addressed blob store over `object_store` | planned |
-| `shiioo-runtime` | The agent loop: context building, turns, tool dispatch, recovery on takeover; Anthropic provider; built-in tools; local machine with call journal and epoch fencing | built (spike) |
+| `shiioo-runtime` | The agent loop: context building, turns, tool dispatch, recovery on takeover; Anthropic provider; built-in tools; local machine with call journal and epoch fencing; the Claude Code harness adapter and per-run git worktrees | built |
 | `shiioo-providers` | Model adapters and the capacity broker (key pooling, failover, cost) | planned |
-| `shiioo-tools` | Tool trait, built-in tools, MCP client, ACP harness adapters | planned |
+| `shiioo-tools` | MCP client, ACP harness adapters (the tool trait, built-in tools and the Claude Code adapter live in `shiioo-runtime` for now) | planned |
 | `shiioo-policy` | Cedar evaluation, approvals, quorum, budgets, change management | planned |
 | `shiioo-auth` | OIDC, API keys, Biscuit tokens, RBAC | planned |
 | `shiioo-protocol` | Daemon ↔ gateway wire protocol (protobuf) | planned |
@@ -138,7 +138,7 @@ Dependency direction: `core` ← everything; nothing depends on `api` or the bin
 The product roadmap lives in [positioning.md](positioning.md#roadmap). In kernel terms:
 
 0. **Kernel spike** *(done)*: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the native agent loop with the Anthropic provider, built-in tools, an in-process machine with a call journal and epoch fencing, the HTTP API with resumable SSE, the `shiioo` CLI, and the deterministic simulation harness (`crates/shiioo-sim`). The exit test passes: a worker killed at any point of a turn is taken over and the run finishes with no side effect repeated.
-1. **Harness runtime** ([ADR-0009](adr/0009-harness-first-runtimes.md)): Claude Code driven headless on a node, its steps recorded as events, a git worktree and branch per run, the dashboard over Tailscale.
+1. **Harness runtime** ([ADR-0009](adr/0009-harness-first-runtimes.md)) *(mostly built)*: Claude Code driven headless, its steps recorded as events, a git worktree and branch per run, resume of the same session after a crash. Still to do: the dashboard over Tailscale.
 2. **Rules, approvals, Telegram**: allow / ask / deny per tool, repo and action; harness permission requests routed to the owner's phone; notifications.
 3. **Capacity**: Codex and local-model employees, the broker across subscriptions and endpoints, budgets, GitHub-issue intake.
 4. **Isolation levels**: `container` and `openshell` on nodes, secrets injection, egress rules.

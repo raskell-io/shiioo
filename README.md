@@ -37,6 +37,17 @@ Shiioo is a staff of AI agents (Claude Code, Codex, local models) that work on y
 
 ## Try it
 
+Hire Claude Code on your subscription (log in once with `claude`), on a repository of yours:
+
+```sh
+cargo run -p shiioo -- --workspace ~/shiioo-office run --harness claude-code --repo ~/code/myproject \
+    "Fix the flaky test in tests/net.rs and commit"
+```
+
+The run gets its own git worktree and a `shiioo/<run>` branch; every step Claude Code takes is in the run's log (`shiioo log <run-id>`), and `shiioo resume <run-id>` continues the same Claude Code session after a crash. No API key needed.
+
+Or use Shiioo's own loop with a model API key:
+
 ```sh
 export ANTHROPIC_API_KEY=...
 cargo run -p shiioo -- --workspace /path/to/project run "Summarise what this project does in SUMMARY.md"

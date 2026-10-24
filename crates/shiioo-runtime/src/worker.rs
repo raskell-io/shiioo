@@ -1,11 +1,14 @@
 use crate::context;
+use crate::harness::claude_code::{self, Line};
+use crate::harness::{HarnessError, HarnessProcess};
 use crate::machine::{CallStatus, Invocation, LocalMachine, MachineError};
 use crate::model::{
     ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
 };
-use crate::spec::RunSpec;
+use crate::spec::{HarnessKind, HarnessSpec, RunSpec, Runtime};
 use crate::status::{as_text, unresolved_unknown};
-use crate::tools::ToolOutput;
+use crate::tools::{ToolOutput, digest_hex};
+use crate::workspace::{self, WorktreeError};
 use serde_json::{Value, json};
 use shiioo_core::{
     CallId, Event, EventStore, Lease, Payload, Recovery, RunId, Seq, StoreError, ToolClass,
@@ -13,6 +16,7 @@ use shiioo_core::{
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::watch;
 
 pub type Observer = Arc<dyn Fn(&Event) + Send + Sync>;
 
@@ -48,6 +52,10 @@ pub enum WorkerError {
     Provider(#[from] ProviderError),
     #[error(transparent)]
     Machine(#[from] MachineError),
+    #[error(transparent)]
+    Harness(#[from] HarnessError),
+    #[error(transparent)]
+    Worktree(#[from] WorktreeError),
     #[error("run spec: {0}")]
     Spec(String),
     #[error("simulated crash at {0:?}")]
@@ -128,11 +136,13 @@ impl<S: EventStore + 'static> Worker<S> {
         let spec = parse_spec(&log)?;
 
         let lease = Arc::new(Mutex::new(lease));
-        let _heartbeat = Heartbeat::start(Arc::clone(&self.store), Arc::clone(&lease), self.ttl_ms);
+        let (_heartbeat, lease_lost) =
+            Heartbeat::start(Arc::clone(&self.store), Arc::clone(&lease), self.ttl_ms);
         let mut session = Session {
             worker: self,
             run_id,
             lease,
+            lease_lost,
             log,
             spec,
         };
@@ -155,7 +165,8 @@ impl<S: EventStore + 'static> Worker<S> {
 
 /// Renews the lease every `ttl / 3` in the background while the worker is
 /// busy (model calls can outlast a lease). Stops on drop, and on the first
-/// failed renewal: the worker's next write then fails and it stops.
+/// failed renewal: it then flags the lease as lost, so a harness process
+/// is killed at once, and the worker's next write fails and it stops.
 struct Heartbeat(tokio::task::JoinHandle<()>);
 
 impl Heartbeat {
@@ -163,8 +174,9 @@ impl Heartbeat {
         store: Arc<S>,
         lease: Arc<Mutex<Lease>>,
         ttl_ms: u64,
-    ) -> Self {
-        Self(tokio::spawn(async move {
+    ) -> (Self, watch::Receiver<bool>) {
+        let (lost_tx, lost_rx) = watch::channel(false);
+        let task = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(ttl_ms / 3)).await;
                 let Some(current) = lease.lock().ok().map(|l| l.clone()) else {
@@ -176,10 +188,14 @@ impl Heartbeat {
                             *l = renewed;
                         }
                     }
-                    Err(_) => return,
+                    Err(_) => {
+                        lost_tx.send_replace(true);
+                        return;
+                    }
                 }
             }
-        }))
+        });
+        (Self(task), lost_rx)
     }
 }
 
@@ -193,12 +209,20 @@ struct Session<'w, S> {
     worker: &'w Worker<S>,
     run_id: RunId,
     lease: Arc<Mutex<Lease>>,
+    lease_lost: watch::Receiver<bool>,
     log: Vec<Event>,
     spec: RunSpec,
 }
 
+/// How often a harness session is resumed after its process stopped
+/// without finishing, before the run is failed.
+const MAX_HARNESS_STARTS: usize = 5;
+
 impl<S: EventStore + 'static> Session<'_, S> {
     async fn run(&mut self) -> Result<RunOutcome, WorkerError> {
+        if let Runtime::Harness(spec) = self.spec.runtime.clone() {
+            return self.run_harness(&spec).await;
+        }
         if let Some(reason) = unresolved_unknown(&self.log) {
             return Ok(RunOutcome::NeedsAttention(reason));
         }
@@ -302,6 +326,176 @@ impl<S: EventStore + 'static> Session<'_, S> {
                     .map_err(|e| WorkerError::Spec(format!("decoding recorded response: {e}")))
             })
             .transpose()
+    }
+
+    /// Drives an external harness for this run. The harness executes its
+    /// own tools; Shiioo records what it sees. A session that was started
+    /// by a previous worker is resumed rather than started again.
+    async fn run_harness(&mut self, spec: &HarnessSpec) -> Result<RunOutcome, WorkerError> {
+        let HarnessKind::ClaudeCode = spec.harness;
+        let cwd = match &spec.repo {
+            Some(repo) => {
+                let root = self.worker.machine.worktrees_root().ok_or_else(|| {
+                    WorkerError::Spec("this machine has no worktree directory for repo runs".into())
+                })?;
+                workspace::ensure(root, repo, self.run_id).await?.path
+            }
+            None => self.worker.machine.workspace().to_path_buf(),
+        };
+        let starts: Vec<String> = self
+            .log
+            .iter()
+            .filter_map(|e| match &*e.payload {
+                Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .collect();
+        if starts.len() >= MAX_HARNESS_STARTS {
+            return self
+                .fail(format!(
+                    "harness stopped without finishing {} times",
+                    starts.len()
+                ))
+                .await;
+        }
+        let (prompt, resume) = match starts.last() {
+            Some(session) => (claude_code::CONTINUE_PROMPT, Some(session.as_str())),
+            None => (self.spec.task.as_str(), None),
+        };
+        let cmd = claude_code::command(
+            &claude_code::binary(spec),
+            spec,
+            &self.spec.agent,
+            &cwd,
+            prompt,
+            resume,
+        );
+        let mut process = HarnessProcess::spawn(cmd)?;
+        let mut lost = self.lease_lost.clone();
+        let mut last_text = String::new();
+        loop {
+            let line = tokio::select! {
+                line = process.next_line() => line?,
+                _ = lost.changed() => {
+                    process.kill().await;
+                    return Ok(RunOutcome::LostLease);
+                }
+            };
+            let Some(line) = line else { break };
+            let parsed = claude_code::parse_line(&line)
+                .map_err(|e| HarnessError::Parse(format!("{e}: {}", truncate(&line, 200))))?;
+            match parsed {
+                Line::Init {
+                    session_id,
+                    model,
+                    cwd,
+                    version,
+                } => {
+                    self.append(vec![Payload::HarnessSessionStarted {
+                        harness: claude_code::HARNESS.into(),
+                        version,
+                        session_id,
+                        cwd,
+                        model,
+                    }])
+                    .await?;
+                }
+                Line::Assistant { message } => {
+                    let text = text_of(&message);
+                    if !text.is_empty() {
+                        last_text = text;
+                    }
+                    let mut payloads = vec![Payload::ModelResponseRecorded {
+                        model: message["model"].as_str().unwrap_or_default().to_owned(),
+                        response: message.clone(),
+                    }];
+                    for block in message["content"].as_array().into_iter().flatten() {
+                        if block["type"] != "tool_use" {
+                            continue;
+                        }
+                        let tool = block["name"].as_str().unwrap_or_default().to_owned();
+                        let input = block["input"].clone();
+                        payloads.push(Payload::ToolIntent {
+                            call_id: CallId(block["id"].as_str().unwrap_or_default().to_owned()),
+                            class: harness_tool_class(&tool, &input),
+                            tool,
+                            input,
+                        });
+                    }
+                    self.append(payloads).await?;
+                }
+                Line::ToolResults(results) => {
+                    let payloads: Vec<Payload> = results
+                        .into_iter()
+                        .map(|r| Payload::ToolResult {
+                            call_id: CallId(r.call_id),
+                            output: json!(r.content),
+                            is_error: r.is_error,
+                        })
+                        .collect();
+                    if !payloads.is_empty() {
+                        self.append(payloads).await?;
+                    }
+                }
+                Line::RateLimit { windows } => {
+                    self.append(vec![Payload::CapacityObserved {
+                        provider: claude_code::HARNESS.into(),
+                        windows,
+                    }])
+                    .await?;
+                }
+                Line::Result(result) => {
+                    let outcome = if result.is_error || result.subtype != "success" {
+                        let reason = if result.errors.is_empty() {
+                            format!("harness ended with {}", result.subtype)
+                        } else {
+                            format!("{}: {}", result.subtype, result.errors.join("; "))
+                        };
+                        (
+                            Payload::RunFailed {
+                                reason: reason.clone(),
+                            },
+                            RunOutcome::Failed(reason),
+                        )
+                    } else {
+                        let text = if result.text.is_empty() {
+                            last_text.clone()
+                        } else {
+                            result.text.clone()
+                        };
+                        (
+                            Payload::RunCompleted {
+                                output: json!(text),
+                            },
+                            RunOutcome::Completed(text),
+                        )
+                    };
+                    self.append(vec![
+                        Payload::HarnessResult {
+                            harness: claude_code::HARNESS.into(),
+                            session_id: result.session_id,
+                            subtype: result.subtype,
+                            is_error: result.is_error,
+                            cost_usd: result.cost_usd,
+                            usage: result.usage,
+                            permission_denials: result.permission_denials,
+                        },
+                        outcome.0,
+                    ])
+                    .await?;
+                    return Ok(outcome.1);
+                }
+                Line::Other(_) => {}
+            }
+        }
+        // Output ended without a result: the process died or was killed.
+        // The run stays open; the next drive resumes the session.
+        let (status, stderr) = process.finish().await;
+        Err(HarnessError::ExitedEarly {
+            status: status.map_or("unknown".into(), |s| s.to_string()),
+            stderr: truncate(&stderr, 2000),
+        }
+        .into())
     }
 
     async fn call_tool(&mut self, call: ToolCall) -> Result<(), WorkerError> {
@@ -458,6 +652,38 @@ impl<S: EventStore + 'static> Session<'_, S> {
 
     fn epoch(&self) -> Result<shiioo_core::Epoch, WorkerError> {
         Ok(self.current_lease()?.epoch)
+    }
+}
+
+/// How a Claude Code tool call behaves if its outcome goes unrecorded.
+/// Observational for harness runs (Shiioo doesn't re-run them), but it
+/// keeps the log's meaning uniform.
+fn harness_tool_class(tool: &str, input: &Value) -> ToolClass {
+    match tool {
+        "Read" | "Glob" | "Grep" | "LS" | "WebFetch" | "WebSearch" | "NotebookRead"
+        | "TodoRead" | "ToolSearch" | "LSP" => ToolClass::Pure,
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "TodoWrite" => ToolClass::Idempotent {
+            key: digest_hex(&[tool.as_bytes(), input.to_string().as_bytes()]),
+        },
+        _ => ToolClass::SideEffecting,
+    }
+}
+
+fn text_of(message: &Value) -> String {
+    message["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_owned(),
     }
 }
 

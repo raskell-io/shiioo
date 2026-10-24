@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use shiioo_core::{
     CallId, Epoch, EventStore, ManualClock, Payload, RunId, Seq, ToolClass, verify_chain,
 };
+use shiioo_runtime::Runtime;
 use shiioo_runtime::{
     AgentSpec, BoxFuture, CrashPoint, Faults, Invocation, LocalMachine, MachineError, RunOutcome,
     RunSpec, ScriptedProvider, Tool, ToolOutput, ToolSpec, Toolbox, Worker, WorkerError,
@@ -118,6 +119,7 @@ impl<S: EventStore + 'static> Fixture<S> {
                 tools: vec!["charge_card".into(), "read_note".into()],
                 max_turns: 10,
             },
+            runtime: Runtime::Native,
         };
         self.worker("creator", None)
             .create(&spec)

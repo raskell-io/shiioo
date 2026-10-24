@@ -99,7 +99,7 @@ fn resolve(workspace: &Path, path: &str) -> Result<PathBuf, ToolOutput> {
 
 /// Length-prefixed SHA-256 over `parts`, so ("ab", "c") and ("a", "bc")
 /// get different keys.
-fn digest_hex(parts: &[&[u8]]) -> String {
+pub(crate) fn digest_hex(parts: &[&[u8]]) -> String {
     let mut h = Sha256::new();
     for part in parts {
         h.update((part.len() as u64).to_be_bytes());

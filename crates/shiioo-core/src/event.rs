@@ -86,6 +86,33 @@ pub enum Payload {
     ToolOutcomeUnknown {
         call_id: CallId,
     },
+    /// An external agent harness (Claude Code, Codex, …) started or resumed
+    /// a session for this run. Its steps follow as `ModelResponseRecorded`,
+    /// `ToolIntent` and `ToolResult` events observed from its output.
+    HarnessSessionStarted {
+        harness: String,
+        version: String,
+        session_id: String,
+        cwd: String,
+        model: String,
+    },
+    /// The harness's own summary of a finished session: cost, usage, what
+    /// it was denied. Recorded before the terminal event.
+    HarnessResult {
+        harness: String,
+        session_id: String,
+        subtype: String,
+        is_error: bool,
+        cost_usd: Option<f64>,
+        usage: Value,
+        permission_denials: Value,
+    },
+    /// A provider reported its rate-limit windows (for example Claude's
+    /// five-hour and seven-day windows). Input for capacity routing.
+    CapacityObserved {
+        provider: String,
+        windows: Value,
+    },
     RunCompleted {
         output: Value,
     },

@@ -8,22 +8,28 @@
 
 pub mod anthropic;
 mod context;
+pub mod harness;
 pub mod machine;
 pub mod model;
 pub mod scripted;
 pub mod spec;
 pub mod status;
 pub mod tools;
+mod unconfigured;
 pub mod worker;
+pub mod workspace;
 
 pub use anthropic::AnthropicProvider;
+pub use harness::{HarnessError, HarnessProcess};
 pub use machine::{CallStatus, Invocation, LocalMachine, MachineError};
 pub use model::{
     BoxFuture, ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
     ToolResultBlock, ToolSpec, Transcript, Turn, Usage,
 };
 pub use scripted::ScriptedProvider;
-pub use spec::{AgentSpec, RunSpec};
+pub use spec::{AgentSpec, HarnessBilling, HarnessKind, HarnessSpec, RunSpec, Runtime};
 pub use status::{RunStatus, run_status};
 pub use tools::{Tool, ToolOutput, Toolbox};
+pub use unconfigured::UnconfiguredProvider;
 pub use worker::{CrashPoint, Faults, RunOutcome, Worker, WorkerError};
+pub use workspace::{Worktree, WorktreeError, branch_for};

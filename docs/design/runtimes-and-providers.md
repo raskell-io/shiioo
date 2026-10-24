@@ -32,29 +32,48 @@ One turn, as executed by the worker that holds the run's lease:
 
 The loop is a plain async function over a `RunContext` that only touches the outside world through traits (`EventStore`, `Provider`, `ToolExecutor`, `Clock`), so the simulator in `shiioo-sim` drives it unchanged.
 
-## 3. Harness runtime via ACP *(planned)*
+## 3. Harness runtime *(Claude Code built; Codex and ACP planned)*
 
-The [Agent Client Protocol](https://agentclientprotocol.com) (started by Zed) is JSON-RPC over stdio between a client (normally an editor) and an agent harness. Shiioo plays the client role: the daemon starts the harness inside the run's sandbox and an adapter in `shiioo-tools` translates in both directions.
+Harnesses are the primary employees (ADR-0009). Shiioo drives them as subprocesses on a node and records what it sees; the harness executes its own tools. Anthropic's documented path for driving Claude Code from another program is its print mode, so that is what the adapter uses; the Agent Client Protocol (ACP, Zed's editor protocol) comes later for harnesses that only speak it.
 
-| ACP message | Shiioo event |
+### 3.1 Claude Code *(built, `shiioo-runtime::harness::claude_code`)*
+
+`claude -p "<prompt>" --output-format stream-json --verbose --permission-mode <mode> --setting-sources <sources> --max-turns N [--model M] [--append-system-prompt S] [--allowedTools …] [--max-budget-usd X] [--resume <session>]`, run in the run's worktree, stdin closed. Each stdout line is one JSON object; the shapes were recorded from Claude Code 2.1.310 (`crates/shiioo-runtime/tests/fixtures/claude-code-read.jsonl`) and map onto events:
+
+| Claude Code line | Event |
 |---|---|
-| `session/new`, `session/prompt` from Shiioo | `UserMessage` (new) delivered to the harness |
-| `session/update` agent message chunks | Ephemeral deltas; the final message as `HarnessMessageRecorded` (new) |
-| `session/update` tool call started / updated | `ToolIntent` / `ToolResult`, `class: SideEffecting` unless the harness marks it read-only |
-| `session/request_permission` | Policy decision → allow, deny, or `ApprovalRequested`; the ACP answer is sent only after the decision is recorded |
-| File system and terminal requests from the harness | Served by the daemon inside the sandbox, recorded like Shiioo tool calls |
-| Turn end (`stopReason`) | Turn boundary: `BudgetCharged` (if the harness reports usage), `SnapshotTaken` |
+| `system`/`init` (session id, cwd, model, version) | `HarnessSessionStarted` |
+| `assistant` (a Messages API message) | `ModelResponseRecorded` with the message verbatim, plus one `ToolIntent` per `tool_use` block (class by tool name: `Read`/`Glob`/`Grep`/… pure, `Edit`/`Write`/… idempotent, `Bash` and the rest side-effecting) |
+| `user` with `tool_result` blocks | one `ToolResult` per block |
+| `rate_limit_event` (five-hour and seven-day windows) | `CapacityObserved` |
+| `result` (`success` or `error_*`, cost, usage, `permission_denials`) | `HarnessResult`, then `RunCompleted` or `RunFailed` |
 
-What works fully: policies and approvals on everything the harness asks permission for, workspace snapshots, rewind and fork of the workspace, cost and time budgets, audit.
+Rules the adapter follows:
 
-Honest limits:
+- **Subscription by default.** In print mode Claude Code prefers an `ANTHROPIC_API_KEY` in its environment over the owner's login, so subscription runs get that variable removed from the child environment (`HarnessBilling::Subscription`). `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CONFIG_DIR` pass through for headless servers.
+- **No inherited session.** The variables that identify a parent Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, …) are scrubbed, so Shiioo can itself run inside Claude Code.
+- **Owner settings stay out.** `--setting-sources project` by default: the repo's `.claude` settings apply, the owner's personal hooks and MCP servers don't. (`--bare` would be cleaner but never reads OAuth credentials, so it can't serve subscription runs.)
+- **Crash = resume.** A worker that dies mid-run leaves `HarnessSessionStarted` in the log; the next lease holder runs `--resume <session>` with a continuation prompt and `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1`. After five such starts the run fails. A worker that loses its lease kills its harness process immediately (the heartbeat flags the loss).
+- **Workspaces.** A run on a repository gets `<data>/worktrees/<run>` on branch `shiioo/<run-prefix>`, created from the repo's HEAD and reused across resumes. Pushing is the harness's job and subject to its allow rules; merging is the owner's.
+
+Permissions today: the harness's own mode (`acceptEdits` by default) and allow rules (`Bash(git *)` form). Unanswered prompts in print mode are denied, and the denials show up in `HarnessResult.permission_denials`. Phase 2 routes them to the owner: the documented way is a `PreToolUse` / `PermissionRequest` hook passed via `--settings`, answered by Shiioo's rules or a Telegram approval (`--permission-prompt-tool` exists too, but its contract is undocumented).
+
+### 3.2 Codex *(planned)*
+
+`codex exec --json [--worktree] [-s workspace-write] [-C dir] "<prompt>"` emits `thread.started`, `turn.started`, `item.completed` (agent messages, commands, file changes) and `turn.completed` with usage (`crates/shiioo-runtime/tests/fixtures/codex-ok.jsonl`); `codex exec resume <thread>` continues a thread. Same mapping, same rules.
+
+### 3.3 Other harnesses via ACP *(planned)*
+
+OpenCode, Gemini CLI, Goose and others expose the [Agent Client Protocol](https://agentclientprotocol.com): JSON-RPC over stdio with `session/new`, `session/prompt`, `session/update` (messages and tool calls) and `session/request_permission`. The same event mapping applies, and permission requests go through Shiioo's rules exactly like hook calls.
+
+### Honest limits
 
 - **Determinism.** Shiioo doesn't see the harness's raw model calls, so it can't replay them exactly. Replay re-runs the harness from a snapshot with the recorded user messages; the outcome may differ.
-- **Fork granularity.** You can fork at any turn boundary the harness exposes, not inside a turn.
-- **Permission coverage.** Actions a harness performs without asking (its own auto-approved tools) are only visible as tool-call updates. Isolation of the machine, not the harness's goodwill, is what bounds them; harness runs require isolation `process` or stronger.
-- **Credentials.** The harness needs its own model credentials; they are injected as Secrets and never written to the log.
+- **Fork granularity.** Forks happen at turn boundaries the harness exposes, not inside a turn.
+- **Permission coverage.** Actions a harness performs without asking are visible only as recorded tool calls. Isolation of the node, not the harness's goodwill, bounds them; unattended runs with real credentials want the `container` or `openshell` level.
+- **Tool calls aren't Shiioo's.** `ToolIntent`/`ToolResult` from a harness are observations: Shiioo never re-runs or reconciles them. A tool call interrupted by a crash is the harness's to sort out when resumed.
 
-Adapters are versioned per harness and tested against recorded ACP sessions.
+Adapters are versioned per harness and tested against recorded output.
 
 ## 4. Context building *(planned)*
 

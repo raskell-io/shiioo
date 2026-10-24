@@ -16,8 +16,8 @@ use shiioo_core::{
 };
 use shiioo_runtime::{
     AgentSpec, BoxFuture, CallStatus, CrashPoint, Faults, Invocation, LocalMachine, MachineError,
-    ModelResponse, RunOutcome, RunSpec, ScriptedProvider, StopReason, Tool, ToolOutput, ToolSpec,
-    Toolbox, Usage, Worker, WorkerError,
+    ModelResponse, RunOutcome, RunSpec, Runtime, ScriptedProvider, StopReason, Tool, ToolOutput,
+    ToolSpec, Toolbox, Usage, Worker, WorkerError,
 };
 use shiioo_store::{MemoryStore, RedbStore};
 use std::collections::{BTreeMap, HashMap};
@@ -408,6 +408,7 @@ impl<S: EventStore + 'static> Sim<S> {
                 tools: vec!["charge".into(), "read".into(), "write".into()],
                 max_turns: 50,
             },
+            runtime: Runtime::Native,
         };
         self.run = match self.worker("creator".into(), None).create(&spec).await {
             Ok(run) => run,
@@ -758,6 +759,9 @@ pub fn compact(ev: &Event) -> String {
             )
         }
         Payload::ToolOutcomeUnknown { call_id } => format!("unknown {}", call_id.0),
+        Payload::HarnessSessionStarted { session_id, .. } => format!("harness {session_id}"),
+        Payload::HarnessResult { subtype, .. } => format!("harness result {subtype}"),
+        Payload::CapacityObserved { provider, .. } => format!("capacity {provider}"),
         Payload::RunCompleted { .. } => "completed".to_owned(),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
     };

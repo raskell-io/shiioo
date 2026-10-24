@@ -86,6 +86,9 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 | `ToolIntent` | `call_id, tool, class: ToolClass, input` | worker | About to dispatch a tool call. `class` is `Pure`, `Idempotent { key }` or `SideEffecting`. |
 | `ToolResult` | `call_id, output, is_error` | worker | The tool's outcome. |
 | `ToolOutcomeUnknown` | `call_id` | worker | A side-effecting call may or may not have happened. Blocks the run until reconciled. |
+| `HarnessSessionStarted` | `harness, version, session_id, cwd, model` | worker | A harness started or resumed a session; its steps follow as the events above ([runtimes-and-providers.md](runtimes-and-providers.md)). |
+| `HarnessResult` | `harness, session_id, subtype, is_error, cost_usd, usage, permission_denials` | worker | The harness's own summary, before the terminal event. |
+| `CapacityObserved` | `provider, windows` | worker | A provider's rate-limit windows, as seen by a harness. Input for capacity routing. |
 | `RunCompleted` | `output` | worker | Terminal. |
 | `RunFailed` | `reason` | worker | Terminal. |
 

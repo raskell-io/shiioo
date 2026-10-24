@@ -142,6 +142,7 @@ impl Journal {
 
 pub struct LocalMachine {
     workspace: PathBuf,
+    worktrees: Option<PathBuf>,
     tools: Toolbox,
     journal: Mutex<Journal>,
     crash_before_next_finish: AtomicBool,
@@ -152,10 +153,22 @@ impl LocalMachine {
     pub fn in_memory(workspace: impl Into<PathBuf>, tools: Toolbox) -> Self {
         Self {
             workspace: workspace.into(),
+            worktrees: None,
             tools,
             journal: Mutex::new(Journal::default()),
             crash_before_next_finish: AtomicBool::new(false),
         }
+    }
+
+    /// Where harness runs that work on a repository get their git
+    /// worktrees. Without it, such runs are refused.
+    pub fn with_worktrees(mut self, root: impl Into<PathBuf>) -> Self {
+        self.worktrees = Some(root.into());
+        self
+    }
+
+    pub fn worktrees_root(&self) -> Option<&Path> {
+        self.worktrees.as_deref()
     }
 
     /// A machine whose journal is the append-only file at `journal_path`.
@@ -189,6 +202,7 @@ impl LocalMachine {
         );
         Ok(Self {
             workspace: workspace.into(),
+            worktrees: None,
             tools,
             journal: Mutex::new(journal),
             crash_before_next_finish: AtomicBool::new(false),
