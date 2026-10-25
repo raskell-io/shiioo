@@ -39,28 +39,66 @@ const SESSION_ENV: &[&str] = &[
 
 pub use super::CONTINUE_PROMPT;
 
-/// Where a harness's permission requests go: Shiioo's own API. Claude Code
-/// runs `<exe> hook pre-tool-use` before every tool call; that subcommand
-/// asks the server and prints the decision ([`hook_settings`]).
+/// Where a harness's permission requests go: Shiioo's own API. Before
+/// every tool call the harness runs the hook [`HookCommand`], which asks
+/// the server and prints the decision ([`hook_settings`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookEndpoint {
     pub server_url: String,
     pub token: String,
-    pub exe: PathBuf,
+    pub command: HookCommand,
 }
+
+/// The program a harness runs as its `PreToolUse` hook. Both read the
+/// hook's JSON on stdin and print the decision; both get the server, token
+/// and run from `SHIIOO_SERVER_URL`, `SHIIOO_API_TOKEN` and `SHIIOO_RUN_ID`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HookCommand {
+    /// `<shiioo> hook pre-tool-use`, on the host.
+    Exe(PathBuf),
+    /// A `curl` call to `POST /v1/runs/{run}/hook/pre-tool-use`, which
+    /// answers in the hook's own format. For sandboxes, which have no
+    /// `shiioo` binary inside. Fails closed: if the office can't be
+    /// reached the printed decision is a deny.
+    Curl,
+}
+
+impl HookCommand {
+    /// The shell command line the harness runs.
+    pub fn shell(&self) -> String {
+        match self {
+            HookCommand::Exe(exe) => {
+                format!("{} hook pre-tool-use", shell_quote(&exe.to_string_lossy()))
+            }
+            HookCommand::Curl => format!(
+                "curl -sSf -X POST --max-time {} \
+                 -H \"Authorization: Bearer $SHIIOO_API_TOKEN\" \
+                 -H \"Content-Type: application/json\" --data-binary @- \
+                 \"$SHIIOO_SERVER_URL/v1/runs/$SHIIOO_RUN_ID/hook/pre-tool-use\" \
+                 || printf '%s' '{}'",
+                HOOK_TIMEOUT_SECS + 60,
+                DENY_UNREACHABLE
+            ),
+        }
+    }
+}
+
+/// What the `curl` hook prints when the office cannot be reached.
+pub const DENY_UNREACHABLE: &str = "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\
+    \"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"shiioo could not be reached\"}}";
 
 /// Seconds a permission request may wait for the owner before Claude Code
 /// gives up on the hook (which denies the call).
 pub const HOOK_TIMEOUT_SECS: u64 = 6 * 60 * 60;
 
 /// The `--settings` JSON that installs the permission hook.
-pub fn hook_settings(exe: &Path) -> String {
+pub fn hook_settings(command: &HookCommand) -> String {
     serde_json::json!({
         "hooks": {
             "PreToolUse": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} hook pre-tool-use", shell_quote(&exe.to_string_lossy())),
+                    "command": command.shell(),
                     "timeout": HOOK_TIMEOUT_SECS,
                 }]
             }]
@@ -139,7 +177,7 @@ pub fn command(
     }
     if let Some((endpoint, run_id)) = hooks {
         cmd.arg("--settings")
-            .arg(hook_settings(&endpoint.exe))
+            .arg(hook_settings(&endpoint.command))
             .env("SHIIOO_SERVER_URL", &endpoint.server_url)
             .env("SHIIOO_API_TOKEN", &endpoint.token)
             .env("SHIIOO_RUN_ID", run_id);
@@ -334,6 +372,8 @@ mod tests {
             binary: None,
             max_minutes: None,
             binary_args: Vec::new(),
+            isolation: Default::default(),
+            env: Default::default(),
         };
         let agent = AgentSpec {
             model: "claude-opus-5-5".into(),
@@ -414,7 +454,7 @@ mod tests {
         let endpoint = HookEndpoint {
             server_url: "http://127.0.0.1:7878".into(),
             token: "tok".into(),
-            exe: PathBuf::from("/opt/my shiioo/shiioo"),
+            command: HookCommand::Exe(PathBuf::from("/opt/my shiioo/shiioo")),
         };
         let cmd = command(
             Path::new("claude"),

@@ -19,7 +19,8 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 | Executive review | Approval board | A group of approvers with quorum rules. |
 | Department budget | Budget | Token, cost and time limits, enforced by the server. |
 | Office / workstation | Machine | A host or sandbox running `shiioo daemon`, where tools execute. |
-| System credentials | Secret | Credentials injected into tools at execution time, never shown to the model. |
+| System credentials | Secret | Credentials stored encrypted in the office, referenced by name (`secret:<name>`), injected when a harness starts and redacted from the record. |
+| Locked office | Isolation level | Where a run executes: `worktree` (the owner's user), `container` (a container per run with an egress allow list), `openshell` (experimental). |
 | Recurring duty | Trigger (cron) | Starts runs on a schedule or on external events. |
 | Proposal for a policy change | Change request | An agent-proposed diff to agent definitions, policies or skills, approved by a board. |
 | The company's records | Event logs + audit | Hash-chained logs of every decision and action. |

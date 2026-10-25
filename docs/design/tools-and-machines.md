@@ -2,7 +2,7 @@
 
 How agents act on the world: the tool model, where tools execute, how the node on each machine talks to the server, how workspaces are isolated and snapshotted, and how secrets reach a tool without reaching the model. (Earlier drafts called the node a "daemon"; [ADR-0010](../adr/0010-single-binary-server-and-nodes.md) names the roles server and node.)
 
-Built today (`crates/shiioo-runtime`): the tool trait and three built-in tools, the in-process `LocalMachine` with its journal and epoch fence, and one git worktree per run. Remote nodes, MCP, isolation levels beyond `worktree`, snapshots and secrets are *(planned)*.
+Built today (`crates/shiioo-runtime`): the tool trait and three built-in tools, the in-process `LocalMachine` with its journal and epoch fence, one git worktree per run, the `container` isolation level with egress allow lists, and secrets as named references with redaction (`shiioo-secrets`, `shiioo-runtime::secrets`, `::redact`). Remote nodes, MCP, snapshots and secret injection at the tool boundary of the native loop are *(planned)*; `openshell` is experimental.
 
 Read [architecture.md](../architecture.md) first. Related: [execution.md](execution.md) (the turn loop that calls tools), [governance.md](governance.md) (policy decisions before a call), [fork-and-replay.md](fork-and-replay.md) (what snapshots are for), [security.md](security.md) (threat model), [ADR-0006](../adr/0006-daemon-dials-out-over-websocket.md).
 
@@ -185,15 +185,19 @@ When a new worker takes over a run with a dangling intent, it asks the machine b
 
 This keeps `ToolOutcomeUnknown` for the cases where nobody can know, instead of every crash.
 
-## 4. Isolation *(`worktree` built; `container` and `openshell` planned)*
+## 4. Isolation *(`worktree` and `container` built; `openshell` experimental)*
 
-The levels are the three named in [positioning.md](../positioning.md#isolation-levels), chosen per employee and per task; a machine declares which it supports (`Hello.capabilities` for remote nodes), and a run is only scheduled on a machine that meets it.
+The levels are the three named in [positioning.md](../positioning.md#isolation-levels), chosen per office (`[isolation] default`), per repository (`[isolation.repos]`) or per run (`--isolation`, the API's `isolation`); a machine declares which it supports (`Hello.capabilities` for remote nodes), and a run is only scheduled on a machine that meets it. Decision record: [ADR-0011](../adr/0011-containers-through-the-owners-engine.md).
 
 | Level | Mechanism | Status |
 |---|---|---|
 | `worktree` | Own git worktree and branch; host process as the owner's user; no OS sandbox. Claude Code runs without one, and Codex's own sandbox is turned off because it blocks commits ([runtimes-and-providers.md](runtimes-and-providers.md)) | built |
-| `container` | Apple containers on macOS, OCI container per run on Linux (rootless podman or Docker) | planned |
-| `openshell` | NVIDIA OpenShell sandbox: Landlock, seccomp, egress policy, credential placeholders; a VM on macOS | planned |
+| `container` | One OCI container per run through the owner's Docker or Podman CLI: read-only root, `--cap-drop ALL`, `no-new-privileges`, pid limit, optional `--memory`/`--cpus`; the worktree and the repository's `.git` bind-mounted at their host paths (so the worktree's `.git` pointer resolves); a per-run home under `.shiioo/sandboxes/<run>/home` that persists for resumes; Codex's `auth.json` mounted read-only, Claude Code's OAuth token from the secret store; the hook is `curl` to `POST /v1/runs/{id}/hook/pre-tool-use` over `host.docker.internal`; egress as below. The image is built on first use from an embedded Dockerfile (Node, git, `gh`, build tools, both harnesses) and tagged by its hash; `shiioo sandbox build` builds it ahead of time | built |
+| `openshell` | NVIDIA OpenShell sandbox through the `openshell` CLI: created with a policy generated from the egress rules and an uploaded copy of the worktree, the harness run with `sandbox exec`, deleted afterwards. The upload is a copy, so results come back through git | experimental: built against the documentation, not run against a gateway |
+
+Every harness start records a `SandboxStarted { level, detail }` event: for `container` the image, container name, mounts and egress mode.
+
+What the process inside a container runs as: root, with no capabilities. The user id is not the boundary (root in a container with `CAP_DROP ALL` is an ordinary user to the host), and under colima bind mounts are writable only by root; files it creates belong to the owner on the host. The office and its repositories must be under a directory the engine shares with its VM (the home directory by default); a preflight mount check reports a path that is not.
 
 Earlier drafts had a longer ladder (`host`, `process`, `container`, `microvm`, `provider`). `host` became `worktree`; `process` (Landlock/seccomp/Seatbelt) is covered by `openshell`; `microvm` and third-party `provider` sandboxes are *(deferred, ADR-0008)*: not needed for one owner on one machine. If a provider comes back, it plugs in as before: it starts a sandbox, the node inside it enrolls with a short-lived token minted for that run, and from then on it is an ordinary machine:
 
@@ -205,7 +209,7 @@ pub trait SandboxProvider: Send + Sync {
 }
 ```
 
-*(planned)* Network egress is denied by default above `worktree`; the rules allow destinations by host pattern.
+**Egress** *(built for `container`)*. Above `worktree`, network access is denied by default. A `container` run joins an internal Docker network (`shiioo-sandbox`) that has no route anywhere; its only way out is a tinyproxy sidecar per run (`shiioo-egress-<run>`) attached to that network and to the default bridge, which forwards `CONNECT` on port 443 and plain HTTP to the host patterns of `[egress] allow` (shell patterns such as `*.github.com`; the built-in list covers the model providers, GitHub and the common package registries; `also` extends it) and refuses the rest. The office's host is always allowed, for the hook. The harness learns of the proxy through `HTTPS_PROXY`, `HTTP_PROXY` and their lower-case forms; a program that ignores them cannot connect. `[egress] mode = "open"` runs the container on the default bridge without a proxy. `worktree` runs are not restricted. For `openshell`, the same list becomes the sandbox's `network_policies` (every endpoint `enforce`d on 443, plus the office's host and port).
 
 ## 5. Workspaces and snapshots *(workspaces built; snapshots planned)*
 
@@ -230,16 +234,20 @@ SnapshotTaken { turn: u32, snapshot_id: String, digest: String, method: Snapshot
 
 Snapshots are what make fork, rewind and diff possible: see [fork-and-replay.md](fork-and-replay.md). The digest is part of the event, so the hash chain covers the workspace state. Snapshots can be exported to the blob store so a fork can start on a different machine.
 
-## 6. Secrets *(planned)*
+## 6. Secrets *(store, references and redaction built; injection at the native tool boundary planned)*
 
-Today: harnesses use their own logins (Claude Code's keychain entry, Codex's `auth.json`); Shiioo removes `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from their environment for subscription billing; the Telegram token and the API token live in files with mode 0600 in the office's data directory; anything else a tool needs comes from the owner's environment. The design:
+Built (`shiioo-secrets`, `shiioo-runtime::secrets`, `shiioo-runtime::redact`; [security.md §3.2](security.md#32-secrets-never-reach-the-record-built-never-reach-the-model-holds-for-the-native-loop-planned)):
 
-- Secrets are stored encrypted on the server (envelope encryption; see [security.md](security.md)). The model never sees a secret value, and no event contains one.
-- Tool inputs reference secrets by name (`{"$secret": "GITHUB_TOKEN"}`) or agents declare them as env bindings. The `ToolIntent` records only references.
-- At execution, the node asks the server for the values just-in-time over the authenticated connection, scoped to that `call_id` and the run's credential. The server checks the rules again at this point.
-- The node injects values as environment variables or files with mode 0600 in a per-call temp directory, deleted after the call.
-- Before a result leaves the node, every injected value (and common encodings of it: base64, URL-encoded) is replaced with `[secret:NAME]`. The worker repeats the redaction for worker-placed tools.
-- Each resolution is an event (`SecretResolved { call_id, name }`, value never included), so the audit trail shows which call could see which secret.
+- Secrets are stored encrypted in the office directory (`.shiioo/secrets.enc`, XChaCha20-Poly1305 under `.shiioo/secrets.key`, both mode 0600) and managed with `shiioo secret set|list|rm`; a value is read from stdin, an environment variable or a file, never from the command line.
+- A harness run's environment is declared with references: `[env] GH_TOKEN = "secret:gh-token"` in `config.toml` for every run, or `env` in the run's spec. The worker resolves them when the harness starts; the spec in `RunCreated` holds the reference. A reference nobody can resolve fails the run with the secret's name.
+- Before an event is recorded, every string in it is scanned for the known values (raw, base64, URL-encoded) and each occurrence becomes `[secret:NAME]`; a `SecretRedacted { name, count }` event names what was found. The office's API token is treated the same way.
+- In a `container` run the environment reaches the process through a 0600 env file in the run's sandbox directory, removed at teardown, not through the command line.
+
+Planned:
+
+- The native loop injects values at the tool boundary, after the policy check, so the model never sees them; tool inputs reference secrets by name (`{"$secret": "GITHUB_TOKEN"}`) and the `ToolIntent` records only references. Each resolution is an event (`SecretResolved { call_id, name }`).
+- Remote nodes fetch values just-in-time with a short-lived grant bound to the run, and never persist them.
+- Envelope encryption: the key wrapped by an `age` identity or a KMS key, so rotation re-wraps the key without re-encrypting values.
 
 ## 7. Streaming tool output *(planned)*
 

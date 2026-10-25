@@ -21,6 +21,7 @@ reqwest.workspace = true
 [dev-dependencies]
 shiioo-store = { workspace = true, features = ["redb"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["net"] }
 
 [lints]
 workspace = true

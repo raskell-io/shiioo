@@ -1,10 +1,13 @@
 use crate::context;
 use crate::harness::claude_code::HookEndpoint;
-use crate::harness::{self, HarnessError, HarnessProcess};
+use crate::harness::{self, HarnessDriver, HarnessError, HarnessProcess};
 use crate::machine::{CallStatus, Invocation, LocalMachine, MachineError};
 use crate::model::{
     ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
 };
+use crate::redact::Redactor;
+use crate::sandbox::{Sandbox, SandboxContext};
+use crate::secrets::{self, NoSecrets, SecretSource};
 use crate::spec::{HarnessSpec, RunSpec, Runtime};
 use crate::status::{as_text, unresolved_unknown};
 use crate::tools::ToolOutput;
@@ -31,6 +34,7 @@ pub struct Worker<S> {
     pub faults: Faults,
     observer: Option<Observer>,
     hooks: Option<HookEndpoint>,
+    secrets: Arc<dyn SecretSource>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,7 +105,15 @@ impl<S: EventStore + 'static> Worker<S> {
             faults: Faults::default(),
             observer: None,
             hooks: None,
+            secrets: Arc::new(NoSecrets),
         }
+    }
+
+    /// Where `secret:<name>` references in a harness's environment are
+    /// resolved, and whose values are kept out of the log.
+    pub fn with_secrets(mut self, secrets: Arc<dyn SecretSource>) -> Self {
+        self.secrets = secrets;
+        self
     }
 
     /// Routes harness permission requests through Shiioo's API (rules,
@@ -380,16 +392,50 @@ impl<S: EventStore + 'static> Session<'_, S> {
             Some(session) => (harness::CONTINUE_PROMPT, Some(session.as_str())),
             None => (self.spec.task.as_str(), None),
         };
+        // The harness's environment: secrets are resolved here and only
+        // here; a reference nobody can resolve is the owner's to fix.
+        let env = match secrets::resolve_env(&spec.env, &*self.worker.secrets) {
+            Ok(env) => env,
+            Err(reason) => return self.fail(reason).await,
+        };
+        let ctx = SandboxContext {
+            run_id: self.run_id,
+            harness: spec.harness,
+            cwd: &cwd,
+            repo: spec.repo.as_deref(),
+            sandboxes_root: self.worker.machine.sandboxes_root(),
+            hooks: self.worker.hooks.as_ref(),
+            env: &env,
+            secrets: &*self.worker.secrets,
+            binary_override: spec.binary.as_deref(),
+        };
+        let sandbox = match Sandbox::prepare(&spec.isolation, &ctx).await {
+            Ok(sandbox) => sandbox,
+            Err(e) => {
+                return self
+                    .fail(format!("{} isolation: {e}", spec.isolation.level()))
+                    .await;
+            }
+        };
         let mut driver = harness::driver_for(spec, &self.spec.agent, &cwd).await;
         let run_id = self.run_id.to_string();
+        let hooks = sandbox.hooks();
         let cmd = driver.command(
             spec,
             &self.spec.agent,
             &cwd,
             prompt,
             resume,
-            self.worker.hooks.as_ref().map(|h| (h, run_id.as_str())),
+            hooks.as_ref().map(|h| (h, run_id.as_str())),
         );
+        let cmd = sandbox.wrap(cmd);
+        // Everything the harness could print that must not be recorded:
+        // the office's secrets and the API token it was handed.
+        let mut redactable = self.worker.secrets.all();
+        if let Some(h) = &hooks {
+            redactable.push(("shiioo-api-token".into(), h.token.clone()));
+        }
+        let redactor = Redactor::new(redactable);
         // The time budget counts from the run's first event, so resumes
         // share it. A far-future deadline stands in for "no limit".
         let deadline = match spec.max_minutes {
@@ -405,6 +451,24 @@ impl<S: EventStore + 'static> Session<'_, S> {
             }
             None => tokio::time::Instant::now() + Duration::from_secs(60 * 60 * 24 * 365),
         };
+        // Where the harness runs is on the record before it starts.
+        self.append(vec![sandbox.started()]).await?;
+        let result = self
+            .drive_harness(cmd, &mut *driver, &redactor, deadline, spec)
+            .await;
+        sandbox.teardown().await;
+        result
+    }
+
+    /// Runs the harness process and records its output until it ends.
+    async fn drive_harness(
+        &mut self,
+        cmd: tokio::process::Command,
+        driver: &mut dyn HarnessDriver,
+        redactor: &Redactor,
+        deadline: tokio::time::Instant,
+        spec: &HarnessSpec,
+    ) -> Result<RunOutcome, WorkerError> {
         let mut process = HarnessProcess::spawn(cmd)?;
         let mut lost = self.lease_lost.clone();
         loop {
@@ -427,10 +491,12 @@ impl<S: EventStore + 'static> Session<'_, S> {
             let Some(line) = line else { break };
             let step = driver.interpret(&line)?;
             if !step.payloads.is_empty() {
-                self.append(step.payloads).await?;
+                self.append(redactor.redact_payloads(step.payloads)).await?;
             }
             if let Some(outcome) = step.outcome {
-                return Ok(outcome);
+                // The outcome is printed and sent to the phone; it must
+                // say what the record says.
+                return Ok(redact_outcome(redactor, outcome));
             }
             if cancel_requested(&self.log).is_some() {
                 process.kill().await;
@@ -442,6 +508,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
         // Output ended without a result: the process died or was killed.
         // The run stays open; the next drive resumes the session.
         let (status, stderr) = process.finish().await;
+        let stderr = redactor.redact_str(&stderr, &mut std::collections::BTreeMap::new());
         Err(HarnessError::ExitedEarly {
             status: status.map_or("unknown".into(), |s| s.to_string()),
             stderr: truncate(&stderr, 2000),
@@ -648,6 +715,19 @@ impl<S: EventStore + 'static> Session<'_, S> {
 
     fn epoch(&self) -> Result<shiioo_core::Epoch, WorkerError> {
         Ok(self.current_lease()?.epoch)
+    }
+}
+
+fn redact_outcome(redactor: &Redactor, outcome: RunOutcome) -> RunOutcome {
+    let mut counts = std::collections::BTreeMap::new();
+    match outcome {
+        RunOutcome::Completed(t) => RunOutcome::Completed(redactor.redact_str(&t, &mut counts)),
+        RunOutcome::Failed(t) => RunOutcome::Failed(redactor.redact_str(&t, &mut counts)),
+        RunOutcome::NeedsAttention(t) => {
+            RunOutcome::NeedsAttention(redactor.redact_str(&t, &mut counts))
+        }
+        RunOutcome::Cancelled(t) => RunOutcome::Cancelled(redactor.redact_str(&t, &mut counts)),
+        RunOutcome::LostLease => RunOutcome::LostLease,
     }
 }
 

@@ -38,11 +38,12 @@ It is built for one owner with an always-on machine (a Mac Studio, say), not for
 | Capacity broker across subscription windows, `[[employees]]`, `/capacity` | built (Codex reports no windows in headless mode yet) |
 | Local models through `ollama/…`, `lmstudio/…`, `openai/…` names | built; untested against a live Ollama |
 | GitHub-issue intake (`[intake]`, label `shiioo`) | built (fake `gh` tests) |
-| Isolation levels (`container`, `openshell`), secrets injection, egress rules | planned (phase 4) |
+| `container` isolation (Docker/Podman, read-only root, worktree mounted), egress allow list through a proxy, encrypted secret store with redaction | built; container runs verified live with the real harness image |
+| `openshell` isolation | experimental adapter, not run against a gateway |
 | Planner, routines, morning report; remote nodes; asset and mail work | planned |
 | Fork, rewind, diff, replay as evals | planned |
 
-Today a harness runs with the permissions of your user and no OS sandbox; the rules and your approvals are what stand between an agent and your machine. Use it on repositories and directories you don't mind it changing until phase 4 lands.
+By default a harness runs with the permissions of your user and no OS sandbox (`worktree`); the rules and your approvals are what stand between an agent and your machine. Set `[isolation] default = "container"` in `.shiioo/config.toml` (needs Docker, colima or Podman) to run agents in a container per run with only their worktree mounted and only the hosts you allow reachable; `shiioo secret set` keeps the tokens they need out of the record.
 
 ## Quick start
 

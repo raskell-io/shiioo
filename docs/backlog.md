@@ -1,6 +1,6 @@
 # Backlog
 
-Known rough edges and small debts, found while reviewing or documenting the code. None blocks the phase-3 feature set; each should be fixed or consciously kept. Bigger items live in the [roadmap](positioning.md#roadmap).
+Known rough edges and small debts, found while reviewing or documenting the code. None blocks the phase-4 feature set; each should be fixed or consciously kept. Bigger items live in the [roadmap](positioning.md#roadmap).
 
 ## Correctness
 
@@ -17,7 +17,11 @@ Known rough edges and small debts, found while reviewing or documenting the code
 - **Intake never forgets an issue.** An issue relabelled `shiioo` after `done`/`failed` is not re-run; editing `intake-state.json` is the only way. A `shiioo:again` label or a `/rerun` command would do.
 - **`Idempotency-Key` on `POST /v1/runs` is kept in memory** and lost on restart.
 - **Codex's capacity windows** are not in its `exec` stream; the broker treats Codex as always available. Its app-server exposes `account/rateLimits`.
-- **Harness runs have no OS sandbox** (Claude Code never had one in this mode; Codex's is off because it blocks commits). The isolation levels of phase 4 are the answer.
+- **`worktree` runs have no OS sandbox** (Claude Code never had one in this mode; Codex's is off because it blocks commits). The `container` level is the answer; `worktree` stays the default until the owner changes `[isolation] default`.
+- **The `openshell` level is untested against a gateway**: its commands and policy follow the OpenShell documentation (ADR-0011); the first live run will show what needs adjusting (policy keys, upload semantics, `sandbox exec` output).
+- **Egress for `container` runs allows TLS on 443 and plain HTTP only.** `git` over SSH, other ports and UDP do not leave the sandbox; remotes are rewritten to HTTPS inside. A per-run port list could follow if a toolchain needs one.
+- **Claude Code's and Codex's own telemetry and update checks** fail quietly behind the allow list; nothing is lost, but their stderr may mention it.
+- **Secrets in a `worktree` or `container` run are visible to the agent** (they are in its environment). Redaction protects the record; injection at the tool boundary exists only in the design of the native loop.
 - **Codex ignores `max_turns` and `max_budget_usd`**: neither has a `codex exec` equivalent that is passed today; `max_minutes` is the budget that applies to both harnesses.
 - **Codex's hook matcher is `^(Bash|shell)$`**, so its file edits and MCP calls are recorded but not gated by the rules (the rules know `Edit`/`Write`, not `apply_patch`).
 - **The intake's branch placeholder** is filled with the literal `$(git branch --show-current)`, which only expands when the agent runs the command in a shell. Letting the caller choose the run id would allow the real branch name.

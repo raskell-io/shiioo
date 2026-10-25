@@ -11,7 +11,10 @@ mod context;
 pub mod harness;
 pub mod machine;
 pub mod model;
+pub mod redact;
+pub mod sandbox;
 pub mod scripted;
+pub mod secrets;
 pub mod spec;
 pub mod status;
 pub mod tools;
@@ -20,7 +23,7 @@ pub mod worker;
 pub mod workspace;
 
 pub use anthropic::AnthropicProvider;
-pub use harness::claude_code::HookEndpoint;
+pub use harness::claude_code::{HookCommand, HookEndpoint};
 pub use harness::{HarnessError, HarnessProcess};
 pub use machine::{CallStatus, Invocation, LocalMachine, MachineError};
 pub use model::{
@@ -28,7 +31,13 @@ pub use model::{
     ToolResultBlock, ToolSpec, Transcript, Turn, Usage,
 };
 pub use scripted::ScriptedProvider;
-pub use spec::{AgentSpec, HarnessBilling, HarnessKind, HarnessSpec, RunSpec, Runtime};
+pub use redact::Redactor;
+pub use sandbox::{Sandbox, SandboxError};
+pub use secrets::{NoSecrets, SecretSource};
+pub use spec::{
+    AgentSpec, ContainerSpec, Egress, HarnessBilling, HarnessKind, HarnessSpec, Isolation, Mount,
+    OpenshellSpec, RunSpec, Runtime,
+};
 pub use status::{RunStatus, open_approval, run_status};
 pub use tools::{Tool, ToolOutput, Toolbox};
 pub use unconfigured::UnconfiguredProvider;

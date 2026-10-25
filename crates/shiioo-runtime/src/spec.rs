@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// What a run is asked to do, stored as the `spec` of its `RunCreated` event.
@@ -34,6 +35,9 @@ fn default_max_turns() -> u32 {
 }
 
 /// What executes the run (`docs/adr/0009-harness-first-runtimes.md`).
+// A harness spec carries its isolation settings; the enum is built a few
+// times per run, so its size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Runtime {
@@ -84,6 +88,141 @@ pub struct HarnessSpec {
     /// a freshly written script). Empty in production.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub binary_args: Vec<String>,
+    /// Where the harness executes: as the owner's user in the worktree
+    /// (default), in an OCI container, or in an OpenShell sandbox
+    /// (`docs/design/security.md` §3.4).
+    #[serde(default)]
+    pub isolation: Isolation,
+    /// Environment for the harness process. A value is literal or
+    /// `secret:<name>`, resolved from the office's secret store when the
+    /// harness starts; the log holds the reference, never the value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+/// The isolation level a harness runs at (`docs/design/tools-and-machines.md` §4).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "level", rename_all = "snake_case")]
+pub enum Isolation {
+    /// Own git worktree and branch; the owner's user, files and network.
+    #[default]
+    Worktree,
+    /// An OCI container per run (Docker or Podman): read-only root, no
+    /// capabilities, the worktree and the repo's `.git` mounted, a
+    /// persistent home per run, egress through an allow-listing proxy.
+    Container(ContainerSpec),
+    /// An NVIDIA OpenShell sandbox per run, with a network policy generated
+    /// from the egress rules. Experimental: needs the `openshell` CLI and a
+    /// gateway; works on an uploaded copy of the worktree.
+    Openshell(OpenshellSpec),
+}
+
+impl Isolation {
+    pub fn level(&self) -> &'static str {
+        match self {
+            Isolation::Worktree => "worktree",
+            Isolation::Container(_) => "container",
+            Isolation::Openshell(_) => "openshell",
+        }
+    }
+
+    /// The level by name with its defaults.
+    pub fn named(level: &str) -> Option<Self> {
+        match level {
+            "worktree" => Some(Isolation::Worktree),
+            "container" => Some(Isolation::Container(ContainerSpec::default())),
+            "openshell" => Some(Isolation::Openshell(OpenshellSpec::default())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContainerSpec {
+    /// Image with the harnesses installed. Empty: Shiioo's own image, built
+    /// from its embedded Dockerfile on first use.
+    pub image: String,
+    /// `docker` (default) or `podman`.
+    pub engine: String,
+    /// Memory limit, Docker syntax (`8g`).
+    pub memory: Option<String>,
+    pub cpus: Option<f64>,
+    pub egress: Egress,
+    /// Host directories mounted at the same path inside the container,
+    /// besides the worktree and the repository's `.git`.
+    pub mounts: Vec<Mount>,
+    /// SSH remote prefixes rewritten to `https://github.com/` inside the
+    /// container, which has no SSH keys: for example `git@github-work:`.
+    /// `git@github.com:` and `ssh://git@github.com/` are always rewritten.
+    pub git_https: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Mount {
+    pub host: PathBuf,
+    #[serde(default)]
+    pub readonly: bool,
+}
+
+/// What a sandboxed run may reach on the network. `worktree` runs are not
+/// restricted (there is nothing to enforce it with).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum Egress {
+    /// Only these hosts (shell patterns such as `*.github.com`), through
+    /// the sandbox's proxy; TLS on port 443 only. The office's own API is
+    /// always reachable, for the permission hook.
+    Allowlist { hosts: Vec<String> },
+    /// Unrestricted.
+    Open,
+}
+
+impl Default for Egress {
+    fn default() -> Self {
+        Egress::Allowlist {
+            hosts: Egress::default_hosts(),
+        }
+    }
+}
+
+impl Egress {
+    /// What coding agents need: their model providers, GitHub, and the
+    /// package registries of the common toolchains.
+    pub fn default_hosts() -> Vec<String> {
+        [
+            "api.anthropic.com",
+            "statsig.anthropic.com",
+            "api.openai.com",
+            "chatgpt.com",
+            "auth.openai.com",
+            "github.com",
+            "*.github.com",
+            "*.githubusercontent.com",
+            "registry.npmjs.org",
+            "crates.io",
+            "*.crates.io",
+            "pypi.org",
+            "files.pythonhosted.org",
+            "deb.debian.org",
+            "security.debian.org",
+            "proxy.golang.org",
+            "sum.golang.org",
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenshellSpec {
+    /// Sandbox image (`--from`); empty: the gateway's default image.
+    pub image: String,
+    pub cpus: Option<f64>,
+    /// Kubernetes quantity syntax (`4Gi`).
+    pub memory: Option<String>,
+    pub egress: Egress,
 }
 
 impl HarnessSpec {
@@ -114,6 +253,8 @@ impl HarnessSpec {
             binary: None,
             max_minutes: None,
             binary_args: Vec::new(),
+            isolation: Isolation::Worktree,
+            env: BTreeMap::new(),
         }
     }
 }

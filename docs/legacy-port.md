@@ -26,7 +26,7 @@ Status column: *built* exists in `crates/`; *planned* is on the roadmap ([positi
 | `capacity.rs` (key and provider pooling, failover, cost) | `shiioo-api::capacity` and the `[[employees]]` broker (subscription windows, not keys); key pools deferred | built / deferred |
 | `agent/skill_*`, `builtin_skills.rs` | skills in agent definitions ([runtimes-and-providers.md](design/runtimes-and-providers.md)) | planned |
 | `rbac.rs`, `tenant.rs`, `organization.rs` | multi-owner auth | deferred, ADR-0008 |
-| `secrets.rs` | secrets injection with envelope encryption ([security.md §3.2](design/security.md#32-secrets-never-reach-the-model-planned)) | planned, phase 4 |
+| `secrets.rs` | secret store, references and redaction ([security.md §3.2](design/security.md#32-secrets-never-reach-the-record-built-never-reach-the-model-holds-for-the-native-loop-planned)); envelope encryption still planned | built (`shiioo-secrets`) |
 | `scheduler.rs` (cron) | routines ([positioning.md](positioning.md#roadmap), phase 5) | planned |
 | `mcp` crate, `agent/mcp_manager.rs` | MCP servers as tools ([tools-and-machines.md](design/tools-and-machines.md)) | planned |
 | `agent/archetype*`, Chief of Staff, VISION/MISSION/STRATEGY flow | the planner and the "virtual company" template ([governance.md §6](design/governance.md#6-the-virtual-company-template-planned)) | planned, phase 5 |

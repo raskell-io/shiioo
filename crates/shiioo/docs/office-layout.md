@@ -11,6 +11,8 @@ the office is gone, copy it and the office moves.
 | `shiioo.redb` | every command | The event log, redb store. The only state. |
 | `journal.jsonl` | `serve` | The local machine's tool journal (started/finished/fence records). |
 | `worktrees/<run id>/` | harness runs with a repo | One git worktree per run, branch `shiioo/<8 chars>`. |
+| `sandboxes/<run id>/` | `container` and `openshell` runs | `home/` (the container's `/root`, kept for resumes), `env` (the run's environment, mode 0600, removed at teardown), `egress/` (the proxy's configuration), `openshell-policy.yaml`. `sandboxes/build/` is the empty build context for the images. |
+| `secrets.key`, `secrets.enc` | `shiioo secret` | The encrypted secret store, both mode 0600 ([shiioo-secrets](../../shiioo-secrets/README.md)). |
 | `config.toml` | `serve` on first start | Office configuration, see below. |
 | `rules.toml` | `serve` on first start | Permission rules; defaults from `RuleSet::defaults().to_toml()`. |
 | `api-token` | `serve` on first start | Bearer token for the API and dashboard, 32 hex bytes, mode 0600. |
@@ -74,6 +76,41 @@ interval_secs = 60
   their subscription window is above the limits. Missing section: `claude`
   (Claude Code) then `codex`. Kinds: `claude-code`, `codex`, `native` with a
   `model` (routed through `shiioo-providers`, so `ollama/…` works).
+
+
+### `[isolation]`, `[egress]`, `[env]`
+
+```toml
+[isolation]
+default = "worktree"            # worktree | container | openshell
+[isolation.repos]
+myproject = "container"         # per repository label
+[isolation.container]
+image = ""                      # empty: Shiioo's own image, built on first use
+engine = "docker"               # or podman
+memory = "8g"
+cpus = 4.0
+mounts = ["/Users/me/data:ro"]  # extra host directories, same path inside
+git_https = ["git@github-work:"]  # SSH aliases rewritten to https://github.com/
+[isolation.openshell]
+image = ""
+cpus = 2.0
+memory = "4Gi"
+
+[egress]
+mode = "allowlist"              # or open
+# allow = [...]                 # replaces the built-in list
+also = ["pypi.io"]              # adds to it
+
+[env]
+GH_TOKEN = "secret:gh-token"    # resolved from the secret store at harness start
+```
+
+`Config::isolation_policy()` turns these into `shiioo_api::IsolationPolicy`
+(default level, per-repo levels, a `ContainerSpec` and an `OpenshellSpec`
+that both carry the `[egress]` rules); `[env]` becomes `ApiOptions.env`,
+copied into every harness run's spec as references. `shiioo run --isolation`
+reads the same config.
 
 ## `rules.toml`
 

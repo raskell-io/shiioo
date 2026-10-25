@@ -143,6 +143,7 @@ impl Journal {
 pub struct LocalMachine {
     workspace: PathBuf,
     worktrees: Option<PathBuf>,
+    sandboxes: Option<PathBuf>,
     tools: Toolbox,
     journal: Mutex<Journal>,
     crash_before_next_finish: AtomicBool,
@@ -154,6 +155,7 @@ impl LocalMachine {
         Self {
             workspace: workspace.into(),
             worktrees: None,
+            sandboxes: None,
             tools,
             journal: Mutex::new(Journal::default()),
             crash_before_next_finish: AtomicBool::new(false),
@@ -169,6 +171,18 @@ impl LocalMachine {
 
     pub fn worktrees_root(&self) -> Option<&Path> {
         self.worktrees.as_deref()
+    }
+
+    /// Where `container` and `openshell` runs keep their per-run state
+    /// (a home directory, egress configuration). Without it, such runs
+    /// are refused.
+    pub fn with_sandboxes(mut self, root: impl Into<PathBuf>) -> Self {
+        self.sandboxes = Some(root.into());
+        self
+    }
+
+    pub fn sandboxes_root(&self) -> Option<&Path> {
+        self.sandboxes.as_deref()
     }
 
     /// A machine whose journal is the append-only file at `journal_path`.
@@ -203,6 +217,7 @@ impl LocalMachine {
         Ok(Self {
             workspace: workspace.into(),
             worktrees: None,
+            sandboxes: None,
             tools,
             journal: Mutex::new(journal),
             crash_before_next_finish: AtomicBool::new(false),

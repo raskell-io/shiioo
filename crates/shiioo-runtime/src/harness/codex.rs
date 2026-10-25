@@ -16,7 +16,7 @@
 //!
 //! Resume: `codex exec resume <thread_id> --json <prompt>`.
 
-use crate::harness::claude_code::HookEndpoint;
+use crate::harness::claude_code::{HookCommand, HookEndpoint};
 use crate::spec::{AgentSpec, HarnessBilling, HarnessSpec};
 use crate::tools::digest_hex;
 use serde_json::Value;
@@ -56,17 +56,17 @@ impl Sandbox {
 }
 
 /// The `-c hooks.PreToolUse=…` value installing Shiioo's permission hook:
-/// the same `shiioo hook pre-tool-use` program Claude Code calls, because
-/// Codex's hook contract (stdin `tool_name`/`tool_input`/`tool_use_id`,
-/// stdout `hookSpecificOutput.permissionDecision`) is the same.
-pub fn hook_config(exe: &Path) -> String {
-    let command = exe
-        .to_string_lossy()
+/// the same hook command Claude Code runs, because Codex's hook contract
+/// (stdin `tool_name`/`tool_input`/`tool_use_id`, stdout
+/// `hookSpecificOutput.permissionDecision`) is the same.
+pub fn hook_config(command: &HookCommand) -> String {
+    let command = command
+        .shell()
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
     format!(
         "hooks.PreToolUse=[{{matcher=\"^(Bash|shell)$\",hooks=[{{type=\"command\",\
-         command=\"{command} hook pre-tool-use\",timeout={}}}]}}]",
+         command=\"{command}\",timeout={}}}]}}]",
         crate::harness::claude_code::HOOK_TIMEOUT_SECS
     )
 }
@@ -117,7 +117,7 @@ pub fn command(
         cmd.arg("-c")
             .arg("features.hooks=true")
             .arg("-c")
-            .arg(hook_config(&endpoint.exe))
+            .arg(hook_config(&endpoint.command))
             .arg("--dangerously-bypass-hook-trust")
             .env("SHIIOO_SERVER_URL", &endpoint.server_url)
             .env("SHIIOO_API_TOKEN", &endpoint.token)
@@ -481,7 +481,7 @@ mod tests {
         let endpoint = HookEndpoint {
             server_url: "http://127.0.0.1:7878".into(),
             token: "tok".into(),
-            exe: PathBuf::from("/opt/shiioo"),
+            command: HookCommand::Exe(PathBuf::from("/opt/shiioo")),
         };
         let cmd = command(
             Path::new("codex"),

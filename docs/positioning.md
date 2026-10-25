@@ -79,10 +79,10 @@ Chosen per agent and per task; the node reports which it supports.
 | Level | What it is | Needs | Use |
 |---|---|---|---|
 | `worktree` | own git worktree and branch, host process, no sandbox | nothing | trusted repos, phase 1 |
-| `container` | Apple containers on macOS, OCI container on Linux | Apple `container` / podman | untrusted dependencies, isolation from the home directory |
-| `openshell` | NVIDIA OpenShell sandbox: Landlock, seccomp, egress policy, credential placeholders | OpenShell gateway (VM on macOS) | unattended work with real credentials, strongest |
+| `container` | OCI container per run through Docker (colima) or Podman: read-only root, no capabilities, only the worktree mounted, egress through an allow-listing proxy | Docker / colima / podman | unattended work, untrusted dependencies, isolation from the home directory; built (ADR-0011) |
+| `openshell` | NVIDIA OpenShell sandbox: Landlock, seccomp, egress policy, credential placeholders | OpenShell gateway | Linux nodes; experimental adapter, not yet verified |
 
-Secrets (GitHub tokens, mail credentials) are injected at execution time and never shown to the model, at every level that can enforce it.
+Secrets (GitHub tokens, mail credentials) are stored encrypted, referenced by name, injected at execution time and redacted from the record; keeping them from the model itself is possible only where Shiioo runs the tools (the native loop, planned).
 
 ## The owner's surfaces
 
@@ -98,7 +98,7 @@ Each phase ends with something new you can do from your phone.
 1. **One employee, one repo** *(built)*. Claude Code as a harness on the Mac, a worktree and branch per run, pushes to a branch, run log in the dashboard over Tailscale. *Start a task, watch it, open the PR.*
 2. **Approvals and notifications** *(built; the approval loop verified live through the API and the dashboard, the Telegram bot against a fake server until the owner's bot exists)*. Rules (allow / ask / deny per tool, repo and action, `rules.toml`); harness permission requests routed through the rules to Telegram; notifications on finish and on "needs you"; `/run`, `/status`, `/log`, `/cancel`. *Approve a push or a risky command with one tap.*
 3. **Staff and capacity** *(built, except budgets beyond time)*. Codex and local models as employees, the capacity broker across subscriptions (`[[employees]]` tried in order, skipped above their five-hour / seven-day limits), budgets per task, GitHub-issue intake (`[intake]`, label an issue `shiioo`). *Label an issue, come back to a PR; see remaining weekly capacity with `/capacity`.*
-4. **Unattended safety.** `container` and `openshell` levels, secrets injection, egress rules. *Let it run overnight.*
+4. **Unattended safety** *(built: `container` level, egress allow lists, secret store and redaction; `openshell` experimental)*. *Let it run overnight.*
 5. **The planner and the company.** A Chief-of-Staff agent that breaks goals into runs, routines on a schedule, a morning report. Roles as reusable configs. *"Ship the v0.3 milestone this week."*
 6. **Beyond code.** Asset machines (audio, image, 3D), mail with send-approval, remote nodes (DGX Sparks).
 7. **Replay and forks**, for improving agents' instructions once there is a history worth replaying.
@@ -108,3 +108,4 @@ Each phase ends with something new you can do from your phone.
 - [ADR-0008](adr/0008-personal-workforce-not-managed-cloud.md): the product is a personal workforce, not a managed agent cloud.
 - [ADR-0009](adr/0009-harness-first-runtimes.md): harnesses are the primary runtime; the native loop serves local models.
 - [ADR-0010](adr/0010-single-binary-server-and-nodes.md): one binary, server and nodes, embedded store; no Postgres or containers for Shiioo itself.
+- [ADR-0011](adr/0011-containers-through-the-owners-engine.md): agents run in containers through the owner's engine, egress through a proxy sidecar, secrets sealed locally and redacted from the record.

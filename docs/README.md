@@ -25,7 +25,7 @@ Detailed designs, one per area. Each section is marked *(built)*, *(planned)* or
 | [API](design/api.md) | REST and SSE, employees, permissions and approvals, capacity, diff, the dashboard, errors, auth |
 | [Telegram](design/telegram.md) | The owner's phone: commands, approvals with one tap, notifications, security of the bot |
 | [Intake](design/intake.md) | Work arriving as labelled GitHub issues: the label protocol, the task prompt, dedup and state, failure handling |
-| [Security](design/security.md) | Threat model, controls, today's posture, and what is not protected |
+| [Security](design/security.md) | Threat model, controls, today's posture (isolation levels, egress, secrets and redaction), and what is not protected |
 | [Deployment](design/deployment.md) | The office on one Mac (`install`, keep-awake, Tailscale), several machines, config, observability, upgrades, backups |
 
 ## Crates
@@ -37,6 +37,7 @@ Each crate carries its own `README.md` (purpose, API, how to test) and a `docs/`
 | `shiioo-core` | [README](../crates/shiioo-core/README.md), [docs](../crates/shiioo-core/docs) |
 | `shiioo-store` | [README](../crates/shiioo-store/README.md), [docs](../crates/shiioo-store/docs) |
 | `shiioo-runtime` | [README](../crates/shiioo-runtime/README.md), [docs](../crates/shiioo-runtime/docs) |
+| `shiioo-secrets` | [README](../crates/shiioo-secrets/README.md) |
 | `shiioo-rules` | [README](../crates/shiioo-rules/README.md), [docs](../crates/shiioo-rules/docs) |
 | `shiioo-providers` | [README](../crates/shiioo-providers/README.md), [docs](../crates/shiioo-providers/docs) |
 | `shiioo-api` | [README](../crates/shiioo-api/README.md), [docs](../crates/shiioo-api/docs) |

@@ -27,6 +27,14 @@ no hook.
   are covered; Codex's own file edits and MCP calls are recorded but not
   gated.
 
+In a `container` or `openshell` run there is no `shiioo` binary inside the
+sandbox, so the hook command is a `curl` call instead
+(`HookCommand::Curl`): it posts the hook's stdin to
+`POST /v1/runs/{run}/hook/pre-tool-use`, which answers in the hook's own
+output format, and prints a deny if the office cannot be reached.
+`SHIIOO_SERVER_URL` then names the host as `host.docker.internal`. See
+[shiioo-runtime/docs/sandboxes.md](../../shiioo-runtime/docs/sandboxes.md).
+
 Both get three environment variables from the worker:
 
 | Variable | Value |

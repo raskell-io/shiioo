@@ -304,6 +304,11 @@
       case "approval_requested": return `waiting for approval: ${p.summary}`;
       case "approval_decided": return `${p.decision} by ${p.by}`;
       case "cancel_requested": return `cancel requested by ${p.by}${p.reason ? ": " + p.reason : ""}`;
+      case "sandbox_started": {
+        const parts = [p.detail?.container, p.detail?.sandbox, p.detail?.egress?.mode ? `egress ${p.detail.egress.mode}` : null].filter(Boolean);
+        return `isolation: ${p.level}${parts.length ? ` (${parts.join(", ")})` : ""}`;
+      }
+      case "secret_redacted": return `redacted secret ${p.name} (${p.count} occurrence(s))`;
       case "run_completed": return `completed: ${trunc(typeof p.output === "string" ? p.output : JSON.stringify(p.output), 140)}`;
       case "run_failed": return `failed: ${p.reason}`;
       case "run_cancelled": return `cancelled: ${p.reason}`;

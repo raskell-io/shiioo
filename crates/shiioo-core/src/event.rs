@@ -150,6 +150,20 @@ pub enum Payload {
         by: String,
         reason: String,
     },
+    /// Where the run's harness executes: the isolation level and what it
+    /// was given (image, mounts, egress mode). Written by the worker before
+    /// the harness starts.
+    SandboxStarted {
+        /// `worktree`, `container` or `openshell`.
+        level: String,
+        detail: Value,
+    },
+    /// A secret's value appeared in something about to be recorded and was
+    /// replaced by `[secret:<name>]`. Records the name, never the value.
+    SecretRedacted {
+        name: String,
+        count: u32,
+    },
     RunCompleted {
         output: Value,
     },

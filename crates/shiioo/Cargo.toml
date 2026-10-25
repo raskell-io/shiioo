@@ -17,6 +17,7 @@ shiioo-rules.workspace = true
 shiioo-providers.workspace = true
 shiioo-intake.workspace = true
 shiioo-telegram.workspace = true
+shiioo-secrets.workspace = true
 serde.workspace = true
 toml.workspace = true
 axum.workspace = true

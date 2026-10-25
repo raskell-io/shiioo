@@ -14,6 +14,7 @@ Each ADR records one decision: the context, what we chose, what we gave up, and 
 | [0008](0008-personal-workforce-not-managed-cloud.md) | The product is a personal agent workforce, not a managed agent cloud | Accepted |
 | [0009](0009-harness-first-runtimes.md) | Harnesses are the primary runtime; the native loop serves local models | Accepted |
 | [0010](0010-single-binary-server-and-nodes.md) | One binary: a server, nodes that dial out, an embedded store | Accepted |
+| [0011](0011-containers-through-the-owners-engine.md) | Isolation through the owner's container engine, egress through a proxy sidecar, secrets sealed locally | Accepted |
 
 ## Template
 

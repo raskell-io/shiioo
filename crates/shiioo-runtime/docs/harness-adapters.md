@@ -48,7 +48,8 @@ The prompt is placed right after `--print` so later variadic flags
 personal hooks and MCP servers stay out of unattended runs).
 
 The binary is `HarnessSpec.binary`, else `$SHIIOO_CLAUDE_BIN`, else `claude`
-on `PATH`.
+on `PATH`. In a `container` or `openshell` run the image's `claude` is used
+unless the spec names a binary.
 
 ### Environment handling
 
@@ -73,17 +74,29 @@ the handle is dropped.
 
 ### Hook settings
 
-`hook_settings(exe)` produces the JSON passed to `--settings`:
+`hook_settings(&HookCommand)` produces the JSON passed to `--settings`:
 
 ```json
 {"hooks":{"PreToolUse":[{"hooks":[{"type":"command",
-  "command":"<shell-quoted exe> hook pre-tool-use","timeout":21600}]}]}}
+  "command":"<hook command>","timeout":21600}]}]}}
 ```
 
-`HOOK_TIMEOUT_SECS` is 21 600 (six hours): the hook blocks while the owner
-decides, so the timeout has to be long. `HookEndpoint { server_url, token,
-exe }` is what the API server hands the worker; `exe` is the Shiioo binary
-itself.
+`HookEndpoint { server_url, token, command }` is what the API server hands
+the worker. `HookCommand::Exe(path)` is `<shell-quoted path> hook
+pre-tool-use`, the Shiioo binary itself, for `worktree` runs.
+`HookCommand::Curl` is for sandboxes, which have no `shiioo` inside:
+
+```sh
+curl -sSf -X POST --max-time 21660 \
+  -H "Authorization: Bearer $SHIIOO_API_TOKEN" -H "Content-Type: application/json" \
+  --data-binary @- "$SHIIOO_SERVER_URL/v1/runs/$SHIIOO_RUN_ID/hook/pre-tool-use" \
+  || printf '%s' '{"hookSpecificOutput":{…"permissionDecision":"deny"…}}'
+```
+
+The endpoint answers in the hook's own output format; an unreachable office
+is a deny. The sandbox rewrites `server_url` to `host.docker.internal`
+([sandboxes.md](sandboxes.md)). `HOOK_TIMEOUT_SECS` is 21 600 (six hours):
+the hook blocks while the owner decides, so the timeout has to be long.
 
 ### Line mapping
 
@@ -143,8 +156,8 @@ to Codex; `max_turns` is not passed either.
 `approval_policy = never` Codex cannot ask to escalate, and `workspace-write`
 makes the checkout's resolved git directory read-only, so an agent in a
 worktree could never commit. Shiioo's rules and the owner's approvals govern
-each command instead; OS isolation is the job of the planned isolation
-levels.
+each command instead; OS isolation is the job of the isolation levels
+([sandboxes.md](sandboxes.md)).
 
 The binary is `HarnessSpec.binary`, else `$SHIIOO_CODEX_BIN`, else `codex`.
 `codex::version` runs `<binary> --version` with a 10 s timeout and keeps the
@@ -159,11 +172,13 @@ removed. The hook variables `SHIIOO_SERVER_URL`, `SHIIOO_API_TOKEN` and
 
 ### Hook config
 
-`hook_config(exe)` is the `-c` value:
+`hook_config(&HookCommand)` is the `-c` value, with the same command
+variants as Claude Code's (`<exe> hook pre-tool-use` on the host, the
+`curl` call in a sandbox), quoted for TOML:
 
 ```
 hooks.PreToolUse=[{matcher="^(Bash|shell)$",hooks=[{type="command",
-  command="<exe> hook pre-tool-use",timeout=21600}]}]
+  command="<hook command>",timeout=21600}]}]
 ```
 
 Only shell commands reach the hook. Codex's file changes and MCP calls are

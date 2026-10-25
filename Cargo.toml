@@ -10,6 +10,7 @@ members = [
     "crates/shiioo-rules",
     "crates/shiioo-providers",
     "crates/shiioo-intake",
+    "crates/shiioo-secrets",
     "crates/shiioo",
 ]
 
@@ -30,6 +31,7 @@ shiioo-telegram = { path = "crates/shiioo-telegram" }
 shiioo-rules = { path = "crates/shiioo-rules" }
 shiioo-providers = { path = "crates/shiioo-providers" }
 shiioo-intake = { path = "crates/shiioo-intake" }
+shiioo-secrets = { path = "crates/shiioo-secrets" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }

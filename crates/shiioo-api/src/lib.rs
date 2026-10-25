@@ -13,6 +13,9 @@
 //! - `POST /v1/runs/{id}/permissions` is called by a harness hook before a
 //!   tool call: the rules answer at once, or the owner is asked and the
 //!   request waits for `POST /v1/approvals/{id}`.
+//! - `POST /v1/runs/{id}/hook/pre-tool-use` is the same, taking the hook's
+//!   stdin JSON and answering in the hook's own output format, for sandboxes
+//!   whose hook is a `curl` call.
 //!
 //! - `GET  /v1/runs/{id}/diff` is the run's branch diff against the repo's HEAD.
 //! - `GET  /` serves the mobile dashboard (`ui/`), which calls the API with the token.
@@ -21,6 +24,7 @@
 //! `Authorization: Bearer <token>`.
 
 pub mod employees;
+pub mod isolation;
 
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -39,6 +43,7 @@ use shiioo_runtime::{
     AgentSpec, HarnessSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
     open_approval, run_status,
 };
+pub use isolation::IsolationPolicy;
 use shiioo_store::Notifying;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -83,6 +88,11 @@ pub struct ApiOptions {
     /// rules.
     pub repos: BTreeMap<String, PathBuf>,
     pub notifications: Option<Arc<dyn Notifications>>,
+    /// Which isolation level new harness runs get.
+    pub isolation: IsolationPolicy,
+    /// Environment every harness run gets; values are literal or
+    /// `secret:<name>`.
+    pub env: BTreeMap<String, String>,
 }
 
 impl Default for ApiOptions {
@@ -93,6 +103,8 @@ impl Default for ApiOptions {
             capacity: Arc::new(CapacityTracker::default()),
             repos: BTreeMap::new(),
             notifications: None,
+            isolation: IsolationPolicy::default(),
+            env: BTreeMap::new(),
         }
     }
 }
@@ -330,6 +342,19 @@ impl<S: EventStore + 'static> ApiState<S> {
         self.options.repos.get(label).cloned()
     }
 
+    /// The configured label of a repository path.
+    pub fn label_of(&self, path: &PathBuf) -> Option<String> {
+        self.options
+            .repos
+            .iter()
+            .find(|(_, p)| *p == path)
+            .map(|(label, _)| label.clone())
+    }
+
+    pub fn isolation(&self) -> &IsolationPolicy {
+        &self.options.isolation
+    }
+
     pub fn default_agent(&self) -> &AgentSpec {
         &self.default_agent
     }
@@ -350,6 +375,23 @@ impl<S: EventStore + 'static> ApiState<S> {
         employee: &str,
         repo: Option<PathBuf>,
     ) -> Result<(Runtime, AgentSpec, String), ApiError> {
+        self.assign_with(employee, repo, None)
+    }
+
+    /// [`assign`](Self::assign) with an isolation level named by the
+    /// caller instead of the one the policy gives the repository.
+    pub fn assign_with(
+        &self,
+        employee: &str,
+        repo: Option<PathBuf>,
+        isolation: Option<&str>,
+    ) -> Result<(Runtime, AgentSpec, String), ApiError> {
+        let label = repo.as_ref().and_then(|path| self.label_of(path));
+        let isolation = self
+            .options
+            .isolation
+            .resolve(label.as_deref(), isolation)
+            .map_err(ApiError::BadRequest)?;
         let chosen = if employee == "auto" {
             pick(&self.options.employees, &self.options.capacity)
                 .map_err(|skipped| {
@@ -391,11 +433,15 @@ impl<S: EventStore + 'static> ApiState<S> {
             EmployeeKind::ClaudeCode => {
                 let mut h = HarnessSpec::claude_code();
                 h.repo = repo;
+                h.isolation = isolation;
+                h.env = self.options.env.clone();
                 (Runtime::Harness(h), harness_agent)
             }
             EmployeeKind::Codex => {
                 let mut h = HarnessSpec::codex();
                 h.repo = repo;
+                h.isolation = isolation;
+                h.env = self.options.env.clone();
                 (Runtime::Harness(h), harness_agent)
             }
             EmployeeKind::Native { model } => (
@@ -846,6 +892,26 @@ pub fn describe(ev: &Event) -> String {
         Payload::ApprovalRequested { summary, .. } => format!("waiting for approval: {summary}"),
         Payload::ApprovalDecided { decision, by, .. } => format!("{decision} by {by}"),
         Payload::CancelRequested { by, reason } => format!("cancel requested by {by}: {reason}"),
+        Payload::SandboxStarted { level, detail } => {
+            let mut parts = Vec::new();
+            if let Some(c) = detail["container"].as_str() {
+                parts.push(c.to_owned());
+            }
+            if let Some(s) = detail["sandbox"].as_str() {
+                parts.push(s.to_owned());
+            }
+            if let Some(mode) = detail["egress"]["mode"].as_str() {
+                parts.push(format!("egress {mode}"));
+            }
+            if parts.is_empty() {
+                format!("isolation: {level}")
+            } else {
+                format!("isolation: {level} ({})", parts.join(", "))
+            }
+        }
+        Payload::SecretRedacted { name, count } => {
+            format!("redacted secret {name} ({count} occurrence(s))")
+        }
         Payload::RunCompleted { output } => format!("completed: {}", one_line(output, 140)),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
         Payload::RunCancelled { reason } => format!("cancelled: {reason}"),
@@ -870,6 +936,10 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/runs/{id}/resume", post(resume_run::<S>))
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
         .route("/v1/runs/{id}/permissions", post(permission::<S>))
+        .route(
+            "/v1/runs/{id}/hook/pre-tool-use",
+            post(permission_hook::<S>),
+        )
         .route("/v1/runs/{id}/diff", get(diff_run::<S>))
         .route("/v1/approvals/{id}", post(decide::<S>))
         .route("/v1/capacity", get(capacity::<S>))
@@ -955,6 +1025,9 @@ struct CreateRun {
     /// With `employee`: the repository the task is about (a configured
     /// label or an absolute path).
     repo: Option<String>,
+    /// Isolation level for a harness run: `worktree`, `container` or
+    /// `openshell`. Default: the office's policy for the repository.
+    isolation: Option<String>,
 }
 
 async fn create_run<S: EventStore + 'static>(
@@ -979,18 +1052,30 @@ async fn create_run<S: EventStore + 'static>(
                     .repo_path(label_or_path)
                     .unwrap_or_else(|| PathBuf::from(label_or_path))
             });
-            let (runtime, agent, _) = state.assign(employee, repo)?;
+            let (runtime, agent, _) =
+                state.assign_with(employee, repo, body.isolation.as_deref())?;
             RunSpec {
                 task: body.task,
                 agent,
                 runtime,
             }
         }
-        None => RunSpec {
-            task: body.task,
-            agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
-            runtime: body.runtime.unwrap_or_default(),
-        },
+        None => {
+            let mut runtime = body.runtime.unwrap_or_default();
+            if let (Some(level), Runtime::Harness(h)) = (&body.isolation, &mut runtime) {
+                let label = h.repo.as_ref().and_then(|p| state.label_of(p));
+                h.isolation = state
+                    .options
+                    .isolation
+                    .resolve(label.as_deref(), Some(level))
+                    .map_err(ApiError::BadRequest)?;
+            }
+            RunSpec {
+                task: body.task,
+                agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
+                runtime,
+            }
+        }
     };
     let run_id = state.start_run(spec).await?;
     if let Some(key) = key {
@@ -1050,6 +1135,29 @@ async fn permission<S: EventStore + 'static>(
     Json(input): Json<PermissionInput>,
 ) -> Result<Json<PermissionOutcome>, ApiError> {
     Ok(Json(state.permission(parse_run(&id)?, input).await?))
+}
+
+/// The permission endpoint in the harness hook's own dialect: takes what
+/// the harness writes to the hook's stdin, answers what the hook must
+/// print. Lets a sandbox use `curl` as its hook.
+async fn permission_hook<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    Json(input): Json<PermissionInput>,
+) -> Result<Json<Value>, ApiError> {
+    let outcome = state.permission(parse_run(&id)?, input).await?;
+    Ok(Json(hook_output(&outcome)))
+}
+
+/// Claude Code's and Codex's `PreToolUse` hook output for an outcome.
+pub fn hook_output(outcome: &PermissionOutcome) -> Value {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": if outcome.decision == "allow" { "allow" } else { "deny" },
+            "permissionDecisionReason": outcome.reason,
+        }
+    })
 }
 
 async fn decide<S: EventStore + 'static>(

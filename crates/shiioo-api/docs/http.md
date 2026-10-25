@@ -146,6 +146,21 @@ Response `{"decision": "allow" | "deny", "reason": "…", "approval_id": "…"
 | null}`. The request blocks while the owner decides; the flow and the
 timeout are in [approvals-and-capacity.md](approvals-and-capacity.md).
 
+### `POST /v1/runs/{id}/hook/pre-tool-use` → `200`
+
+The same decision as `permissions`, in the harness hook's own dialect: the
+body is what Claude Code or Codex writes to the hook's stdin (`tool_name`,
+`tool_input`, `tool_use_id`, `session_id`, …), the answer is what the hook
+must print:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse",
+  "permissionDecision":"allow"|"deny","permissionDecisionReason":"…"}}
+```
+
+Used by sandboxed runs, whose hook is a `curl` call because the `shiioo`
+binary is not inside the container. Waits like `permissions` does.
+
 ### `POST /v1/approvals/{id}` → `200`
 
 ```json

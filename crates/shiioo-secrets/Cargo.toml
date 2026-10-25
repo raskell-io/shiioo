@@ -1,0 +1,21 @@
+[package]
+name = "shiioo-secrets"
+description = "Shiioo's secret store: values encrypted at rest in the office directory, referenced by name."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

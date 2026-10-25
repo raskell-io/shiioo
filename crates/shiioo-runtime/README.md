@@ -4,8 +4,10 @@ The worker that drives one run from its event log to a terminal event. It
 owns the two execution paths Shiioo has today: the **harness runtime**, which
 spawns Claude Code or Codex headless and records what they do, and the
 **native runtime**, Shiioo's own model-plus-tools loop. It also owns the
-local machine (tool execution with a crash journal) and per-run git
-worktrees.
+local machine (tool execution with a crash journal), per-run git worktrees,
+the **isolation levels** a harness runs at (`worktree`, `container`,
+`openshell`), and the secret references and redaction that keep tokens out
+of the record.
 
 Everything the worker knows comes from the log, and everything it decides
 goes back into the log as events. A worker that dies mid-run is replaced by
@@ -37,6 +39,9 @@ shiioo-core  ──►  shiioo-runtime  ──►  shiioo-api  ──►  shiioo
 | `machine` | `LocalMachine`, `Invocation`, `CallStatus`, `MachineError`: executes tools behind a fenced journal. |
 | `tools` | `Tool`, `Toolbox`, `ToolOutput`; built-ins `read_file`, `write_file`, `shell`. |
 | `workspace` | `Worktree`, `ensure`, `remove`, `branch_for`: one git worktree and branch per repo run. |
+| `sandbox` | `Sandbox`, `SandboxContext`, `SandboxError`; submodules `container` (Docker/Podman per run), `egress` (the allow-listing proxy sidecar) and `openshell` (experimental). [docs/sandboxes.md](docs/sandboxes.md). |
+| `secrets` | `SecretSource` trait, `NoSecrets`, `resolve_env`: `secret:<name>` references in a harness's environment. |
+| `redact` | `Redactor`: replaces known secret values (raw, base64, URL-encoded) in everything recorded, adds `SecretRedacted` events. |
 | `status` | `RunStatus`, `run_status`, `open_approval`: fold a log into one state. |
 | `model` | `ModelProvider` trait, `ModelRequest`/`ModelResponse`, `Transcript`, `ToolCall`, `StopReason`, `Usage`. |
 | `anthropic` | `AnthropicProvider`, the native runtime's Messages API client. |
@@ -52,7 +57,8 @@ other crates use.
 **Running**
 
 - `Worker::new(store, provider, machine, id)` then `.with_hooks(HookEndpoint)`,
-  `.with_faults(Faults)`, `.with_observer(Arc<dyn Fn(&Event)>)`.
+  `.with_secrets(Arc<dyn SecretSource>)`, `.with_faults(Faults)`,
+  `.with_observer(Arc<dyn Fn(&Event)>)`.
   Public fields: `id`, `ttl_ms` (lease TTL, default 30 000 ms), `faults`.
 - `worker.create(&RunSpec) -> RunId` appends `RunCreated`.
 - `worker.drive(run_id) -> RunOutcome` runs until the run closes or the
@@ -70,12 +76,18 @@ other crates use.
   with `kind = "native" | "harness"`.
 - `HarnessSpec::claude_code()` and `HarnessSpec::codex()` give the defaults
   listed in [docs/harness-adapters.md](docs/harness-adapters.md).
+- `HarnessSpec.isolation: Isolation` (`Worktree` default, `Container(ContainerSpec)`,
+  `Openshell(OpenshellSpec)`; serialised with `level = …`) and
+  `HarnessSpec.env: BTreeMap<String, String>` whose values are literal or
+  `secret:<name>`. `Egress::Allowlist { hosts }` (default, with
+  `Egress::default_hosts()`) or `Egress::Open`; `Mount { host, readonly }`.
 
 **Machines and tools**
 
 - `LocalMachine::in_memory(workspace, toolbox)` or
   `LocalMachine::open(workspace, journal_path, toolbox)`, plus
-  `.with_worktrees(root)` to allow repo runs.
+  `.with_worktrees(root)` to allow repo runs and `.with_sandboxes(root)` to
+  allow `container` and `openshell` runs.
 - `Toolbox::builtin()` and `Toolbox::with(tool)`; implement `Tool` for new
   tools. See [docs/machine-and-tools.md](docs/machine-and-tools.md).
 
@@ -93,6 +105,8 @@ other crates use.
 | --- | --- | --- |
 | `SHIIOO_CLAUDE_BIN` | `claude_code` | Harness executable when `HarnessSpec.binary` is unset; falls back to `claude` on `PATH`. |
 | `SHIIOO_CODEX_BIN` | `codex` | Same for Codex; falls back to `codex`. |
+| `SHIIOO_OPENSHELL_BIN` | `sandbox::openshell` | The `openshell` CLI when not on `PATH`. |
+| `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_HOME`, `HOME` | `sandbox::container` | Claude Code's token for containers when no secret holds it; where Codex's `auth.json` is. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` | `anthropic` | Native runtime credentials and endpoint. |
 
 Variables the harness drivers *remove* from the child environment are listed
@@ -114,10 +128,15 @@ cargo test -p shiioo-runtime
   (a shell script replaying the JSONL fixtures in `tests/fixtures/`) run
   through `/bin/sh` via `HarnessSpec.binary_args`; covers recording,
   kill-and-resume, dying harnesses and worktree creation.
-- Unit tests inside `anthropic`, `harness/claude_code` and `harness/codex`
-  parse recorded sessions and check the exact command lines built.
+- `tests/container.rs` (ignored by default, `-- --ignored`): the `container`
+  level against a real Docker daemon, with a fake harness in `alpine:3` and
+  in Shiioo's harness image behind the egress proxy.
+- Unit tests inside `anthropic`, `harness/claude_code`, `harness/codex`,
+  `sandbox/*`, `redact` and `secrets` parse recorded sessions and check the
+  exact command lines, env files, proxy configuration and redaction.
 
-No test needs network access or a real harness installed.
+No test except `tests/container.rs` needs network access, Docker or a real
+harness installed.
 
 ## Further reading
 
@@ -127,6 +146,8 @@ No test needs network access or a real harness installed.
   event mapping, resume and hooks for Claude Code and Codex.
 - [docs/machine-and-tools.md](docs/machine-and-tools.md): journal format,
   fencing, tool classes, built-in tools, worktrees.
+- [docs/sandboxes.md](docs/sandboxes.md): the isolation levels, the
+  `docker run` line, egress, credentials, OpenShell.
 - Top-level design: [execution](../../docs/design/execution.md),
   [runtimes and providers](../../docs/design/runtimes-and-providers.md),
   [tools and machines](../../docs/design/tools-and-machines.md),

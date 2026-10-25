@@ -4,15 +4,16 @@ The single binary that is a Shiioo office. `shiioo serve` runs the API, the
 dashboard, the Telegram bot, the GitHub issue intake and the workers in one
 process; `shiioo install` makes that a background service that starts at
 login and keeps the Mac awake; `shiioo run` drives one task from the terminal
-without a server; `shiioo hook pre-tool-use` is what Claude Code and Codex
-call to ask permission. There is one source file, `src/main.rs`, and no
+without a server; `shiioo secret` manages the encrypted secret store;
+`shiioo sandbox` builds the container images; `shiioo hook pre-tool-use` is
+what Claude Code and Codex call to ask permission. There is one source file, `src/main.rs`, and no
 library: all behaviour lives in the crates it wires together.
 
 ## Position in the crate graph
 
 ```
 shiioo-core, shiioo-store (redb), shiioo-runtime, shiioo-api,
-shiioo-rules, shiioo-providers, shiioo-intake, shiioo-telegram
+shiioo-rules, shiioo-providers, shiioo-intake, shiioo-telegram, shiioo-secrets
                           │
                           ▼
                     shiioo (binary)
@@ -27,10 +28,11 @@ service definitions for launchd and systemd.
 
 | Section | What it does |
 | --- | --- |
-| `Cli`, `Command`, `HookEvent` | clap definitions, see the command reference below. |
+| `Cli`, `Command`, `HookEvent`, `SecretAction`, `SandboxAction` | clap definitions, see the command reference below. |
 | `run`, `resume`, `log`, `drive` | Terminal commands against the local redb store; `drive` retries up to three times on a lost lease. |
 | `serve` | Builds the whole office: store, machine, provider, API state, hook endpoint, capacity tracker, Telegram bot, intake. [docs/office-layout.md](docs/office-layout.md). |
-| `Config`, `DEFAULT_CONFIG`, `load_rules`, `api_token` | `.shiioo/config.toml`, `.shiioo/rules.toml`, `.shiioo/api-token`. |
+| `Config`, `DEFAULT_CONFIG`, `load_rules`, `api_token` | `.shiioo/config.toml` (including `[isolation]`, `[egress]`, `[env]` → `IsolationPolicy`), `.shiioo/rules.toml`, `.shiioo/api-token`. |
+| `secret_command`, `sandbox_command`, `StoreSecrets` | The secret store CLI, image building and pruning, and the `SecretSource` the workers read. |
 | `TelegramOffice` | Implements the bot's `Office` trait on top of `ApiState`: `/run`, `/status`, `/log`, `/cancel`, approvals. |
 | `TelegramNotifications` | Implements `shiioo_api::Notifications`: approval questions with Allow/Deny buttons, run endings. |
 | `IssueSink` | Implements the intake's sink: a labelled GitHub issue becomes a run on that repository. |
@@ -59,6 +61,7 @@ Create a run and drive it in this process until it finishes.
 | `--api-billing` | off | Bill to `ANTHROPIC_API_KEY` instead of the subscription. Requires `--harness`. |
 | `--max-budget-usd <n>` | none | Stop at this spend (API billing, Claude Code only). Requires `--harness`. |
 | `--max-minutes <n>` | none | Fail the run after this long across resumes. Requires `--harness`. |
+| `--isolation worktree\|container\|openshell` | the office's policy (`[isolation]` in `config.toml`) | Where the harness runs. Requires `--harness`. The level's settings and `[env]` come from `config.toml`. |
 
 Prints `run <id>` and, for repo runs, `branch <name> in <path>`, then every
 event as it happens. Exit codes: `0` completed, `1` failed, `2` needs
@@ -100,6 +103,28 @@ URL with the path of the token file to paste into it. Stops on Ctrl-C.
 
 `uninstall` removes the service and leaves `.shiioo/` alone.
 
+### `shiioo secret set|list|rm`
+
+| Command | Meaning |
+| --- | --- |
+| `secret set <name>` | Store a secret read from stdin (`echo -n … \| shiioo secret set gh-token`), `--from-env VAR` or `--from-file PATH`. Never from the command line. |
+| `secret list` | The names, never the values. |
+| `secret rm <name>` | Remove one. |
+
+Names are `[a-z0-9][a-z0-9._-]*`. Refer to a secret as `secret:<name>` in
+`[env]`. The secret `claude-code-oauth-token` is what Claude Code uses in a
+container (`claude setup-token` makes one). See
+[shiioo-secrets](../shiioo-secrets/README.md).
+
+### `shiioo sandbox build|prune`
+
+`build` builds the harness image (`shiioo-harness:<hash>`, from the
+Dockerfile embedded in `shiioo-runtime`) and the egress image now, and
+creates the `shiioo-sandbox` network, so the first `container` run does not
+wait minutes. `prune` removes containers named `shiioo-*` left behind by
+runs that did not clean up. Both need the engine running (`docker` by
+default, `[isolation.container] engine`).
+
 ### `shiioo hook pre-tool-use` (hidden)
 
 Called by the harness, never by people. Reads the hook event JSON on stdin,
@@ -114,7 +139,9 @@ asks the server, prints the decision. See [docs/hook.md](docs/hook.md).
 | `SHIIOO_SERVER_URL`, `SHIIOO_API_TOKEN`, `SHIIOO_RUN_ID` | `hook` | Set by the worker in the harness's environment. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` | native provider | Only native runs; harness runs use the harness login. |
 | `OPENAI_API_KEY`, `OLLAMA_*`, … | `shiioo-providers` | Routed native models (`ollama/…`, `lmstudio/…`, `openai/…`). |
-| `SHIIOO_CLAUDE_BIN`, `SHIIOO_CODEX_BIN` | harness adapters | Harness executables when not on `PATH`. |
+| `SHIIOO_CLAUDE_BIN`, `SHIIOO_CODEX_BIN` | harness adapters | Harness executables when not on `PATH` (host runs; a container uses its image's). |
+| `SHIIOO_OPENSHELL_BIN` | `openshell` level | The OpenShell CLI when not on `PATH`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `container` level | Claude Code's token for containers when the secret `claude-code-oauth-token` is not set. |
 
 ## Testing
 
@@ -130,7 +157,9 @@ curl -s http://127.0.0.1:7878/v1/health
 A real end-to-end check needs an installed `claude` or `codex` logged in to
 the owner's subscription: `shiioo run --harness claude-code --repo . "say
 hello in HELLO.md"`, then `shiioo log <run>` and `git branch --list
-'shiioo/*'`.
+'shiioo/*'`. For the `container` level add `--isolation container` (Docker
+running, the office under your home directory); the first run builds the
+image.
 
 ## Further reading
 

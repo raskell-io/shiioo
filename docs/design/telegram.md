@@ -74,7 +74,7 @@ The server speaks first in these cases (`Notifier::notify`), each as one short m
 | capacity | *(planned)* a warning when a subscription window passes a threshold (`CapacityObserved`) |
 | morning report | *(planned, phase 5)* |
 
-The task is cut to 120 characters, the summary to 600; the branch or PR link is in the summary if the agent put it there *(a dedicated link is planned)*. Notifications are recorded text, nothing else; secret redaction before recording is *(planned)*, so until then the final summary can contain whatever the agent chose to print.
+The task is cut to 120 characters, the summary to 600; the branch or PR link is in the summary if the agent put it there *(a dedicated link is planned)*. Notifications are recorded text, nothing else; the office's secrets and its API token are redacted before recording ([security.md §3.2](security.md#32-secrets-never-reach-the-record-built-never-reach-the-model-holds-for-the-native-loop-planned)), so a leaked token shows as `[secret:<name>]` on the phone too. Anything else the agent printed arrives as is.
 
 ## Security
 

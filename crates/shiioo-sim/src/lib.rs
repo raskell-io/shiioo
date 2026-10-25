@@ -771,6 +771,8 @@ pub fn compact(ev: &Event) -> String {
             ..
         } => format!("approval {approval_id} {decision}"),
         Payload::CancelRequested { by, .. } => format!("cancel by {by}"),
+        Payload::SandboxStarted { level, .. } => format!("sandbox {level}"),
+        Payload::SecretRedacted { name, count } => format!("redacted {name} x{count}"),
         Payload::RunCancelled { .. } => "cancelled".to_owned(),
         Payload::RunCompleted { .. } => "completed".to_owned(),
         Payload::RunFailed { reason } => format!("failed: {reason}"),

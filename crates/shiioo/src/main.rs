@@ -11,14 +11,16 @@
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use shiioo_api::{ApiOptions, ApiState, CapacityTracker, Employee, Notifications};
+use shiioo_api::{ApiOptions, ApiState, CapacityTracker, Employee, IsolationPolicy, Notifications};
 use shiioo_core::{Event, EventStore, RunId, Seq, verify_chain};
 use shiioo_rules::RuleSet;
 use shiioo_runtime::{
-    AgentSpec, AnthropicProvider, HarnessBilling, HarnessSpec, HookEndpoint, LocalMachine,
-    ModelProvider, RunOutcome, RunSpec, RunStatus, Runtime, Toolbox, UnconfiguredProvider, Worker,
+    AgentSpec, AnthropicProvider, ContainerSpec, Egress, HarnessBilling, HarnessSpec,
+    HookCommand, HookEndpoint, LocalMachine, ModelProvider, Mount, OpenshellSpec, RunOutcome,
+    RunSpec, RunStatus, Runtime, SecretSource, Toolbox, UnconfiguredProvider, Worker,
     anthropic::DEFAULT_MODEL, branch_for,
 };
+use shiioo_secrets::SecretStore;
 use shiioo_store::{Notifying, RedbStore};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -84,6 +86,11 @@ enum Command {
         /// Fail a harness run that takes longer than this, across resumes.
         #[arg(long, requires = "harness")]
         max_minutes: Option<u64>,
+        /// Where the harness runs: `worktree` (your user, no sandbox),
+        /// `container` (Docker, read-only root, egress allow list) or
+        /// `openshell`. Default: the office's policy in config.toml.
+        #[arg(long, requires = "harness", value_parser = ["worktree", "container", "openshell"])]
+        isolation: Option<String>,
     },
     /// Continue a run, for example after the process was killed.
     Resume {
@@ -141,6 +148,45 @@ enum Command {
     },
     /// Remove the background service (the office's data stays).
     Uninstall,
+    /// Secrets for the agents (tokens, keys), encrypted in .shiioo/.
+    /// Refer to one as `secret:<name>` in config.toml's [env].
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+    /// The container level's images and leftovers.
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// Store a secret. The value is read from stdin (`echo -n … | shiioo
+    /// secret set gh-token`), or from a variable or a file.
+    Set {
+        name: String,
+        /// Take the value from this environment variable.
+        #[arg(long)]
+        from_env: Option<String>,
+        /// Take the value from this file (trailing newline removed).
+        #[arg(long)]
+        from_file: Option<PathBuf>,
+    },
+    /// List the names (never the values).
+    List,
+    /// Remove a secret.
+    Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum SandboxAction {
+    /// Build the harness and egress images now instead of on first use.
+    Build,
+    /// Remove containers and the network left by runs that did not clean
+    /// up (names starting with `shiioo-`).
+    Prune,
 }
 
 #[derive(Subcommand)]
@@ -196,6 +242,7 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             api_billing,
             max_budget_usd,
             max_minutes,
+            isolation,
         } => {
             let worker = worker(&store, &workspace, &data, &effort)?;
             let runtime = match harness.as_deref() {
@@ -206,6 +253,20 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                         HarnessSpec::claude_code()
                     };
                     h.repo = repo.as_ref().map(std::fs::canonicalize).transpose()?;
+                    // The office's policy decides the level and the
+                    // environment, as it does for runs from the phone.
+                    let config = Config::load(&data.join("config.toml"))?;
+                    let label = h.repo.as_ref().and_then(|path| {
+                        config
+                            .repos
+                            .iter()
+                            .find(|(_, p)| *p == path)
+                            .map(|(l, _)| l.clone())
+                    });
+                    h.isolation = config
+                        .isolation_policy()
+                        .resolve(label.as_deref(), isolation.as_deref())?;
+                    h.env = config.env.clone();
                     if let Some(mode) = permission_mode {
                         h.permission_mode = mode;
                     }
@@ -280,9 +341,135 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             print,
         } => install(&workspace, &data, &listen, telegram_token, print),
         Command::Uninstall => uninstall(),
+        Command::Secret { action } => secret_command(&data, action),
+        Command::Sandbox { action } => sandbox_command(&data, action).await,
         // Answered before the store was opened: hooks run in the harness's
         // working directory, not in an office.
         Command::Hook { .. } => Ok(ExitCode::SUCCESS),
+    }
+}
+
+/// `shiioo secret set|list|rm`.
+fn secret_command(data: &Path, action: SecretAction) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let store = SecretStore::open(data)?;
+    match action {
+        SecretAction::Set {
+            name,
+            from_env,
+            from_file,
+        } => {
+            shiioo_secrets::validate(&name)?;
+            let value = match (from_env, from_file) {
+                (Some(var), _) => std::env::var(&var)
+                    .map_err(|_| format!("environment variable {var} is not set"))?,
+                (None, Some(file)) => std::fs::read_to_string(&file)
+                    .map_err(|e| format!("{}: {e}", file.display()))?
+                    .trim_end_matches(['\n', '\r'])
+                    .to_owned(),
+                (None, None) => {
+                    let mut value = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut value)?;
+                    value.trim_end_matches(['\n', '\r']).to_owned()
+                }
+            };
+            if value.is_empty() {
+                return Err("refusing to store an empty secret".into());
+            }
+            store.set(&name, &value)?;
+            println!(
+                "stored secret {name} ({} bytes); refer to it as secret:{name}",
+                value.len()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        SecretAction::List => {
+            let names = store.names()?;
+            if names.is_empty() {
+                println!("no secrets; `shiioo secret set <name>` stores one");
+            }
+            for name in names {
+                println!("{name}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        SecretAction::Rm { name } => {
+            if store.remove(&name)? {
+                println!("removed secret {name}");
+                Ok(ExitCode::SUCCESS)
+            } else {
+                eprintln!("no secret named {name}");
+                Ok(ExitCode::from(1))
+            }
+        }
+    }
+}
+
+/// `shiioo sandbox build|prune`.
+async fn sandbox_command(
+    data: &Path,
+    action: SandboxAction,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use shiioo_runtime::sandbox::{container, egress};
+    let config = Config::load(&data.join("config.toml"))?;
+    let engine = if config.isolation.container.engine.is_empty() {
+        "docker".to_owned()
+    } else {
+        config.isolation.container.engine.clone()
+    };
+    container::check_engine(&engine).await?;
+    match action {
+        SandboxAction::Build => {
+            let dir = data.join("sandboxes").join("build");
+            let image = if config.isolation.container.image.is_empty() {
+                container::default_image()
+            } else {
+                config.isolation.container.image.clone()
+            };
+            if image == container::default_image() {
+                container::ensure_image(&engine, &image, container::DOCKERFILE, &dir).await?;
+            }
+            container::ensure_image(&engine, &egress::image(), egress::DOCKERFILE, &dir).await?;
+            egress::ensure_network(&engine).await?;
+            println!("harness image: {image}\negress image: {}\nnetwork: {}", egress::image(), egress::NETWORK);
+            Ok(ExitCode::SUCCESS)
+        }
+        SandboxAction::Prune => {
+            let out = tokio::process::Command::new(&engine)
+                .args(["ps", "-a", "--filter", "name=^shiioo-", "--format", "{{.Names}}"])
+                .output()
+                .await?;
+            let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::to_owned)
+                .filter(|n| !n.is_empty())
+                .collect();
+            if names.is_empty() {
+                println!("nothing to prune");
+            } else {
+                tokio::process::Command::new(&engine)
+                    .arg("rm")
+                    .arg("-f")
+                    .args(&names)
+                    .status()
+                    .await?;
+                println!("removed {}", names.join(", "));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// The office's secret store as the workers see it: a missing or
+/// unreadable store means no secrets, never a crash in a run.
+struct StoreSecrets(SecretStore);
+
+impl SecretSource for StoreSecrets {
+    fn get(&self, name: &str) -> Option<String> {
+        self.0.get(name).ok().flatten()
+    }
+
+    fn all(&self) -> Vec<(String, String)> {
+        self.0.all().unwrap_or_default()
     }
 }
 
@@ -304,8 +491,10 @@ async fn serve(
     let provider = provider(effort);
     let machine = Arc::new(
         LocalMachine::open(workspace, data.join("journal.jsonl"), Toolbox::builtin())?
-            .with_worktrees(data.join("worktrees")),
+            .with_worktrees(data.join("worktrees"))
+            .with_sandboxes(data.join("sandboxes")),
     );
+    let secrets: Arc<dyn SecretSource> = Arc::new(StoreSecrets(SecretStore::open(data)?));
     let token_path = data.join("api-token");
     let token = api_token(&token_path)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
@@ -321,11 +510,12 @@ async fn serve(
     let hooks = HookEndpoint {
         server_url: format!("http://{hook_host}:{}", addr.port()),
         token: token.clone(),
-        exe: std::env::current_exe()?,
+        command: HookCommand::Exe(std::env::current_exe()?),
     };
     let worker_store = Arc::clone(&store);
     let capacity = Arc::new(CapacityTracker::default());
     let observed = Arc::clone(&capacity);
+    let worker_secrets = Arc::clone(&secrets);
     let workers = Arc::new(move || {
         let tracker = Arc::clone(&observed);
         Worker::new(
@@ -335,6 +525,7 @@ async fn serve(
             format!("local-{}", std::process::id()).as_str(),
         )
         .with_hooks(hooks.clone())
+        .with_secrets(Arc::clone(&worker_secrets))
         .with_observer(Arc::new(move |ev| tracker.observe_event(ev)))
     });
 
@@ -366,6 +557,8 @@ async fn serve(
             capacity,
             repos: config.repos.clone(),
             notifications,
+            isolation: config.isolation_policy(),
+            env: config.env.clone(),
         },
     );
     if config.intake.enabled {
@@ -411,6 +604,28 @@ async fn serve(
         data.join("rules.toml").display()
     );
     println!(
+        "isolation: {} by default{}",
+        if config.isolation.default.is_empty() {
+            "worktree"
+        } else {
+            config.isolation.default.as_str()
+        },
+        if config.isolation.repos.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {}",
+                config
+                    .isolation
+                    .repos
+                    .iter()
+                    .map(|(r, l)| format!("{r}: {l}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    );
+    println!(
         "dashboard: http://{addr}/#token=<contents of {}>",
         token_path.display()
     );
@@ -434,6 +649,108 @@ struct Config {
     /// Repository label → path. `/run <label> <task>` on the phone picks
     /// one; rules can be scoped to a label.
     repos: BTreeMap<String, PathBuf>,
+    isolation: IsolationSection,
+    egress: EgressSection,
+    /// Environment every harness run gets. Values are literal or
+    /// `secret:<name>`.
+    env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct IsolationSection {
+    /// `worktree` (default), `container` or `openshell`.
+    default: String,
+    /// Repository label → level.
+    repos: BTreeMap<String, String>,
+    container: ContainerSection,
+    openshell: OpenshellSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ContainerSection {
+    image: String,
+    engine: String,
+    memory: Option<String>,
+    cpus: Option<f64>,
+    /// Host directories mounted at the same path: `"/path"` or `"/path:ro"`.
+    mounts: Vec<String>,
+    /// SSH remote prefixes rewritten to https://github.com/ inside.
+    git_https: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct OpenshellSection {
+    image: String,
+    cpus: Option<f64>,
+    memory: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct EgressSection {
+    /// `allowlist` (default) or `open`.
+    mode: String,
+    /// Replaces the built-in list when set.
+    allow: Vec<String>,
+    /// Added to the list.
+    also: Vec<String>,
+}
+
+impl Config {
+    fn egress(&self) -> Egress {
+        match self.egress.mode.as_str() {
+            "open" => Egress::Open,
+            _ => {
+                let mut hosts = if self.egress.allow.is_empty() {
+                    Egress::default_hosts()
+                } else {
+                    self.egress.allow.clone()
+                };
+                hosts.extend(self.egress.also.iter().cloned());
+                Egress::Allowlist { hosts }
+            }
+        }
+    }
+
+    fn isolation_policy(&self) -> IsolationPolicy {
+        let c = &self.isolation.container;
+        let o = &self.isolation.openshell;
+        IsolationPolicy {
+            default: self.isolation.default.clone(),
+            repos: self.isolation.repos.clone(),
+            container: ContainerSpec {
+                image: c.image.clone(),
+                engine: c.engine.clone(),
+                memory: c.memory.clone(),
+                cpus: c.cpus,
+                egress: self.egress(),
+                mounts: c
+                    .mounts
+                    .iter()
+                    .map(|m| match m.strip_suffix(":ro") {
+                        Some(path) => Mount {
+                            host: PathBuf::from(path),
+                            readonly: true,
+                        },
+                        None => Mount {
+                            host: PathBuf::from(m),
+                            readonly: false,
+                        },
+                    })
+                    .collect(),
+                git_https: c.git_https.clone(),
+            },
+            openshell: OpenshellSpec {
+                image: o.image.clone(),
+                cpus: o.cpus,
+                memory: o.memory.clone(),
+                egress: self.egress(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -511,6 +828,35 @@ interval_secs = 60
 # name = "local"
 # kind = "native"
 # model = "ollama/qwen3:32b"
+
+[isolation]
+# Where harness runs execute. `worktree`: as your user, no sandbox.
+# `container`: in a Docker container per run (read-only root, no
+# capabilities, the worktree mounted, egress through an allow list).
+# `openshell`: an NVIDIA OpenShell sandbox (experimental).
+default = "worktree"
+# Per repository: [isolation.repos] myproject = "container"
+
+[isolation.container]
+# image = ""            # empty: Shiioo's own image, built on first use
+# engine = "docker"     # or "podman"
+# memory = "8g"
+# cpus = 4.0
+# mounts = ["/Users/me/data:ro"]
+# SSH remote aliases to rewrite to https://github.com/ inside the container
+# (it has no SSH keys; `gh` and GH_TOKEN handle pushes):
+# git_https = ["git@github-work:"]
+
+[egress]
+# What sandboxed runs may reach: `allowlist` (default) or `open`.
+mode = "allowlist"
+# allow = [...]          # replaces the built-in list (model APIs, GitHub, registries)
+# also = ["pypi.io"]     # adds to it
+
+[env]
+# Environment for every harness run. `secret:<name>` reads the secret store
+# (`shiioo secret set <name>`); the log records the reference, not the value.
+# GH_TOKEN = "secret:gh-token"
 "#;
 
 impl Config {
@@ -628,6 +974,12 @@ impl shiioo_telegram::Office for TelegramOffice {
                 .state
                 .assign("auto", repo_path)
                 .map_err(|e| e.to_string())?;
+            let employee = match &runtime {
+                Runtime::Harness(h) if h.isolation.level() != "worktree" => {
+                    format!("{employee}, {}", h.isolation.level())
+                }
+                _ => employee,
+            };
             let spec = RunSpec {
                 task: task.clone(),
                 agent,
@@ -1156,13 +1508,16 @@ fn worker(
 ) -> Result<Worker<RedbStore>, Box<dyn std::error::Error>> {
     let provider = provider(effort);
     let machine = LocalMachine::open(workspace, data.join("journal.jsonl"), Toolbox::builtin())?
-        .with_worktrees(data.join("worktrees"));
+        .with_worktrees(data.join("worktrees"))
+        .with_sandboxes(data.join("sandboxes"));
+    let secrets: Arc<dyn SecretSource> = Arc::new(StoreSecrets(SecretStore::open(data)?));
     Ok(Worker::new(
         Arc::clone(store),
         provider,
         Arc::new(machine),
         format!("local-{}", std::process::id()).as_str(),
     )
+    .with_secrets(secrets)
     .with_observer(Arc::new(print_event)))
 }
 
