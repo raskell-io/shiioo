@@ -3,6 +3,7 @@
 Telegram is the owner's primary surface ([positioning.md](../positioning.md)): delegate work, get told when something finished or needs a decision, and answer with one tap. The web dashboard is for details; Telegram is for the day.
 
 Status: the client, commands, long-poll loop and notifier are built in `crates/shiioo-telegram`. The office side (what `/status` shows, how approvals are created and expire) is built by the server and is *(built)* where marked.
+Status: the client, commands, long-poll loop and notifier are built in `crates/shiioo-telegram`. The office side (what `/capacity` shows, how approvals are created and expire) is built by the server and is *(built)* where marked.
 
 ## Why Telegram, and why long polling
 
@@ -23,9 +24,10 @@ Status: the client, commands, long-poll loop and notifier are built in `crates/s
 |---|---|
 | plain text, e.g. `fix the flaky test in net.rs` | Starts a run with that task on the default repo (or workspace). Reply: the run id, the branch, and how to follow it. |
 | `/run <repo> <task…>` | Same, on a named repo. `<repo>` is one of the labels from `/repos`; if the first word isn't a label, the whole text is the task. |
-| `/status` | One line per open run: id prefix, repo, what it's doing right now, how long it has been running; then runs waiting on you. *(office side planned)* |
-| `/log <run>` | The run's steps, compacted: one line per model message and tool call, the last ones first. Accepts an id prefix. *(office side planned)* |
-| `/cancel <run>` | Asks the run to stop at its next step boundary. *(planned, needs `CancelRequested`)* |
+| `/status` | The 15 most recently updated runs, one line each: state glyph, id prefix, task, and what a waiting run waits for; then the capacity line. *(built)* |
+| `/capacity` | How much of each subscription's five-hour and seven-day window is used, and when it resets. *(built)* |
+| `/log <run>` | The run's last 25 steps, one line each. Accepts an id prefix (4+ characters). *(built)* |
+| `/cancel <run>` | Asks the run to stop at its next step boundary (`CancelRequested`). *(built)* |
 | `/repos` | The repo labels you can use in `/run`. |
 | `/approve <id>`, `/deny <id>` | Answer an approval without the buttons (for example from a client that doesn't show them). |
 | `/help`, `/start` | The command list. |
@@ -55,7 +57,7 @@ Expires in 30 min.
 3. on a button press (`approve:<id>` / `deny:<id>` as callback data), calls the office's `decide`, which records `ApprovalDecided` and wakes the run;
 4. acknowledges the press (a short toast), and edits the original message: the buttons disappear and a footer is appended, `✅ allowed by you` or `⛔ denied by you`. A second press on a stale message gets `⚠️ <reason>` (already decided, or expired).
 
-Approvals bind to the exact call (tool, input digest, run), so a later, different `git push` asks again. If nobody answers before the expiry *(planned: 30 minutes by default, per rule)*, the server records the expiry, denies the call, edits the message to `⏰ expired`, and the run continues with a denial the agent can see.
+Approvals bind to the exact call (tool, input digest, run), so a later, different `git push` asks again. If nobody answers before the expiry (just under six hours, the harness hook's own timeout minus a margin; per-rule expiries are planned), the server records `ApprovalDecided { decision: deny, by: timeout }`, the hook denies the call, the message is edited to show it expired, and the run continues with a denial the agent can see.
 
 The office tracks the message id returned by `ask_approval`, so it can edit the request when it expires or is answered another way (`/approve`, the dashboard).
 

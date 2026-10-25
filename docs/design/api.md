@@ -22,7 +22,9 @@ Read [architecture.md](../architecture.md) first. Related: [ADR-0004](../adr/000
 | Run events | `GET /v1/runs/{run}/events?from={seq}&limit=…`, `GET /v1/runs/{run}/events/stream` |
 | Run commands | `POST /v1/runs/{run}/messages`, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` |
 | Dashboard | `GET /` (and `/ui`, `/ui/app.js`, `/ui/app.css`) *(built)*: the mobile web dashboard, static, no auth on the page itself; it stores the token from `#token=…` locally and sends it on every API call |
+| Capacity | `GET /v1/capacity` *(built)*: the latest rate-limit windows per provider (`five_hour`, `seven_day`: utilization, reset time), folded from `CapacityObserved` events; the broker and the phone read it |
 | Diff | `GET /v1/runs/{run}/diff` *(built)*: `git diff HEAD...shiioo/<run>` of a repo run, text/plain |
+| Employees | `POST /v1/runs` with `employee: "auto"` (the broker picks by capacity) or a configured name, plus `repo` (a label or path) *(built)*; the dashboard and Telegram use this |
 | Permissions | `POST /v1/runs/{run}/permissions` *(built)*: a harness hook asks before a tool call; the rules answer, or the request waits for `POST /v1/approvals/{id}` *(built)* with `{"decision":"allow"\|"deny","note"}` |
 | Run verification | `GET /v1/runs/{run}/verify` (re-checks the hash chain server-side, returns the head hash) |
 | Approvals | `GET /v1/projects/{project}/approvals?state=pending`, `GET /v1/approvals/{id}`, `POST /v1/approvals/{id}/decisions` |

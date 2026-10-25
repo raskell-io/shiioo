@@ -83,10 +83,17 @@
   async function renderList(showForm = false) {
     app.innerHTML = "";
     if (showForm) app.appendChild(newTaskForm());
+    const capacity = el(`<div class="muted capacity"></div>`);
+    app.appendChild(capacity);
     const list = el(`<ul class="list"></ul>`);
     app.appendChild(list);
     const load = async () => {
       try {
+        // Subscription windows per provider, e.g. "claude-code · 5h 19% · 7d 5%".
+        api("/v1/capacity").then((providers) => {
+          capacity.textContent = providers.map((p) => [p.provider, ...Object.entries(p.windows).map(([name, w]) =>
+            `${{ five_hour: "5h", seven_day: "7d" }[name] || name} ${Math.round(w.utilization * 100)}%`)].join(" · ")).join("   ");
+        }).catch(() => {});
         const runs = await api("/v1/runs");
         list.innerHTML = runs.length ? "" : `<li class="empty">No runs yet. Start one with “New task”.</li>`;
         for (const r of runs) {
@@ -119,9 +126,10 @@
       e.preventDefault();
       const task = form.querySelector("#task").value.trim();
       const repo = form.querySelector("#repo").value.trim();
-      const runtime = { kind: "harness", harness: "claude-code", ...(repo ? { repo } : {}) };
+      // The server's capacity broker picks the employee.
+      const body = { task, employee: "auto", ...(repo ? { repo } : {}) };
       try {
-        const run = await api("/v1/runs", { method: "POST", body: JSON.stringify({ task, runtime }) });
+        const run = await api("/v1/runs", { method: "POST", body: JSON.stringify(body) });
         location.hash = `run=${run.id}`;
       } catch (err) { if (!(err instanceof Unauthorized)) showError(err); }
     });

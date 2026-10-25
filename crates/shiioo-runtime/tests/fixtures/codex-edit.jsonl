@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a17238-0fcc-7111-bf7f-55ecc8e06a99"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I\u2019ll create hello.txt with exactly `hi`.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'printf %s hi > hello.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'printf %s hi > hello.txt'","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":35518,"cached_input_tokens":30592,"cache_write_input_tokens":0,"output_tokens":54,"reasoning_output_tokens":0}}

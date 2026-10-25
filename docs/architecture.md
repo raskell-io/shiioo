@@ -115,7 +115,8 @@ Details: [design/fork-and-replay.md](design/fork-and-replay.md).
 | `shiioo-store` | `MemoryStore`, `RedbStore`, `PostgresStore` | built |
 | `shiioo-blob` | Content-addressed blob store over `object_store` | planned |
 | `shiioo-runtime` | The agent loop: context building, turns, tool dispatch, recovery on takeover; Anthropic provider; built-in tools; local machine with call journal and epoch fencing; the Claude Code harness adapter and per-run git worktrees | built |
-| `shiioo-providers` | Model adapters and the capacity broker (key pooling, failover, cost) | planned |
+| `shiioo-providers` | OpenAI-compatible provider (Ollama, LM Studio, MLX servers, OpenAI) and the prefix router (`ollama/…`) | built |
+| `shiioo-intake` | GitHub-issue intake through `gh`: labelled issue → run → comment and relabel | built |
 | `shiioo-tools` | MCP client, ACP harness adapters (the tool trait, built-in tools and the Claude Code adapter live in `shiioo-runtime` for now) | planned |
 | `shiioo-rules` | The owner's allow / ask / deny rules (`rules.toml`), glob matching, chained-command handling | built |
 | `shiioo-telegram` | Telegram Bot API client, owner-gated command loop, approval buttons, notifications | built |
@@ -142,7 +143,7 @@ The product roadmap lives in [positioning.md](positioning.md#roadmap). In kernel
 0. **Kernel spike** *(done)*: event model, chain over stored bytes, fencing, recovery, memory/redb/Postgres backends, the native agent loop with the Anthropic provider, built-in tools, an in-process machine with a call journal and epoch fencing, the HTTP API with resumable SSE, the `shiioo` CLI, and the deterministic simulation harness (`crates/shiioo-sim`). The exit test passes: a worker killed at any point of a turn is taken over and the run finishes with no side effect repeated.
 1. **Harness runtime** ([ADR-0009](adr/0009-harness-first-runtimes.md)) *(built)*: Claude Code driven headless, its steps recorded as events, a git worktree and branch per run, resume of the same session after a crash, the mobile dashboard served by the API (reached over Tailscale), `shiioo install` as a login service.
 2. **Rules, approvals, Telegram** *(built)*: allow / ask / deny per tool, repo and action; harness permission requests routed through a Claude Code hook to the server, answered by the rules or by the owner's phone; cancellation; notifications.
-3. **Capacity**: Codex and local-model employees, the broker across subscriptions and endpoints, budgets, GitHub-issue intake.
+3. **Capacity** *(built)*: the capacity tracker (`GET /v1/capacity`, `/capacity`, the dashboard header), the employee broker (`[[employees]]` tried in order, skipped above their window limits; `employee: "auto"` on run creation), Codex as a second harness with the same rules-and-approvals hook, local models through `shiioo-providers` (`ollama/…`, `lmstudio/…`), GitHub-issue intake (`[intake]`), and a per-run time budget (`max_minutes`). Codex's own rate-limit windows are not in its `exec` stream (they need its app-server), so the broker treats Codex as available until that is wired.
 4. **Isolation levels**: `container` and `openshell` on nodes, secrets injection, egress rules.
 5. **Planner, routines, roles**; then remote nodes, asset and mail machines; then replay and forks.
 

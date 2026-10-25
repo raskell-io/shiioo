@@ -32,7 +32,7 @@ One turn, as executed by the worker that holds the run's lease:
 
 The loop is a plain async function over a `RunContext` that only touches the outside world through traits (`EventStore`, `Provider`, `ToolExecutor`, `Clock`), so the simulator in `shiioo-sim` drives it unchanged.
 
-## 3. Harness runtime *(Claude Code built; Codex and ACP planned)*
+## 3. Harness runtime *(Claude Code and Codex built; ACP planned)*
 
 Harnesses are the primary employees (ADR-0009). Shiioo drives them as subprocesses on a node and records what it sees; the harness executes its own tools. Anthropic's documented path for driving Claude Code from another program is its print mode, so that is what the adapter uses; the Agent Client Protocol (ACP, Zed's editor protocol) comes later for harnesses that only speak it.
 
@@ -58,9 +58,39 @@ Rules the adapter follows:
 
 Permissions today: the harness's own mode (`acceptEdits` by default) and allow rules (`Bash(git *)` form). Unanswered prompts in print mode are denied, and the denials show up in `HarnessResult.permission_denials`. Phase 2 routes them to the owner: the documented way is a `PreToolUse` / `PermissionRequest` hook passed via `--settings`, answered by Shiioo's rules or a Telegram approval (`--permission-prompt-tool` exists too, but its contract is undocumented).
 
-### 3.2 Codex *(planned)*
+### 3.2 Codex *(built, `shiioo-runtime::harness::codex`)*
 
-`codex exec --json [--worktree] [-s workspace-write] [-C dir] "<prompt>"` emits `thread.started`, `turn.started`, `item.completed` (agent messages, commands, file changes) and `turn.completed` with usage (`crates/shiioo-runtime/tests/fixtures/codex-ok.jsonl`); `codex exec resume <thread>` continues a thread. Same mapping, same rules.
+`codex exec --json -C <cwd> -c approval_policy="never" -c sandbox_mode="<sandbox>" [-m model] [--skip-git-repo-check] "<prompt>"`, run in the run's worktree, stdin closed (with stdin open Codex waits for "additional input" and never starts). Resume: `codex exec resume <thread_id> --json "<prompt>"`. Shapes recorded from Codex CLI 0.163.0 (`crates/shiioo-runtime/tests/fixtures/codex-command.jsonl`, `codex-edit.jsonl`):
+
+**Sandbox decision.** Shiioo runs Codex with `approval_policy = "never"` (headless, so nothing could answer an approval prompt) and its OS sandbox **off** (`danger-full-access`) by default. Reason, found live: Codex's `workspace-write` sandbox makes the checkout's resolved git directory read-only (for a worktree, `<repo>/.git/worktrees/<run>`), so `git commit` fails with "Unable to create index.lock", and with `never` Codex cannot escalate; `sandbox_workspace_write.writable_roots` does not lift that protection. Shiioo's rules and the owner's approvals gate every command through the hook instead, the same posture as Claude Code; OS-level isolation is the job of the isolation levels (phase 4). `permission_mode = "workspace-write"` or `"read-only"` remain available for tasks that don't need to commit.
+
+| Codex line | Event |
+|---|---|
+| `thread.started {thread_id}` | `HarnessSessionStarted` (harness `codex`, version from `codex --version`, the agent's model or `default`) |
+| `item.completed` `agent_message {text}` | `ModelResponseRecorded` with `{"content":[{"type":"text","text":…}]}` |
+| `item.started` `command_execution {command}` | `ToolIntent` (`Bash`, side-effecting, `{"command":…}`) |
+| `item.completed` `command_execution {aggregated_output, exit_code}` | `ToolResult` (`is_error` when `exit_code != 0`); plus the intent if no `item.started` was seen |
+| `item.completed` `file_change {changes}` | `ToolIntent` (`Edit`, idempotent on the patch digest) + `ToolResult` with a one-line summary |
+| `item.completed` `mcp_tool_call`, `web_search` | intent + result, named `mcp__<server>__<tool>` / `WebSearch` |
+| `reasoning`, `todo_list`, `error` items | ignored: summaries, plans and Codex's own notices (for example the hook-trust warning) are not steps of the run |
+| `turn.completed {usage}` | `HarnessResult` (`success`, no cost: Codex reports tokens, not dollars) then `RunCompleted` with the last agent message |
+| `turn.failed {error}` / top-level `error` | `HarnessResult` (`error`) then `RunFailed` |
+
+Rules the adapter follows:
+
+- **Sandbox from the permission mode.** `acceptEdits` (the default) → `workspace-write`, `default`/`plan` → `read-only`, `bypassPermissions` → `--dangerously-bypass-approvals-and-sandbox`; Codex's own names are accepted too. Codex's sandbox is real OS isolation (Seatbelt on macOS, Landlock/seccomp on Linux): commands may write only inside the worktree and have no network unless configured. `approval_policy="never"` because nobody is there to answer a prompt: a command the sandbox refuses fails, it is not escalated. (`untrusted` and `on-failure` are gone from current Codex.)
+- **Shiioo's rules still decide** when the worker has a `HookEndpoint`: the adapter passes `-c features.hooks=true -c 'hooks.PreToolUse=[{matcher="^(Bash|shell)$",hooks=[{type="command",command="<shiioo> hook pre-tool-use",timeout=21600}]}]' --dangerously-bypass-hook-trust`. Codex's hook contract is the same as Claude Code's: stdin JSON with `tool_name`, `tool_input.command`, `session_id`, `turn_id`, `cwd`, `model` (no `tool_use_id` observed), stdout `hookSpecificOutput.permissionDecision` `allow`/`deny` with a reason (`ask` is parsed but unsupported). Verified live: a denying hook blocked `date` and Codex told the model. Hooks inherit the harness's environment, so the `SHIIOO_*` variables reach `shiioo hook pre-tool-use` unchanged. The matcher is limited to shell commands: `apply_patch` edits are bounded by the sandbox, and the rules know `Edit`/`Write`, not `apply_patch` (widen the matcher once the rules do).
+- **Subscription by default.** `OPENAI_API_KEY` and `CODEX_API_KEY` are removed from the child environment under `HarnessBilling::Subscription`, so the saved ChatGPT login is used (`codex exec` "reuses saved CLI authentication"; an inline `CODEX_API_KEY` is the documented way to bill an API key for one run).
+- **No system prompt or allow rules.** Codex has no `--append-system-prompt`; the agent's `system` text is prepended to the prompt as "Instructions: … Task: …". `tools`, `max_turns` and `max_budget_usd` have no Codex equivalent and are ignored.
+- **Crash = resume**, as for Claude Code: the thread id from `HarnessSessionStarted` is resumed with the continuation prompt; a worker that loses its lease kills the process.
+
+Limits: no cost figure (tokens only, in `HarnessResult.usage`); no rate-limit windows in the `exec` stream (see below); `item.updated` and streamed deltas are not consumed.
+
+**Capacity data.** `codex exec --json` carries no usage windows. The experimental app-server protocol (`codex app-server`, JSON-RPC over stdio) has `account/rateLimits/read` and an `account/rateLimits/updated` notification (its JSON schema lists them; `codex app-server generate-json-schema`); that is the path for the capacity broker to learn Codex's remaining capacity. `~/.codex/config.toml` also has `memories.min_rate_limit_remaining_percent`, so Codex tracks these windows itself.
+
+**Local models through Codex.** `codex exec --oss --local-provider ollama|lmstudio` runs the same harness against a local model server; an option for the `local model` employee kind if Shiioo's native loop is not wanted for a task.
+
+Research sources (fetched 2026-10-25): non-interactive mode <https://learn.chatgpt.com/docs/non-interactive-mode>, config reference <https://learn.chatgpt.com/docs/config-file/config-reference>, hooks <https://learn.chatgpt.com/docs/hooks> (developers.openai.com/codex/* redirects there).
 
 ### 3.3 Other harnesses via ACP *(planned)*
 
@@ -100,50 +130,58 @@ ContextCompacted { replaces: SeqRange, summary: String, model: String }
 
 The original events stay in the log. Context building uses the summary in place of the range; replay, audit and fork still see everything. Compaction never covers the most recent turn or any unresolved tool call.
 
-## 5. Providers *(planned, `shiioo-providers`)*
+## 5. Providers *(Anthropic and OpenAI-compatible built; the rest planned)*
 
-### 5.1 Provider trait
+Providers serve Shiioo's **native loop** (`shiioo-runtime`): the runtime that runs local models, cheap triage and bulk work, and that can call cloud APIs as a fallback (ADR-0009). Harnesses bring their own model access and don't go through this layer.
+
+### 5.1 Provider trait *(built)*
+
+The trait in `shiioo_runtime::model` is deliberately small and non-streaming: one complete response per call, which is what the log records.
 
 ```rust
-pub trait Provider: Send + Sync {
-    fn id(&self) -> &ProviderId;
-    fn models(&self) -> &[ModelInfo];            // context window, pricing, capabilities
-    async fn stream(
-        &self,
-        req: &ModelRequest,                       // normalized
-        deltas: &mut dyn DeltaSink,               // ephemeral token stream to subscribers
-    ) -> Result<ModelResponse, ProviderError>;    // complete, normalized
+pub trait ModelProvider: Send + Sync {
+    fn complete<'a>(&'a self, request: ModelRequest<'a>)
+        -> BoxFuture<'a, Result<ModelResponse, ProviderError>>;
 }
-
-pub enum ProviderError {
-    RateLimited { retry_after: Option<Duration> },
-    Overloaded,
-    ContextTooLong,
-    InvalidRequest(String),   // not retried
-    Auth,                     // not retried; key disabled in the pool
-    Transport(String),        // retried
-}
+// ModelRequest { model, transcript: &Transcript, tools: &[ToolSpec] }
+// ModelResponse { model, content: Vec<Value>, stop_reason, usage }
+// ProviderError::{Config, Http, Status { status, body }, Decode}
 ```
 
-### 5.2 Normalized format
+Streaming deltas to subscribers (the `delta` SSE frames in [api.md](api.md)) are planned and will be an addition, not a change: the recorded response stays the complete one.
 
-Events store a provider-neutral form: messages with text, image and document parts, tool calls (`call_id`, name, input JSON), tool results, stop reason and usage (input, cached input, output tokens). The **raw provider response** is stored as a blob and referenced from `ModelResponseRecorded` by digest, so nothing provider-specific is lost and the hash chain still covers it.
+### 5.2 Normalized format *(built)*
 
-Provider-specific features that don't normalize cleanly (extended thinking blocks, citations, server-side tools) are kept as typed extension parts and passed back verbatim on the next turn when the same provider is used.
+`ModelResponse.content` uses the **Anthropic Messages content-block shapes** as the canonical recorded form: `{"type":"text","text"}` and `{"type":"tool_use","id","name","input"}`, with whatever else a provider returns (thinking blocks, citations) kept verbatim. Reasons:
+
+- The Anthropic provider can send its own blocks back unchanged, which that API requires (thinking signatures, for example).
+- Claude Code's stream uses the same shapes, so harness runs and native runs read identically in the log and in the dashboard.
+- Every other provider's format is a projection of these blocks and back: text becomes `content`, `tool_use` becomes a `tool_calls` entry, results become `tool` messages.
+
+Tool results are recorded as `ToolResult { call_id, output, is_error }` and rebuilt into each provider's result message by the adapter. `StopReason` is normalized to `EndTurn | ToolUse | MaxTokens | Refusal | Other(String)`; `Usage` to input and output tokens.
 
 ### 5.3 Adapters
 
-| Adapter | Covers |
-|---|---|
-| `anthropic` | Claude models via the Messages API, including prompt caching and extended thinking |
-| `openai` | Responses API (preferred) and Chat Completions |
-| `openai-compatible` | Ollama, vLLM, LM Studio, OpenRouter, LiteLLM, and any server speaking Chat Completions |
-| `bedrock` | AWS Bedrock (Converse API) |
-| `gemini` | Google Gemini API and Vertex AI |
+| Adapter | Where | Covers | Status |
+|---|---|---|---|
+| `AnthropicProvider` | `shiioo-runtime::anthropic` | Claude models via the Messages API (raw HTTP): explicit `effort`, server-side refusal fallback, OAuth or API key, retries with `Retry-After` | built |
+| `OpenAiCompatProvider` | `shiioo-providers` | any server speaking Chat Completions with tools: **Ollama**, **LM Studio**, **`mlx_lm.server`**, vLLM, OpenRouter, LiteLLM, and OpenAI itself | built |
+| `ProviderRouter` | `shiioo-providers` | picks a provider from the model name's prefix | built |
+| Responses API, Bedrock (Converse), Gemini / Vertex | | | planned, as needed |
 
-Local models through `openai-compatible` are first-class: `shiioo up` with Ollama is a fully offline setup.
+`OpenAiCompatProvider` details:
 
-### 5.4 Capacity broker
+- `POST {base}/chat/completions`, non-streaming; `tools` as `function` definitions with the tool's JSON schema as `parameters`, `tool_choice: "auto"` when tools are offered.
+- Response mapping: `finish_reason` `stop`→`EndTurn`, `tool_calls`→`ToolUse`, `length`→`MaxTokens`, `content_filter`→`Refusal`. Tool-call `arguments` may be a JSON string (OpenAI) or an object (some local servers); both are accepted, and unparsable strings are kept as `{"_raw": …}`. Servers that omit tool-call ids get synthesized `call_<n>` ids, since the loop needs one per call.
+- Error tool results are prefixed with `Error:` in the `tool` message, because Chat Completions has no error flag.
+- Retries: 429, 408, 409, 5xx and connection errors, up to four attempts with backoff, honouring `Retry-After`. Bad requests are never retried.
+- Constructors: `ollama()` (`http://127.0.0.1:11434/v1`), `lm_studio()` (`http://127.0.0.1:1234/v1`), `openai(key)`, or `new(url, key)` for anything else, including a DGX Spark serving models over the tailnet.
+
+`ProviderRouter`: the model name carries the provider as a prefix, `ollama/qwen3:32b`, `lmstudio/…`, `openai/gpt-5.5`; the longest matching prefix wins and is stripped before the call; names without a known prefix (`claude-opus-5-5`) go to the default provider. `shiioo_providers::from_env(default)` builds the office's router: `ollama/` (URL from `SHIIOO_OLLAMA_URL`), `lmstudio/` (`SHIIOO_LMSTUDIO_URL`), and `openai/` when `OPENAI_API_KEY` is set. An agent's `model` field is all it takes to choose: `model = "ollama/qwen3:32b"`.
+
+Local models through `OpenAiCompatProvider` are first-class: `shiioo up` with Ollama is a fully offline setup for native runs.
+
+### 5.4 Capacity broker *(planned)*
 
 Ported from shiioo-legacy's `capacity.rs`. A project configures **pools**: ordered lists of endpoints and keys per model family.
 
@@ -159,8 +197,8 @@ members = [
 fallback = "local"                   # another pool, only if the agent's policy allows switching models
 ```
 
-- Tracks rate-limit headers and in-flight requests per member; a member that returns `RateLimited` is cooled down until `retry_after`.
-- Retries `Overloaded` and `Transport` errors with jittered backoff, on another member when possible. Never retries `InvalidRequest`.
+- Tracks rate-limit headers and in-flight requests per member; a member that returns a rate limit is cooled down until `retry_after`.
+- Retries overload and transport errors with jittered backoff, on another member when possible. Never retries invalid requests.
 - **Failover to a different model** (a fallback pool) changes behavior, so it requires the agent's policy to allow it, and is recorded in the response event.
 - Each response's usage is priced with the member's price table and recorded as `BudgetCharged { tokens, cost, pool, member }` (new), which is what budgets enforce (see [governance.md](governance.md)).
 - In a cluster, rate-limit state is per worker with a shared view in the store, refreshed every few seconds; exact global limiting isn't attempted.

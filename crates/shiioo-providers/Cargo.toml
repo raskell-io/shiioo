@@ -1,0 +1,22 @@
+[package]
+name = "shiioo-providers"
+description = "Model providers for Shiioo's native loop: OpenAI-compatible servers (Ollama, LM Studio, MLX, OpenAI) and a prefix router."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shiioo-runtime.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net"] }
+
+[lints]
+workspace = true

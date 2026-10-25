@@ -14,6 +14,8 @@ shiioo-store = { workspace = true, features = ["redb"] }
 shiioo-runtime.workspace = true
 shiioo-api.workspace = true
 shiioo-rules.workspace = true
+shiioo-providers.workspace = true
+shiioo-intake.workspace = true
 shiioo-telegram.workspace = true
 serde.workspace = true
 toml.workspace = true

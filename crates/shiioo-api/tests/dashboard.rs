@@ -163,7 +163,7 @@ async fn diff_shows_the_branch_changes() {
         .bearer_auth(TOKEN)
         .json(&json!({
             "task": "add a feature",
-            "runtime": { "kind": "harness", "harness": "claude-code", "repo": repo, "binary": fake }
+            "runtime": { "kind": "harness", "harness": "claude-code", "repo": repo, "binary": "/bin/sh", "binary_args": [fake] }
         }))
         .send()
         .await

@@ -37,14 +37,14 @@ Shiioo is a staff of AI agents (Claude Code, Codex, local models) that work on y
 
 ## Try it
 
-Hire Claude Code on your subscription (log in once with `claude`), on a repository of yours:
+Hire Claude Code or Codex on your subscriptions (log in once with `claude` / `codex`), on a repository of yours:
 
 ```sh
 cargo run -p shiioo -- --workspace ~/shiioo-office run --harness claude-code --repo ~/code/myproject \
     "Fix the flaky test in tests/net.rs and commit"
 ```
 
-The run gets its own git worktree and a `shiioo/<run>` branch; every step Claude Code takes is in the run's log (`shiioo log <run-id>`), and `shiioo resume <run-id>` continues the same Claude Code session after a crash. No API key needed.
+(`--harness codex` for Codex.) The run gets its own git worktree and a `shiioo/<run>` branch; every step the harness takes is in the run's log (`shiioo log <run-id>`), and `shiioo resume <run-id>` continues the same Claude Code session after a crash. No API key needed.
 
 Run the office and direct it from your phone:
 
@@ -57,7 +57,7 @@ tailscale serve --bg 7878                               # https://<mac>.<tailnet
 
 `install` prints the dashboard link to open on your phone: runs, live logs, diffs, Allow/Deny and Cancel buttons, as a home-screen web app. (`shiioo up` runs the same thing in the foreground.)
 
-The first start writes `~/shiioo-office/.shiioo/config.toml` (put your Telegram user id under `[telegram] owner_chat_id` and your repositories under `[repos]`) and `rules.toml` (what agents may do without asking). Then, from Telegram: `/run myproject fix the flaky test`, `/status`, `/log <run>`, `/cancel <run>`. Before every tool call Claude Code asks Shiioo; the rules allow or deny most calls, and the rest arrive on your phone with Allow / Deny buttons. Everything is recorded in the run's log.
+The first start writes `~/shiioo-office/.shiioo/config.toml` (your Telegram user id under `[telegram] owner_chat_id`, your repositories under `[repos]`, who takes tasks under `[[employees]]`, and `[intake]` to work on GitHub issues you label `shiioo`) and `rules.toml` (what agents may do without asking). Tasks go to the first employee whose subscription window isn't exhausted (`/capacity` shows the windows); local models work through `ollama/<model>` style names. Then, from Telegram: `/run myproject fix the flaky test`, `/status`, `/log <run>`, `/cancel <run>`. Before every tool call Claude Code asks Shiioo; the rules allow or deny most calls, and the rest arrive on your phone with Allow / Deny buttons. Everything is recorded in the run's log.
 
 Or use Shiioo's own loop with a model API key:
 

@@ -1573,6 +1573,8 @@ dependencies = [
  "serde_json",
  "shiioo-api",
  "shiioo-core",
+ "shiioo-intake",
+ "shiioo-providers",
  "shiioo-rules",
  "shiioo-runtime",
  "shiioo-store",
@@ -1597,6 +1599,7 @@ dependencies = [
  "shiioo-store",
  "tempfile",
  "tokio",
+ "toml",
  "uuid",
 ]
 
@@ -1610,6 +1613,28 @@ dependencies = [
  "sha2",
  "thiserror",
  "uuid",
+]
+
+[[package]]
+name = "shiioo-intake"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "shiioo-providers"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde_json",
+ "shiioo-runtime",
+ "tokio",
 ]
 
 [[package]]

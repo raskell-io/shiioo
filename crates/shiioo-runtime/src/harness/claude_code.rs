@@ -37,9 +37,7 @@ const SESSION_ENV: &[&str] = &[
     "CLAUDE_EFFORT",
 ];
 
-/// Prompt for resuming a session whose process was stopped mid-task.
-pub const CONTINUE_PROMPT: &str = "The process running you was stopped before you finished. \
-    Check the current state of the workspace, then continue the task to completion.";
+pub use super::CONTINUE_PROMPT;
 
 /// Where a harness's permission requests go: Shiioo's own API. Claude Code
 /// runs `<exe> hook pre-tool-use` before every tool call; that subcommand
@@ -101,6 +99,7 @@ pub fn command(
         agent.max_turns,
     );
     let mut cmd = Command::new(binary);
+    cmd.args(&spec.binary_args);
     // The prompt goes right after --print: later options take variable
     // numbers of values and would swallow a trailing positional.
     let permission_mode = if hooks.is_some() {
@@ -333,6 +332,8 @@ mod tests {
             max_budget_usd: Some(2.5),
             billing: HarnessBilling::Subscription,
             binary: None,
+            max_minutes: None,
+            binary_args: Vec::new(),
         };
         let agent = AgentSpec {
             model: "claude-opus-5-5".into(),

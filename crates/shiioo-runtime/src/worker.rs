@@ -1,13 +1,13 @@
 use crate::context;
-use crate::harness::claude_code::{self, HookEndpoint, Line};
-use crate::harness::{HarnessError, HarnessProcess};
+use crate::harness::claude_code::HookEndpoint;
+use crate::harness::{self, HarnessError, HarnessProcess};
 use crate::machine::{CallStatus, Invocation, LocalMachine, MachineError};
 use crate::model::{
     ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
 };
-use crate::spec::{HarnessKind, HarnessSpec, RunSpec, Runtime};
+use crate::spec::{HarnessSpec, RunSpec, Runtime};
 use crate::status::{as_text, unresolved_unknown};
-use crate::tools::{ToolOutput, digest_hex};
+use crate::tools::ToolOutput;
 use crate::workspace::{self, WorktreeError};
 use serde_json::{Value, json};
 use shiioo_core::{
@@ -351,7 +351,6 @@ impl<S: EventStore + 'static> Session<'_, S> {
     /// own tools; Shiioo records what it sees. A session that was started
     /// by a previous worker is resumed rather than started again.
     async fn run_harness(&mut self, spec: &HarnessSpec) -> Result<RunOutcome, WorkerError> {
-        let HarnessKind::ClaudeCode = spec.harness;
         let cwd = match &spec.repo {
             Some(repo) => {
                 let root = self.worker.machine.worktrees_root().ok_or_else(|| {
@@ -378,12 +377,12 @@ impl<S: EventStore + 'static> Session<'_, S> {
                 .await;
         }
         let (prompt, resume) = match starts.last() {
-            Some(session) => (claude_code::CONTINUE_PROMPT, Some(session.as_str())),
+            Some(session) => (harness::CONTINUE_PROMPT, Some(session.as_str())),
             None => (self.spec.task.as_str(), None),
         };
+        let mut driver = harness::driver_for(spec, &self.spec.agent, &cwd).await;
         let run_id = self.run_id.to_string();
-        let cmd = claude_code::command(
-            &claude_code::binary(spec),
+        let cmd = driver.command(
             spec,
             &self.spec.agent,
             &cwd,
@@ -391,122 +390,47 @@ impl<S: EventStore + 'static> Session<'_, S> {
             resume,
             self.worker.hooks.as_ref().map(|h| (h, run_id.as_str())),
         );
+        // The time budget counts from the run's first event, so resumes
+        // share it. A far-future deadline stands in for "no limit".
+        let deadline = match spec.max_minutes {
+            Some(minutes) => {
+                let started_ms = self.log.first().map_or(0, |e| e.recorded_at.0);
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(started_ms);
+                let elapsed = now_ms.saturating_sub(started_ms);
+                let left = (minutes * 60_000).saturating_sub(elapsed);
+                tokio::time::Instant::now() + Duration::from_millis(left)
+            }
+            None => tokio::time::Instant::now() + Duration::from_secs(60 * 60 * 24 * 365),
+        };
         let mut process = HarnessProcess::spawn(cmd)?;
         let mut lost = self.lease_lost.clone();
-        let mut last_text = String::new();
         loop {
             let line = tokio::select! {
                 line = process.next_line() => line?,
+                () = tokio::time::sleep_until(deadline) => {
+                    process.kill().await;
+                    return self
+                        .fail(format!(
+                            "time budget of {} minutes exceeded",
+                            spec.max_minutes.unwrap_or(0)
+                        ))
+                        .await;
+                }
                 _ = lost.changed() => {
                     process.kill().await;
                     return Ok(RunOutcome::LostLease);
                 }
             };
             let Some(line) = line else { break };
-            let parsed = claude_code::parse_line(&line)
-                .map_err(|e| HarnessError::Parse(format!("{e}: {}", truncate(&line, 200))))?;
-            match parsed {
-                Line::Init {
-                    session_id,
-                    model,
-                    cwd,
-                    version,
-                } => {
-                    self.append(vec![Payload::HarnessSessionStarted {
-                        harness: claude_code::HARNESS.into(),
-                        version,
-                        session_id,
-                        cwd,
-                        model,
-                    }])
-                    .await?;
-                }
-                Line::Assistant { message } => {
-                    let text = text_of(&message);
-                    if !text.is_empty() {
-                        last_text = text;
-                    }
-                    let mut payloads = vec![Payload::ModelResponseRecorded {
-                        model: message["model"].as_str().unwrap_or_default().to_owned(),
-                        response: message.clone(),
-                    }];
-                    for block in message["content"].as_array().into_iter().flatten() {
-                        if block["type"] != "tool_use" {
-                            continue;
-                        }
-                        let tool = block["name"].as_str().unwrap_or_default().to_owned();
-                        let input = block["input"].clone();
-                        payloads.push(Payload::ToolIntent {
-                            call_id: CallId(block["id"].as_str().unwrap_or_default().to_owned()),
-                            class: harness_tool_class(&tool, &input),
-                            tool,
-                            input,
-                        });
-                    }
-                    self.append(payloads).await?;
-                }
-                Line::ToolResults(results) => {
-                    let payloads: Vec<Payload> = results
-                        .into_iter()
-                        .map(|r| Payload::ToolResult {
-                            call_id: CallId(r.call_id),
-                            output: json!(r.content),
-                            is_error: r.is_error,
-                        })
-                        .collect();
-                    if !payloads.is_empty() {
-                        self.append(payloads).await?;
-                    }
-                }
-                Line::RateLimit { windows } => {
-                    self.append(vec![Payload::CapacityObserved {
-                        provider: claude_code::HARNESS.into(),
-                        windows,
-                    }])
-                    .await?;
-                }
-                Line::Result(result) => {
-                    let outcome = if result.is_error || result.subtype != "success" {
-                        let reason = if result.errors.is_empty() {
-                            format!("harness ended with {}", result.subtype)
-                        } else {
-                            format!("{}: {}", result.subtype, result.errors.join("; "))
-                        };
-                        (
-                            Payload::RunFailed {
-                                reason: reason.clone(),
-                            },
-                            RunOutcome::Failed(reason),
-                        )
-                    } else {
-                        let text = if result.text.is_empty() {
-                            last_text.clone()
-                        } else {
-                            result.text.clone()
-                        };
-                        (
-                            Payload::RunCompleted {
-                                output: json!(text),
-                            },
-                            RunOutcome::Completed(text),
-                        )
-                    };
-                    self.append(vec![
-                        Payload::HarnessResult {
-                            harness: claude_code::HARNESS.into(),
-                            session_id: result.session_id,
-                            subtype: result.subtype,
-                            is_error: result.is_error,
-                            cost_usd: result.cost_usd,
-                            usage: result.usage,
-                            permission_denials: result.permission_denials,
-                        },
-                        outcome.0,
-                    ])
-                    .await?;
-                    return Ok(outcome.1);
-                }
-                Line::Other(_) => {}
+            let step = driver.interpret(&line)?;
+            if !step.payloads.is_empty() {
+                self.append(step.payloads).await?;
+            }
+            if let Some(outcome) = step.outcome {
+                return Ok(outcome);
             }
             if cancel_requested(&self.log).is_some() {
                 process.kill().await;
@@ -725,31 +649,6 @@ impl<S: EventStore + 'static> Session<'_, S> {
     fn epoch(&self) -> Result<shiioo_core::Epoch, WorkerError> {
         Ok(self.current_lease()?.epoch)
     }
-}
-
-/// How a Claude Code tool call behaves if its outcome goes unrecorded.
-/// Observational for harness runs (Shiioo doesn't re-run them), but it
-/// keeps the log's meaning uniform.
-fn harness_tool_class(tool: &str, input: &Value) -> ToolClass {
-    match tool {
-        "Read" | "Glob" | "Grep" | "LS" | "WebFetch" | "WebSearch" | "NotebookRead"
-        | "TodoRead" | "ToolSearch" | "LSP" => ToolClass::Pure,
-        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "TodoWrite" => ToolClass::Idempotent {
-            key: digest_hex(&[tool.as_bytes(), input.to_string().as_bytes()]),
-        },
-        _ => ToolClass::SideEffecting,
-    }
-}
-
-fn text_of(message: &Value) -> String {
-    message["content"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|b| b["type"] == "text")
-        .filter_map(|b| b["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn truncate(s: &str, max: usize) -> String {

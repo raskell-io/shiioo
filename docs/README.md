@@ -22,6 +22,7 @@ Detailed designs, one per area. Each section is marked *built* or *planned*.
 | [Fork and replay](design/fork-and-replay.md) | Rewind, fork, diff, replay and evals |
 | [API](design/api.md) | REST and SSE, resources, idempotency, auth, versioning, SDKs, MCP server, webhooks |
 | [Telegram](design/telegram.md) | The owner's phone: commands, approvals with one tap, notifications, security of the bot |
+| [Intake](design/intake.md) | Work arriving as labelled GitHub issues: the label protocol, the task prompt, dedup and state, failure handling |
 | [Security](design/security.md) | Threat model, controls, and what is not protected |
 | [Deployment](design/deployment.md) | On-device, single server, cluster; config, observability, upgrades, backups |
 

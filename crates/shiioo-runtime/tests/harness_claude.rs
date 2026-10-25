@@ -107,7 +107,8 @@ impl Fixture {
 
     async fn start(&self, fake: &Fake, repo: Option<PathBuf>) -> RunId {
         let mut harness = HarnessSpec::claude_code();
-        harness.binary = Some(fake.binary());
+        harness.binary = Some(PathBuf::from("/bin/sh"));
+        harness.binary_args = vec![fake.binary().to_string_lossy().into_owned()];
         harness.repo = repo;
         let spec = RunSpec {
             task: "Read README.md and report its first line.".into(),
@@ -208,13 +209,19 @@ async fn killed_worker_resumes_the_harness_session() {
     let fx = Fixture::new();
     let run = fx.start(&fake, None).await;
 
-    let w1 = fx.worker("w1");
-    let killed = tokio::time::timeout(Duration::from_secs(3), w1.drive(run)).await;
-    assert!(
-        killed.is_err(),
-        "w1 should still be waiting on the hung harness"
-    );
-    drop(w1);
+    // Run w1 until it has recorded the harness session, then kill it (drop
+    // its task, as with kill -9) while the harness is still hung. Waiting
+    // on the log, not a wall clock, keeps this deterministic under load.
+    let w1 = Arc::new(fx.worker("w1"));
+    let task = {
+        let w1 = Arc::clone(&w1);
+        tokio::spawn(async move {
+            let _ = w1.drive(run).await;
+        })
+    };
+    wait_for_sessions(&fx.store, run, 1).await;
+    task.abort();
+    task.await.ok();
 
     // w1 never released its lease. After it expires, w2 takes over.
     fx.clock.advance_ms(TTL + 1);
@@ -362,4 +369,23 @@ async fn git(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Polls the run's log until it holds at least `n` `HarnessSessionStarted`
+/// events, so a test can act on a running harness without racing a clock.
+async fn wait_for_sessions(store: &MemoryStore<ManualClock>, run: RunId, n: usize) {
+    for _ in 0..400 {
+        let started = store
+            .read(run, Seq(0))
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| matches!(*e.payload, Payload::HarnessSessionStarted { .. }))
+            .count();
+        if started >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the harness never recorded {n} session(s) within 10s");
 }

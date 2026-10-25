@@ -110,6 +110,11 @@ impl Office for RecordingOffice {
         Box::pin(async { "all quiet".into() })
     }
 
+    fn capacity(&self) -> BoxFuture<'_, String> {
+        lock(&self.calls).push("capacity".into());
+        Box::pin(async { "plenty".into() })
+    }
+
     fn log(&self, run: String) -> BoxFuture<'_, String> {
         lock(&self.calls).push(format!("log {run}"));
         Box::pin(async { "log".into() })

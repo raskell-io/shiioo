@@ -28,6 +28,8 @@ pub trait Office: Send + Sync {
         task: String,
     ) -> BoxFuture<'_, Result<String, String>>;
     fn status(&self) -> BoxFuture<'_, String>;
+    /// Remaining capacity per provider (subscription windows), as text.
+    fn capacity(&self) -> BoxFuture<'_, String>;
     fn log(&self, run: String) -> BoxFuture<'_, String>;
     fn cancel(&self, run: String) -> BoxFuture<'_, Result<String, String>>;
     /// Records the owner's decision on an approval request.
@@ -39,6 +41,7 @@ pub fn help_text() -> &'static str {
      Send a task as plain text to start a run, or:\n\
      /run <repo> <task> – run a task on a named repo\n\
      /status – what everyone is doing\n\
+     /capacity – how much of this week's subscription windows is left\n\
      /log <run> – a run's steps (id or prefix)\n\
      /cancel <run> – stop a run\n\
      /repos – repos you can name in /run\n\
@@ -154,6 +157,7 @@ async fn reply_to(office: &dyn Office, command: Command) -> String {
             Err(e) => format!("Couldn't start that: {e}"),
         },
         Command::Status => office.status().await,
+        Command::Capacity => office.capacity().await,
         Command::Log { run } => office.log(run).await,
         Command::Cancel { run } => match office.cancel(run).await {
             Ok(reply) => reply,

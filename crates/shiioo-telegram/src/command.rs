@@ -11,6 +11,8 @@ pub enum Command {
     },
     /// `/status`
     Status,
+    /// `/capacity`: how much of the subscriptions' windows is used.
+    Capacity,
     /// `/log <run-id-or-prefix>`
     Log {
         run: String,
@@ -63,6 +65,7 @@ pub fn parse_command(text: &str, known_repos: &[String]) -> Command {
         ("run", "") => Command::Unknown(text.to_owned()),
         ("run", rest) => parse_run(rest, known_repos),
         ("status", _) => Command::Status,
+        ("capacity", _) => Command::Capacity,
         ("log", "") | ("cancel", "") | ("approve", "") | ("deny", "") => {
             Command::Unknown(text.to_owned())
         }

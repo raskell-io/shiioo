@@ -74,9 +74,35 @@ pub struct HarnessSpec {
     /// (`claude`), or `SHIIOO_CLAUDE_BIN`.
     #[serde(default)]
     pub binary: Option<PathBuf>,
+    /// Time budget: the run fails once the harness has run this long in
+    /// total across resumes. None = no limit.
+    #[serde(default)]
+    pub max_minutes: Option<u64>,
+    /// Arguments placed before the harness's own, for running it through
+    /// an interpreter (tests run fake harnesses as `/bin/sh <script>`:
+    /// macOS stalls for tens of seconds on the first direct execution of
+    /// a freshly written script). Empty in production.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binary_args: Vec<String>,
 }
 
 impl HarnessSpec {
+    /// Codex with the defaults: subscription billing, `acceptEdits` (its
+    /// `workspace-write` sandbox), no repo.
+    /// Codex with the defaults. Its own OS sandbox is off
+    /// (`danger-full-access`): under `approval_policy = never` Codex cannot
+    /// escalate, and `workspace-write` makes the checkout's git directory
+    /// read-only, so the agent could never commit. Shiioo's rules and the
+    /// owner's approvals govern every command instead; OS isolation is the
+    /// job of the isolation levels (`docs/positioning.md`).
+    pub fn codex() -> Self {
+        Self {
+            harness: HarnessKind::Codex,
+            permission_mode: "danger-full-access".into(),
+            ..Self::claude_code()
+        }
+    }
+
     /// Claude Code with the defaults: subscription billing, `acceptEdits`,
     /// project settings only, no repo.
     pub fn claude_code() -> Self {
@@ -88,6 +114,8 @@ impl HarnessSpec {
             max_budget_usd: None,
             billing: HarnessBilling::default(),
             binary: None,
+            max_minutes: None,
+            binary_args: Vec::new(),
         }
     }
 }
@@ -106,12 +134,14 @@ pub enum HarnessBilling {
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessKind {
     ClaudeCode,
+    Codex,
 }
 
 impl HarnessKind {
     pub fn name(self) -> &'static str {
         match self {
             HarnessKind::ClaudeCode => "claude-code",
+            HarnessKind::Codex => "codex",
         }
     }
 }

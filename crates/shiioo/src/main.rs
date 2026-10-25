@@ -8,7 +8,7 @@
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use shiioo_api::{ApiOptions, ApiState, Notifications};
+use shiioo_api::{ApiOptions, ApiState, CapacityTracker, Employee, Notifications};
 use shiioo_core::{Event, EventStore, RunId, Seq, verify_chain};
 use shiioo_rules::RuleSet;
 use shiioo_runtime::{
@@ -41,7 +41,7 @@ enum Command {
         task: String,
         /// Run the task with an external agent harness (`claude-code`)
         /// instead of Shiioo's own loop. Uses the harness's own login.
-        #[arg(long, value_parser = ["claude-code"])]
+        #[arg(long, value_parser = ["claude-code", "codex"])]
         harness: Option<String>,
         /// Git repository the harness works on. The run gets its own
         /// worktree under .shiioo/worktrees and a `shiioo/<run>` branch.
@@ -64,10 +64,11 @@ enum Command {
         /// Reasoning effort for native runs: low, medium, high, xhigh or max.
         #[arg(long, default_value = "high")]
         effort: String,
-        /// Harness permission mode (Claude Code: default, acceptEdits,
-        /// plan, dontAsk, bypassPermissions).
-        #[arg(long, default_value = "acceptEdits", requires = "harness")]
-        permission_mode: String,
+        /// Override the harness's permission mode (Claude Code: default,
+        /// acceptEdits, plan, dontAsk, bypassPermissions; Codex: read-only,
+        /// workspace-write, danger-full-access).
+        #[arg(long, requires = "harness")]
+        permission_mode: Option<String>,
         /// Bill the harness to API credits (ANTHROPIC_API_KEY) instead of
         /// the subscription login.
         #[arg(long, requires = "harness")]
@@ -75,6 +76,9 @@ enum Command {
         /// Stop a harness run at this estimated spend (API billing only).
         #[arg(long, requires = "harness")]
         max_budget_usd: Option<f64>,
+        /// Fail a harness run that takes longer than this, across resumes.
+        #[arg(long, requires = "harness")]
+        max_minutes: Option<u64>,
     },
     /// Continue a run, for example after the process was killed.
     Resume {
@@ -185,14 +189,22 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             permission_mode,
             api_billing,
             max_budget_usd,
+            max_minutes,
         } => {
             let worker = worker(&store, &workspace, &data, &effort)?;
             let runtime = match harness.as_deref() {
-                Some(_) => {
-                    let mut h = HarnessSpec::claude_code();
+                Some(kind) => {
+                    let mut h = if kind == "codex" {
+                        HarnessSpec::codex()
+                    } else {
+                        HarnessSpec::claude_code()
+                    };
                     h.repo = repo.as_ref().map(std::fs::canonicalize).transpose()?;
-                    h.permission_mode = permission_mode;
+                    if let Some(mode) = permission_mode {
+                        h.permission_mode = mode;
+                    }
                     h.max_budget_usd = max_budget_usd;
+                    h.max_minutes = max_minutes;
                     h.billing = if api_billing {
                         HarnessBilling::ApiKey
                     } else {
@@ -306,7 +318,10 @@ async fn serve(
         exe: std::env::current_exe()?,
     };
     let worker_store = Arc::clone(&store);
+    let capacity = Arc::new(CapacityTracker::default());
+    let observed = Arc::clone(&capacity);
     let workers = Arc::new(move || {
+        let tracker = Arc::clone(&observed);
         Worker::new(
             Arc::clone(&worker_store),
             Arc::clone(&provider),
@@ -314,6 +329,7 @@ async fn serve(
             format!("local-{}", std::process::id()).as_str(),
         )
         .with_hooks(hooks.clone())
+        .with_observer(Arc::new(move |ev| tracker.observe_event(ev)))
     });
 
     let telegram = config.telegram_bot(data);
@@ -336,10 +352,41 @@ async fn serve(
         },
         ApiOptions {
             rules,
+            employees: if config.employees.is_empty() {
+                shiioo_api::default_employees()
+            } else {
+                config.employees.clone()
+            },
+            capacity,
             repos: config.repos.clone(),
             notifications,
         },
     );
+    if config.intake.enabled {
+        let repos: Vec<shiioo_intake::RepoIntake> = config
+            .repos
+            .iter()
+            .map(|(label, path)| shiioo_intake::RepoIntake {
+                label: label.clone(),
+                path: path.clone(),
+            })
+            .collect();
+        let mut intake = shiioo_intake::IntakeConfig::new(repos, data.join("intake-state.json"));
+        intake.issue_label = config.intake.label.clone();
+        intake.interval = std::time::Duration::from_secs(config.intake.interval_secs.max(10));
+        let sink = Arc::new(IssueSink {
+            state: Arc::clone(&state),
+        });
+        tokio::spawn(shiioo_intake::run_intake(intake, sink));
+        println!(
+            "intake: watching {} repo(s) for issues labelled {}",
+            config.repos.len(),
+            config.intake.label
+        );
+    }
+    if let Err(e) = state.seed_capacity().await {
+        eprintln!("could not read capacity from the logs: {e}");
+    }
     if let Some((bot, owner)) = telegram {
         let office = Arc::new(TelegramOffice {
             state: Arc::clone(&state),
@@ -375,9 +422,32 @@ async fn serve(
 struct Config {
     telegram: TelegramConfig,
     dashboard: DashboardConfig,
+    intake: IntakeSection,
+    /// Who takes new tasks, in order. Empty = Claude Code, then Codex.
+    employees: Vec<Employee>,
     /// Repository label → path. `/run <label> <task>` on the phone picks
     /// one; rules can be scoped to a label.
     repos: BTreeMap<String, PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct IntakeSection {
+    /// Watch the configured repos for issues labelled `label` (needs `gh`
+    /// logged in). Off by default.
+    enabled: bool,
+    label: String,
+    interval_secs: u64,
+}
+
+impl Default for IntakeSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            label: "shiioo".into(),
+            interval_secs: 60,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -413,6 +483,28 @@ const DEFAULT_CONFIG: &str = r#"# Shiioo office configuration.
 [repos]
 # label = "/absolute/path/to/repository"
 # shiioo = "/Users/me/code/shiioo"
+
+[intake]
+# Watch the repos above for issues labelled `shiioo` and work on them
+# (comments and labels go through the `gh` CLI, which must be logged in).
+enabled = false
+label = "shiioo"
+interval_secs = 60
+
+# Who takes new tasks, in order. Skipped when their subscription window is
+# above the limit. Default: claude-code, then codex.
+# [[employees]]
+# name = "claude"
+# kind = "claude-code"
+# max_five_hour = 0.95
+# max_seven_day = 0.90
+# [[employees]]
+# name = "codex"
+# kind = "codex"
+# [[employees]]
+# name = "local"
+# kind = "native"
+# model = "ollama/qwen3:32b"
 "#;
 
 impl Config {
@@ -518,8 +610,7 @@ impl shiioo_telegram::Office for TelegramOffice {
                     ));
                 }
             };
-            let mut harness = HarnessSpec::claude_code();
-            harness.repo = match &label {
+            let repo_path = match &label {
                 Some(l) => Some(
                     self.state
                         .repo_path(l)
@@ -527,15 +618,14 @@ impl shiioo_telegram::Office for TelegramOffice {
                 ),
                 None => None,
             };
+            let (runtime, agent, employee) = self
+                .state
+                .assign("auto", repo_path)
+                .map_err(|e| e.to_string())?;
             let spec = RunSpec {
                 task: task.clone(),
-                agent: AgentSpec {
-                    model: String::new(),
-                    system: String::new(),
-                    tools: Vec::new(),
-                    max_turns: 50,
-                },
-                runtime: Runtime::Harness(harness),
+                agent,
+                runtime,
             };
             let run = self
                 .state
@@ -544,18 +634,18 @@ impl shiioo_telegram::Office for TelegramOffice {
                 .map_err(|e| e.to_string())?;
             Ok(match label {
                 Some(l) => format!(
-                    "▶️ {} started on {l}: {task}\nbranch {}",
+                    "▶️ {} started on {l} ({employee}): {task}\nbranch {}",
                     short(run),
                     branch_for(run)
                 ),
-                None => format!("▶️ {} started: {task}", short(run)),
+                None => format!("▶️ {} started ({employee}): {task}", short(run)),
             })
         })
     }
 
     fn status(&self) -> shiioo_telegram::BoxFuture<'_, String> {
         Box::pin(async move {
-            match self.state.list_runs().await {
+            let runs = match self.state.list_runs().await {
                 Ok(runs) if runs.is_empty() => "No runs yet. Send me a task.".to_owned(),
                 Ok(runs) => runs
                     .iter()
@@ -564,8 +654,13 @@ impl shiioo_telegram::Office for TelegramOffice {
                     .collect::<Vec<_>>()
                     .join("\n"),
                 Err(e) => format!("⚠️ {e}"),
-            }
+            };
+            format!("{runs}\n\n{}", self.state.capacity().text())
         })
+    }
+
+    fn capacity(&self) -> shiioo_telegram::BoxFuture<'_, String> {
+        Box::pin(async move { self.state.capacity().text() })
     }
 
     fn log(&self, run: String) -> shiioo_telegram::BoxFuture<'_, String> {
@@ -715,6 +810,66 @@ impl Notifications for TelegramNotifications {
                 .notify(&format!("{text}{}", self.link(run)))
                 .await
                 .ok();
+        })
+    }
+}
+
+/// Labelled GitHub issues become runs.
+struct IssueSink {
+    state: Arc<ApiState<RedbStore>>,
+}
+
+impl shiioo_intake::IntakeSink for IssueSink {
+    fn start_run(
+        &self,
+        repo: &str,
+        task: String,
+    ) -> shiioo_intake::BoxFuture<'_, Result<shiioo_intake::Started, String>> {
+        let repo = repo.to_owned();
+        Box::pin(async move {
+            let path = self
+                .state
+                .repo_path(&repo)
+                .ok_or_else(|| format!("unknown repo {repo}"))?;
+            let (runtime, agent, _) = self
+                .state
+                .assign("auto", Some(path))
+                .map_err(|e| e.to_string())?;
+            // The branch name derives from the run id, which doesn't exist
+            // yet; the worktree is checked out on it, so the agent can
+            // refer to the current branch.
+            let task = shiioo_intake::with_branch(&task, "$(git branch --show-current)");
+            let run = self
+                .state
+                .start_run(RunSpec {
+                    task,
+                    agent,
+                    runtime,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(shiioo_intake::Started {
+                run_id: run.to_string(),
+                branch: branch_for(run),
+            })
+        })
+    }
+
+    fn run_outcome(
+        &self,
+        run_id: &str,
+    ) -> shiioo_intake::BoxFuture<'_, Option<Result<String, String>>> {
+        let run_id = run_id.to_owned();
+        Box::pin(async move {
+            let run = uuid::Uuid::parse_str(&run_id).ok().map(RunId)?;
+            let view = self.state.run_view(run).await.ok()?;
+            match view.status {
+                RunStatus::Open | RunStatus::WaitingApproval { .. } => None,
+                RunStatus::Completed { output } => Some(Ok(output)),
+                RunStatus::Failed { reason } => Some(Err(reason)),
+                RunStatus::Cancelled { reason } => Some(Err(reason)),
+                RunStatus::NeedsAttention { reason } => Some(Err(reason)),
+            }
         })
     }
 }
@@ -1052,16 +1207,20 @@ async fn ask_server(request: &Value) -> Result<Value, Box<dyn std::error::Error>
     Ok(response.json().await?)
 }
 
-/// The native runtime's model provider. Without API credentials, native
-/// runs fail with a clear message while harness runs still work.
+/// The native runtime's model providers: Anthropic for plain model names
+/// (when an API key is configured), and local or OpenAI-compatible servers
+/// behind prefixes (`ollama/qwen3:32b`, `lmstudio/…`, `openai/…`). Without
+/// any credentials, native runs on cloud models fail with a clear message
+/// while harness and local-model runs still work.
 fn provider(effort: &str) -> Arc<dyn ModelProvider> {
-    match AnthropicProvider::from_env() {
+    let default: Arc<dyn ModelProvider> = match AnthropicProvider::from_env() {
         Ok(mut p) => {
             p.effort = effort.to_owned();
             Arc::new(p)
         }
         Err(_) => Arc::new(UnconfiguredProvider),
-    }
+    };
+    Arc::new(shiioo_providers::from_env(default))
 }
 
 async fn drive(

@@ -20,6 +20,8 @@
 //! Everything except `GET /v1/health` and the dashboard files needs
 //! `Authorization: Bearer <token>`.
 
+pub mod employees;
+
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -34,8 +36,8 @@ use shiioo_core::{Event, EventStore, Payload, RunId, Seq, StoreError, Timestamp}
 use shiioo_rules::{Decision, PermissionRequest, RuleSet};
 use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
 use shiioo_runtime::{
-    AgentSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for, open_approval,
-    run_status,
+    AgentSpec, HarnessSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
+    open_approval, run_status,
 };
 use shiioo_store::Notifying;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -46,6 +48,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
+
+pub use employees::{Employee, EmployeeKind, Pick, Skipped, default_employees, pick};
 
 pub type WorkerFactory<S> = Arc<dyn Fn() -> Worker<Notifying<S>> + Send + Sync>;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -70,6 +74,11 @@ pub trait Notifications: Send + Sync {
 
 pub struct ApiOptions {
     pub rules: RuleSet,
+    /// Who takes new tasks, in order of preference ([`employees`]).
+    pub employees: Vec<Employee>,
+    /// Latest rate-limit windows per provider, for routing and for the
+    /// owner's "how much staff do I have left this week" question.
+    pub capacity: Arc<CapacityTracker>,
     /// Repository label → path, for `/run <label> …` and for repo-scoped
     /// rules.
     pub repos: BTreeMap<String, PathBuf>,
@@ -80,9 +89,139 @@ impl Default for ApiOptions {
     fn default() -> Self {
         Self {
             rules: RuleSet::defaults(),
+            employees: default_employees(),
+            capacity: Arc::new(CapacityTracker::default()),
             repos: BTreeMap::new(),
             notifications: None,
         }
+    }
+}
+
+/// One rate-limit window as a provider reports it (Claude Code: `five_hour`
+/// and `seven_day`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CapacityWindow {
+    /// 0.0 – 1.0 of the window used.
+    pub utilization: f64,
+    /// Unix seconds when the window resets.
+    pub resets_at: Option<u64>,
+    pub status: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProviderCapacity {
+    pub provider: String,
+    /// When this was observed, ms since the epoch.
+    pub observed_at: u64,
+    pub windows: BTreeMap<String, CapacityWindow>,
+}
+
+/// The latest `CapacityObserved` per provider. Fed by the workers'
+/// observer as runs report windows, seeded from the logs at startup.
+#[derive(Default)]
+pub struct CapacityTracker {
+    latest: Mutex<HashMap<String, ProviderCapacity>>,
+}
+
+impl CapacityTracker {
+    /// Records a provider's windows if newer than what is known.
+    pub fn observe(&self, provider: &str, windows: &Value, observed_at: u64) {
+        let parsed: BTreeMap<String, CapacityWindow> = windows
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, w)| {
+                Some((
+                    name.clone(),
+                    CapacityWindow {
+                        utilization: w["utilization"].as_f64()?,
+                        resets_at: w["resetsAt"].as_u64().or_else(|| w["resets_at"].as_u64()),
+                        status: w["status"].as_str().map(str::to_owned),
+                    },
+                ))
+            })
+            .collect();
+        if parsed.is_empty() {
+            return;
+        }
+        let mut latest = lock(&self.latest);
+        let newer = latest
+            .get(provider)
+            .is_none_or(|known| observed_at >= known.observed_at);
+        if newer {
+            latest.insert(
+                provider.to_owned(),
+                ProviderCapacity {
+                    provider: provider.to_owned(),
+                    observed_at,
+                    windows: parsed,
+                },
+            );
+        }
+    }
+
+    /// Feeds one event, if it is a capacity observation.
+    pub fn observe_event(&self, ev: &Event) {
+        if let Payload::CapacityObserved { provider, windows } = &*ev.payload {
+            self.observe(provider, windows, ev.recorded_at.0);
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<ProviderCapacity> {
+        let mut all: Vec<ProviderCapacity> = lock(&self.latest).values().cloned().collect();
+        all.sort_by(|a, b| a.provider.cmp(&b.provider));
+        all
+    }
+
+    /// The latest known windows of one provider.
+    pub fn provider(&self, provider: &str) -> Option<ProviderCapacity> {
+        lock(&self.latest).get(provider).cloned()
+    }
+
+    /// One line per provider, for the phone: `claude-code: 5h 19%, 7d 5% (resets Fri 23:00)`.
+    pub fn text(&self) -> String {
+        let all = self.snapshot();
+        if all.is_empty() {
+            return "No capacity data yet; it appears after the first harness run.".to_owned();
+        }
+        all.iter()
+            .map(|p| {
+                let windows: Vec<String> = p
+                    .windows
+                    .iter()
+                    .map(|(name, w)| {
+                        let label = match name.as_str() {
+                            "five_hour" => "5h".to_owned(),
+                            "seven_day" => "7d".to_owned(),
+                            other => other.replace('_', " "),
+                        };
+                        match w.resets_at {
+                            Some(at) => format!(
+                                "{label} {:.0}% (resets in {})",
+                                w.utilization * 100.0,
+                                humanize_until(at)
+                            ),
+                            None => format!("{label} {:.0}%", w.utilization * 100.0),
+                        }
+                    })
+                    .collect();
+                format!("{}: {}", p.provider, windows.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn humanize_until(unix_seconds: u64) -> String {
+    let now = now_ms().0 / 1000;
+    if unix_seconds <= now {
+        return "a moment".to_owned();
+    }
+    let secs = unix_seconds - now;
+    match secs {
+        0..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h {}m", secs / 3600, (secs % 3600) / 60),
+        _ => format!("{}d {}h", secs / 86_400, (secs % 86_400) / 3600),
     }
 }
 
@@ -193,6 +332,96 @@ impl<S: EventStore + 'static> ApiState<S> {
 
     pub fn default_agent(&self) -> &AgentSpec {
         &self.default_agent
+    }
+
+    pub fn capacity(&self) -> &Arc<CapacityTracker> {
+        &self.options.capacity
+    }
+
+    pub fn employees(&self) -> &[Employee] {
+        &self.options.employees
+    }
+
+    /// Picks who does a new task: `auto` asks the capacity broker, a name
+    /// picks that employee regardless of capacity. Returns the runtime and
+    /// agent to run it with, and the employee's name.
+    pub fn assign(
+        &self,
+        employee: &str,
+        repo: Option<PathBuf>,
+    ) -> Result<(Runtime, AgentSpec, String), ApiError> {
+        let chosen = if employee == "auto" {
+            pick(&self.options.employees, &self.options.capacity)
+                .map_err(|skipped| {
+                    let why: Vec<String> = skipped
+                        .iter()
+                        .map(|s| format!("{}: {}", s.name, s.reason))
+                        .collect();
+                    ApiError::Conflict(format!(
+                        "every employee is out of capacity ({})",
+                        why.join("; ")
+                    ))
+                })?
+                .employee
+        } else {
+            self.options
+                .employees
+                .iter()
+                .find(|e| e.name == employee)
+                .cloned()
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "no employee named {employee}; configured: {}",
+                        self.options
+                            .employees
+                            .iter()
+                            .map(|e| e.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?
+        };
+        let harness_agent = AgentSpec {
+            model: String::new(),
+            system: String::new(),
+            tools: Vec::new(),
+            max_turns: 50,
+        };
+        let (runtime, agent) = match &chosen.kind {
+            EmployeeKind::ClaudeCode => {
+                let mut h = HarnessSpec::claude_code();
+                h.repo = repo;
+                (Runtime::Harness(h), harness_agent)
+            }
+            EmployeeKind::Codex => {
+                let mut h = HarnessSpec::codex();
+                h.repo = repo;
+                (Runtime::Harness(h), harness_agent)
+            }
+            EmployeeKind::Native { model } => (
+                Runtime::Native,
+                AgentSpec {
+                    model: model.clone(),
+                    system: String::new(),
+                    tools: self.default_agent.tools.clone(),
+                    max_turns: 50,
+                },
+            ),
+        };
+        Ok((runtime, agent, chosen.name))
+    }
+
+    /// Loads the latest capacity observations from every run's log. Run
+    /// once at startup; the workers' observer keeps it current after that.
+    pub async fn seed_capacity(&self) -> Result<(), ApiError> {
+        for run_id in self.store.list_runs().await? {
+            if let Ok(log) = self.store.read(run_id, Seq(0)).await {
+                for ev in &log {
+                    self.options.capacity.observe_event(ev);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Starts a run and a worker for it.
@@ -643,6 +872,7 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/runs/{id}/permissions", post(permission::<S>))
         .route("/v1/runs/{id}/diff", get(diff_run::<S>))
         .route("/v1/approvals/{id}", post(decide::<S>))
+        .route("/v1/capacity", get(capacity::<S>))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_token::<S>,
@@ -719,6 +949,12 @@ struct CreateRun {
     agent: Option<AgentSpec>,
     /// `{"kind":"native"}` (default) or `{"kind":"harness", …}`.
     runtime: Option<Runtime>,
+    /// `"auto"` lets the capacity broker choose among the configured
+    /// employees; a name picks one. Overrides `runtime` and `agent`.
+    employee: Option<String>,
+    /// With `employee`: the repository the task is about (a configured
+    /// label or an absolute path).
+    repo: Option<String>,
 }
 
 async fn create_run<S: EventStore + 'static>(
@@ -736,16 +972,37 @@ async fn create_run<S: EventStore + 'static>(
     {
         return Ok((StatusCode::OK, Json(state.run_view(run_id).await?)));
     }
-    let spec = RunSpec {
-        task: body.task,
-        agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
-        runtime: body.runtime.unwrap_or_default(),
+    let spec = match &body.employee {
+        Some(employee) => {
+            let repo = body.repo.as_deref().map(|label_or_path| {
+                state
+                    .repo_path(label_or_path)
+                    .unwrap_or_else(|| PathBuf::from(label_or_path))
+            });
+            let (runtime, agent, _) = state.assign(employee, repo)?;
+            RunSpec {
+                task: body.task,
+                agent,
+                runtime,
+            }
+        }
+        None => RunSpec {
+            task: body.task,
+            agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
+            runtime: body.runtime.unwrap_or_default(),
+        },
     };
     let run_id = state.start_run(spec).await?;
     if let Some(key) = key {
         lock(&state.idempotency).insert(key, run_id);
     }
     Ok((StatusCode::CREATED, Json(state.run_view(run_id).await?)))
+}
+
+async fn capacity<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+) -> Json<Vec<ProviderCapacity>> {
+    Json(state.options.capacity.snapshot())
 }
 
 async fn list_runs<S: EventStore + 'static>(

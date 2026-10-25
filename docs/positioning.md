@@ -97,7 +97,7 @@ Each phase ends with something new you can do from your phone.
 
 1. **One employee, one repo** *(built)*. Claude Code as a harness on the Mac, a worktree and branch per run, pushes to a branch, run log in the dashboard over Tailscale. *Start a task, watch it, open the PR.*
 2. **Approvals and notifications** *(built; Telegram verified against a fake server, live check pending)*. Rules (allow / ask / deny per tool, repo and action, `rules.toml`); harness permission requests routed through the rules to Telegram; notifications on finish and on "needs you"; `/run`, `/status`, `/log`, `/cancel`. *Approve a push or a risky command with one tap.*
-3. **Staff and capacity.** Codex and local models as employees, the capacity broker across subscriptions, budgets per task, GitHub-issue intake. *Label an issue, come back to a PR; see remaining weekly capacity.*
+3. **Staff and capacity** *(built, except budgets beyond time)*. Codex and local models as employees, the capacity broker across subscriptions (`[[employees]]` tried in order, skipped above their five-hour / seven-day limits), budgets per task, GitHub-issue intake (`[intake]`, label an issue `shiioo`). *Label an issue, come back to a PR; see remaining weekly capacity with `/capacity`.*
 4. **Unattended safety.** `container` and `openshell` levels, secrets injection, egress rules. *Let it run overnight.*
 5. **The planner and the company.** A Chief-of-Staff agent that breaks goals into runs, routines on a schedule, a morning report. Roles as reusable configs. *"Ship the v0.3 milestone this week."*
 6. **Beyond code.** Asset machines (audio, image, 3D), mail with send-approval, remote nodes (DGX Sparks).
