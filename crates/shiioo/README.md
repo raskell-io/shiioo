@@ -33,7 +33,8 @@ service definitions for launchd and systemd.
 | `serve` | Builds the whole office: store, machine, provider, API state, hook endpoint, capacity tracker, Telegram bot, intake. [docs/office-layout.md](docs/office-layout.md). |
 | `Config`, `DEFAULT_CONFIG`, `load_rules`, `api_token` | `.shiioo/config.toml` (including `[isolation]`, `[egress]`, `[env]` → `IsolationPolicy`), `.shiioo/rules.toml`, `.shiioo/api-token`. |
 | `secret_command`, `sandbox_command`, `StoreSecrets` | The secret store CLI, image building and pruning, and the `SecretSource` the workers read. |
-| `TelegramOffice` | Implements the bot's `Office` trait on top of `ApiState`: `/run`, `/status`, `/log`, `/cancel`, approvals. |
+| `TelegramOffice` | Implements the bot's `Office` trait on top of `ApiState`: `/run` (with roles), `/status`, `/log`, `/cancel`, approvals, `/plan`, `/routines`, `/report`. |
+| `GhIssues` | Implements `shiioo_api::IssueCreator` over the intake's `gh` wrapper: an approved plan's issues. |
 | `TelegramNotifications` | Implements `shiioo_api::Notifications`: approval questions with Allow/Deny buttons, run endings. |
 | `IssueSink` | Implements the intake's sink: a labelled GitHub issue becomes a run on that repository. |
 | `install`, `uninstall`, `stay_awake` | launchd and systemd units, `caffeinate`. [docs/service.md](docs/service.md). |
@@ -62,6 +63,7 @@ Create a run and drive it in this process until it finishes.
 | `--max-budget-usd <n>` | none | Stop at this spend (API billing, Claude Code only). Requires `--harness`. |
 | `--max-minutes <n>` | none | Fail the run after this long across resumes. Requires `--harness`. |
 | `--isolation worktree\|container\|openshell` | the office's policy (`[isolation]` in `config.toml`) | Where the harness runs. Requires `--harness`. The level's settings and `[env]` come from `config.toml`. |
+| `--role <name>` | none | Run as a configured role (`[[roles]]`): its instructions, tools, model, isolation and limits over the harness's defaults. Requires `--harness`. |
 
 Prints `run <id>` and, for repo runs, `branch <name> in <path>`, then every
 event as it happens. Exit codes: `0` completed, `1` failed, `2` needs
@@ -124,6 +126,18 @@ creates the `shiioo-sandbox` network, so the first `container` run does not
 wait minutes. `prune` removes containers named `shiioo-*` left behind by
 runs that did not clean up. Both need the engine running (`docker` by
 default, `[isolation.container] engine`).
+
+### Roles, routines, plans and the report
+
+There are no commands for these besides `shiioo run --role <name>`; they
+live in `config.toml` and on the phone (or the API):
+
+| Config | Phone | Meaning |
+| --- | --- | --- |
+| `[[roles]]` | `/run @role …`, `/roles` | Reusable agent configurations: employee, instructions, tools, model, isolation, limits. |
+| `[[routines]]` | `/routines`, `/routine <name>` | Runs on a schedule (`hourly`, `every 6h`, `daily 02:00`, `weekdays 07:00`, `mon,thu 09:30`). State in `.shiioo/routines-state.json`. |
+| `[report] schedule` | `/report` | The morning report: counted from the record and the repositories. |
+| (none) | `/plan <repo> <goal>`, `/plan approve <id>` | The chief of staff: a read-only planning run; approval creates labelled issues for the intake. Plans in `.shiioo/plans.json`. |
 
 ### `shiioo hook pre-tool-use` (hidden)
 

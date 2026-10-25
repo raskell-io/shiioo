@@ -18,6 +18,12 @@
 //!   whose hook is a `curl` call.
 //!
 //! - `GET  /v1/runs/{id}/diff` is the run's branch diff against the repo's HEAD.
+//! - `GET  /v1/report` is the morning report, on demand.
+//! - `GET  /v1/roles`, `GET /v1/routines`, `POST /v1/routines/{name}/run`: the
+//!   configured roles and routines, and firing a routine now.
+//! - `POST /v1/plans` starts the chief of staff on a goal; `GET /v1/plans`,
+//!   `GET /v1/plans/{id}` and `POST /v1/plans/{id}/approve` read and approve
+//!   plans (approval creates the issues the intake works on).
 //! - `GET  /` serves the mobile dashboard (`ui/`), which calls the API with the token.
 //!
 //! Everything except `GET /v1/health` and the dashboard files needs
@@ -25,6 +31,11 @@
 
 pub mod employees;
 pub mod isolation;
+pub mod plans;
+pub mod report;
+pub mod roles;
+pub mod routines;
+pub mod schedule;
 
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -44,6 +55,10 @@ use shiioo_runtime::{
     open_approval, run_status,
 };
 pub use isolation::IsolationPolicy;
+pub use plans::{IssueCreator, Plan, PlanItem, PlanStatus, Plans};
+pub use roles::Role;
+pub use routines::{Routine, RoutineState};
+pub use schedule::Schedule;
 use shiioo_store::Notifying;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -75,6 +90,9 @@ pub trait Notifications: Send + Sync {
     /// `outcome` is a short phrase: "allowed", "denied", "expired".
     fn approval_resolved(&self, approval_id: String, outcome: String) -> BoxFuture<'_, ()>;
     fn run_ended(&self, run: RunId, task: String, status: RunStatus) -> BoxFuture<'_, ()>;
+    /// Anything else the office says on its own: a routine that started, a
+    /// finished plan, the morning report.
+    fn message(&self, text: String) -> BoxFuture<'_, ()>;
 }
 
 pub struct ApiOptions {
@@ -93,6 +111,20 @@ pub struct ApiOptions {
     /// Environment every harness run gets; values are literal or
     /// `secret:<name>`.
     pub env: BTreeMap<String, String>,
+    /// Reusable agent configurations (`[[roles]]`).
+    pub roles: Vec<Role>,
+    /// Scheduled runs (`[[routines]]`).
+    pub routines: Vec<Routine>,
+    /// When the morning report goes out (`[report] schedule`); None = never
+    /// on its own (`/report` still works).
+    pub report: Option<String>,
+    /// Where plans and the routine state are kept (`.shiioo/`). None keeps
+    /// them in memory only.
+    pub data_dir: Option<PathBuf>,
+    /// Creates the issues of an approved plan. None disables approving.
+    pub issues: Option<Arc<dyn IssueCreator>>,
+    /// The label the intake watches, put on issues created from plans.
+    pub intake_label: String,
 }
 
 impl Default for ApiOptions {
@@ -105,6 +137,12 @@ impl Default for ApiOptions {
             notifications: None,
             isolation: IsolationPolicy::default(),
             env: BTreeMap::new(),
+            roles: Vec::new(),
+            routines: Vec::new(),
+            report: None,
+            data_dir: None,
+            issues: None,
+            intake_label: "shiioo".into(),
         }
     }
 }
@@ -257,6 +295,13 @@ pub struct ApiState<S> {
     active: Mutex<HashSet<RunId>>,
     /// Approval requests whose hook is waiting for an answer.
     pending: Mutex<HashMap<String, PendingApproval>>,
+    /// The chief of staff's plans (`.shiioo/plans.json`).
+    plans: Mutex<Plans>,
+    /// What the scheduler has fired (`.shiioo/routines-state.json`).
+    routine_state: Mutex<RoutineState>,
+    /// When this process started, in ms: routines are not backfilled
+    /// before it.
+    started_at: u64,
 }
 
 /// A run as the API and the bot present it.
@@ -322,6 +367,33 @@ impl<S: EventStore + 'static> ApiState<S> {
         default_agent: AgentSpec,
         options: ApiOptions,
     ) -> Arc<Self> {
+        let plans = options
+            .data_dir
+            .as_deref()
+            .map(plans::plans_file)
+            .and_then(|path| match Plans::load(&path) {
+                Ok(plans) => Some(plans),
+                Err(e) => {
+                    eprintln!("plans: cannot read {}: {e}; starting without", path.display());
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let routine_state = options
+            .data_dir
+            .as_deref()
+            .map(|d| d.join("routines-state.json"))
+            .and_then(|path| match RoutineState::load(&path) {
+                Ok(state) => Some(state),
+                Err(e) => {
+                    eprintln!(
+                        "routines: cannot read {}: {e}; starting without",
+                        path.display()
+                    );
+                    None
+                }
+            })
+            .unwrap_or_default();
         Arc::new(Self {
             store,
             workers,
@@ -331,7 +403,454 @@ impl<S: EventStore + 'static> ApiState<S> {
             idempotency: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
+            plans: Mutex::new(plans),
+            routine_state: Mutex::new(routine_state),
+            started_at: routines::now_ms(),
         })
+    }
+
+    pub fn roles(&self) -> &[Role] {
+        &self.options.roles
+    }
+
+    /// One line per role, for `/roles`.
+    pub fn roles_text(&self) -> String {
+        if self.options.roles.is_empty() {
+            return "No roles configured. Add [[roles]] to config.toml to name one in /run @role …"
+                .to_owned();
+        }
+        self.options
+            .roles
+            .iter()
+            .map(Role::describe)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Assigns a run to a role: the role's employee (or the broker), with
+    /// the role's instructions, tools, model, level and limits laid over.
+    pub fn assign_role(
+        &self,
+        role: &str,
+        repo: Option<PathBuf>,
+        isolation: Option<&str>,
+    ) -> Result<(Runtime, AgentSpec, String), ApiError> {
+        let role_name = role.trim_start_matches('@');
+        let role = self
+            .options
+            .roles
+            .iter()
+            .find(|r| r.name == role_name)
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!(
+                    "no role named {role_name}; configured: {}",
+                    self.options
+                        .roles
+                        .iter()
+                        .map(|r| r.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+        let (mut runtime, mut agent, employee) =
+            self.assign_with(&role.employee, repo, isolation.or(role.isolation.as_deref()))?;
+        role.apply(&mut runtime, &mut agent);
+        Ok((runtime, agent, format!("{employee} as @{}", role.name)))
+    }
+
+    /// The path of a configured repository label, or of a path given as is.
+    pub fn repo_for(&self, label_or_path: &str) -> Result<PathBuf, ApiError> {
+        if let Some(path) = self.repo_path(label_or_path) {
+            return Ok(path);
+        }
+        let path = PathBuf::from(label_or_path);
+        if path.is_absolute() && path.join(".git").exists() {
+            return Ok(path);
+        }
+        Err(ApiError::BadRequest(format!(
+            "unknown repo {label_or_path}; configured: {}",
+            self.repos().join(", ")
+        )))
+    }
+
+    // ----- plans: the chief of staff -----
+
+    /// Starts a planning run for `goal` on `repo` and remembers it as a plan.
+    pub async fn start_plan(
+        self: &Arc<Self>,
+        repo_label: &str,
+        goal: &str,
+        role: Option<&str>,
+    ) -> Result<RunId, ApiError> {
+        let path = self.repo_for(repo_label)?;
+        let (runtime, mut agent, _) = match role {
+            Some(role) => self.assign_role(role, Some(path), None)?,
+            None => self.assign("auto", Some(path))?,
+        };
+        // A harness gets a read-only allow list; the native loop keeps its
+        // employee's tools (the rules still apply).
+        if matches!(runtime, Runtime::Harness(_)) {
+            agent.tools = plans::planner_tools();
+        }
+        let spec = RunSpec {
+            task: plans::planner_task(repo_label, goal),
+            agent,
+            runtime,
+        };
+        let value = serde_json::to_value(&spec).map_err(|e| ApiError::Internal(e.to_string()))?;
+        let run_id = self.store.create_run(value).await?;
+        {
+            let mut plans = lock(&self.plans);
+            plans.plans.insert(
+                run_id.to_string(),
+                Plan {
+                    run_id: run_id.to_string(),
+                    repo: repo_label.to_owned(),
+                    goal: goal.to_owned(),
+                    created_at: routines::now_ms(),
+                    notes: String::new(),
+                    items: Vec::new(),
+                    status: PlanStatus::Planning,
+                },
+            );
+            self.save_plans(&plans);
+        }
+        self.spawn_drive(run_id);
+        Ok(run_id)
+    }
+
+    fn save_plans(&self, plans: &Plans) {
+        if let Some(dir) = &self.options.data_dir
+            && let Err(e) = plans.save(&plans::plans_file(dir))
+        {
+            eprintln!("plans: cannot write {}: {e}", plans::plans_file(dir).display());
+        }
+    }
+
+    /// If `run_id` was a planning run, reads the plan out of its result and
+    /// returns the message for the owner; `None` for ordinary runs.
+    pub fn plan_finished(&self, run_id: RunId, status: &RunStatus) -> Option<String> {
+        let mut plans = lock(&self.plans);
+        let plan = plans.plans.get_mut(&run_id.to_string())?;
+        if !matches!(plan.status, PlanStatus::Planning) {
+            return None;
+        }
+        plan.status = match status {
+            RunStatus::Completed { output } => match plans::parse_plan(output) {
+                Ok((notes, items)) => {
+                    plan.notes = notes;
+                    plan.items = items;
+                    PlanStatus::Proposed
+                }
+                Err(reason) => PlanStatus::Failed {
+                    reason: format!("{reason}; the planner said: {}", one_line(&Value::from(output.as_str()), 300)),
+                },
+            },
+            RunStatus::Failed { reason }
+            | RunStatus::Cancelled { reason }
+            | RunStatus::NeedsAttention { reason } => PlanStatus::Failed {
+                reason: reason.clone(),
+            },
+            RunStatus::Open | RunStatus::WaitingApproval { .. } => PlanStatus::Failed {
+                reason: "the planning run stopped without finishing".into(),
+            },
+        };
+        let text = plans::plan_text(plan);
+        self.save_plans(&plans);
+        Some(text)
+    }
+
+    pub fn plan_text(&self, id_or_prefix: &str) -> Result<String, ApiError> {
+        let plans = lock(&self.plans);
+        plans
+            .find(id_or_prefix)
+            .map(plans::plan_text)
+            .map_err(ApiError::NotFound)
+    }
+
+    pub fn plan_details(&self, id_or_prefix: &str) -> Result<String, ApiError> {
+        let plans = lock(&self.plans);
+        plans
+            .find(id_or_prefix)
+            .map(plans::plan_details)
+            .map_err(ApiError::NotFound)
+    }
+
+    pub fn plans_list(&self) -> Vec<Plan> {
+        let mut all: Vec<Plan> = lock(&self.plans).plans.values().cloned().collect();
+        all.sort_by_key(|p| std::cmp::Reverse(p.created_at));
+        all
+    }
+
+    /// The plans, newest first, one line each.
+    pub fn plans_text(&self) -> String {
+        let all = self.plans_list();
+        if all.is_empty() {
+            return "No plans yet. /plan <repo> <goal> asks the chief of staff for one.".to_owned();
+        }
+        all.iter()
+            .take(10)
+            .map(|p| {
+                let state = match &p.status {
+                    PlanStatus::Planning => "planning".to_owned(),
+                    PlanStatus::Proposed => format!("{} items proposed", p.items.len()),
+                    PlanStatus::Approved { issues } => format!("approved, {} issues", issues.len()),
+                    PlanStatus::Failed { .. } => "failed".to_owned(),
+                };
+                format!(
+                    "📋 {} {}: {} ({state})",
+                    &p.run_id[..8],
+                    p.repo,
+                    p.goal.chars().take(60).collect::<String>()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Creates one issue per item, labelled for the intake, and marks the
+    /// plan approved. Partial failures keep what was created.
+    pub async fn approve_plan(&self, id_or_prefix: &str) -> Result<String, ApiError> {
+        let issues = self.options.issues.as_ref().ok_or_else(|| {
+            ApiError::Conflict("this office cannot create issues (no gh configured)".into())
+        })?;
+        let plan = {
+            let plans = lock(&self.plans);
+            plans.find(id_or_prefix).cloned().map_err(ApiError::NotFound)?
+        };
+        if !matches!(plan.status, PlanStatus::Proposed) {
+            return Err(ApiError::Conflict(format!(
+                "plan {} is not waiting for approval",
+                &plan.run_id[..8]
+            )));
+        }
+        let repo = self.repo_for(&plan.repo)?;
+        let mut created = Vec::new();
+        let mut failure = None;
+        for i in 0..plan.items.len() {
+            match issues
+                .create_issue(
+                    &repo,
+                    &plan.items[i].title,
+                    &plans::issue_body(&plan, i),
+                    &self.options.intake_label,
+                )
+                .await
+            {
+                Ok(url) => created.push(url),
+                Err(e) => {
+                    failure = Some(format!("item {}: {e}", i + 1));
+                    break;
+                }
+            }
+        }
+        let text = {
+            let mut plans = lock(&self.plans);
+            if let Some(p) = plans.plans.get_mut(&plan.run_id) {
+                p.status = PlanStatus::Approved {
+                    issues: created.clone(),
+                };
+            }
+            self.save_plans(&plans);
+            plans.find(&plan.run_id).map(plans::plan_text).unwrap_or_default()
+        };
+        match failure {
+            Some(why) => Err(ApiError::Failed(format!(
+                "created {} of {} issues, then: {why}",
+                created.len(),
+                plan.items.len()
+            ))),
+            None => Ok(format!(
+                "{text}\n\nThe intake picks them up within a minute, in order."
+            )),
+        }
+    }
+
+    // ----- routines and the report -----
+
+    /// Starts a routine's run now. The reply names the run.
+    pub async fn fire_routine(self: &Arc<Self>, name: &str) -> Result<String, ApiError> {
+        self.fire_routine_run(name).await.map(|(_, reply)| reply)
+    }
+
+    /// [`fire_routine`](Self::fire_routine), also returning the run id.
+    pub async fn fire_routine_run(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<(RunId, String), ApiError> {
+        let routine = self
+            .options
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .cloned()
+            .ok_or_else(|| ApiError::NotFound(format!("no routine named {name}")))?;
+        let repo = routine
+            .repo
+            .as_deref()
+            .map(|r| self.repo_for(r))
+            .transpose()?;
+        let (runtime, agent, employee) = match &routine.role {
+            Some(role) => self.assign_role(role, repo, None)?,
+            None => self.assign(&routine.employee, repo)?,
+        };
+        let run_id = self
+            .start_run(RunSpec {
+                task: routine.task.clone(),
+                agent,
+                runtime,
+            })
+            .await?;
+        {
+            let mut state = lock(&self.routine_state);
+            state.last_fired.insert(routine.name.clone(), routines::now_ms());
+            self.save_routine_state(&state);
+        }
+        Ok((
+            run_id,
+            format!(
+                "⏰ routine {} started run {} ({employee}): {}",
+                routine.name,
+                &run_id.to_string()[..8],
+                routine.task.chars().take(120).collect::<String>()
+            ),
+        ))
+    }
+
+    fn save_routine_state(&self, state: &RoutineState) {
+        if let Some(dir) = &self.options.data_dir {
+            let path = dir.join("routines-state.json");
+            if let Err(e) = state.save(&path) {
+                eprintln!("routines: cannot write {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// One line per routine with its schedule and next firing.
+    pub fn routines_text(&self) -> String {
+        if self.options.routines.is_empty() && self.options.report.is_none() {
+            return "No routines configured. Add [[routines]] to config.toml.".to_owned();
+        }
+        let summary = self.routines_summary();
+        if summary.is_empty() {
+            "No routines are enabled.".to_owned()
+        } else {
+            summary
+        }
+    }
+
+    /// `name: schedule, next <when>` per enabled routine, plus the report.
+    pub(crate) fn routines_summary(&self) -> String {
+        let now = chrono::Local::now();
+        let state = lock(&self.routine_state);
+        let mut lines = Vec::new();
+        for r in self.options.routines.iter().filter(|r| r.enabled) {
+            let line = match r.parsed() {
+                Ok(schedule) => {
+                    let anchor = state.last_fired.get(&r.name).copied().unwrap_or(self.started_at);
+                    let next = routines::ms_to_local(anchor)
+                        .map(|a| schedule.next_after(a.max(now.min(a))))
+                        .map(|n| if n < now { schedule.next_after(now) } else { n });
+                    format!(
+                        "⏰ {}: {schedule}, next {}{}",
+                        r.name,
+                        next.map_or_else(|| "?".to_owned(), schedule::humanize),
+                        r.repo.as_deref().map_or(String::new(), |repo| format!(" on {repo}"))
+                    )
+                }
+                Err(e) => format!("⏰ {}: {e}", r.name),
+            };
+            lines.push(line);
+        }
+        if let Some(report) = &self.options.report {
+            match schedule::parse(report) {
+                Ok(schedule) => lines.push(format!(
+                    "📋 report: {schedule}, next {}",
+                    schedule::humanize(schedule.next_after(now))
+                )),
+                Err(e) => lines.push(format!("📋 report: {e}")),
+            }
+        }
+        lines.join("\n")
+    }
+
+    /// The scheduler: checks every 30 seconds what is due and fires it.
+    /// Runs until the future is dropped.
+    pub async fn run_scheduler(self: Arc<Self>) {
+        let report_schedule = self
+            .options
+            .report
+            .as_deref()
+            .and_then(|r| match schedule::parse(r) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("report: {e}; the report is only available with /report");
+                    None
+                }
+            });
+        let routines: Vec<(Routine, Schedule)> = self
+            .options
+            .routines
+            .iter()
+            .filter(|r| r.enabled)
+            .filter_map(|r| match r.parsed() {
+                Ok(s) => Some((r.clone(), s)),
+                Err(e) => {
+                    eprintln!("{e}; the routine is skipped");
+                    None
+                }
+            })
+            .collect();
+        if routines.is_empty() && report_schedule.is_none() {
+            return;
+        }
+        loop {
+            self.scheduler_tick(&routines, report_schedule.as_ref()).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    }
+
+    async fn scheduler_tick(self: &Arc<Self>, routines: &[(Routine, Schedule)], report: Option<&Schedule>) {
+        let now = chrono::Local::now();
+        for (routine, schedule) in routines {
+            let anchor = lock(&self.routine_state)
+                .last_fired
+                .get(&routine.name)
+                .copied()
+                .unwrap_or(self.started_at);
+            if routines::due(schedule, anchor, now).is_none() {
+                continue;
+            }
+            let reply = match self.fire_routine(&routine.name).await {
+                Ok(reply) => reply,
+                Err(e) => {
+                    let mut state = lock(&self.routine_state);
+                    state.last_fired.insert(routine.name.clone(), routines::now_ms());
+                    self.save_routine_state(&state);
+                    format!("⏰ routine {} could not start: {e}", routine.name)
+                }
+            };
+            if let Some(n) = &self.options.notifications {
+                n.message(reply).await;
+            }
+        }
+        if let Some(schedule) = report {
+            let (anchor, since) = {
+                let state = lock(&self.routine_state);
+                (state.last_report.unwrap_or(self.started_at), state.last_report)
+            };
+            if routines::due(schedule, anchor, now).is_some() {
+                let text = self.report(since).await;
+                {
+                    let mut state = lock(&self.routine_state);
+                    state.last_report = Some(routines::now_ms());
+                    self.save_routine_state(&state);
+                }
+                if let Some(n) = &self.options.notifications {
+                    n.message(text).await;
+                }
+            }
+        }
     }
 
     pub fn repos(&self) -> Vec<String> {
@@ -768,10 +1287,17 @@ impl<S: EventStore + 'static> ApiState<S> {
                 }
             }
             lock(&state.active).remove(&run_id);
-            if let Some(n) = &state.options.notifications
-                && let Ok(view) = state.run_view(run_id).await
-            {
-                n.run_ended(run_id, view.task, view.status).await;
+            let Ok(view) = state.run_view(run_id).await else {
+                return;
+            };
+            // A finished planning run becomes a plan; the owner hears
+            // about the plan, not about the run.
+            let plan = state.plan_finished(run_id, &view.status);
+            if let Some(n) = &state.options.notifications {
+                match plan {
+                    Some(text) => n.message(text).await,
+                    None => n.run_ended(run_id, view.task, view.status).await,
+                }
             }
         });
     }
@@ -943,6 +1469,13 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/runs/{id}/diff", get(diff_run::<S>))
         .route("/v1/approvals/{id}", post(decide::<S>))
         .route("/v1/capacity", get(capacity::<S>))
+        .route("/v1/report", get(report::<S>))
+        .route("/v1/roles", get(roles::<S>))
+        .route("/v1/routines", get(routines_list::<S>))
+        .route("/v1/routines/{name}/run", post(routine_run::<S>))
+        .route("/v1/plans", get(plans_list::<S>).post(create_plan::<S>))
+        .route("/v1/plans/{id}", get(get_plan::<S>))
+        .route("/v1/plans/{id}/approve", post(approve_plan::<S>))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_token::<S>,
@@ -1028,6 +1561,9 @@ struct CreateRun {
     /// Isolation level for a harness run: `worktree`, `container` or
     /// `openshell`. Default: the office's policy for the repository.
     isolation: Option<String>,
+    /// A configured role (`[[roles]]`) to run as. Overrides `runtime` and
+    /// `agent` like `employee` does.
+    role: Option<String>,
 }
 
 async fn create_run<S: EventStore + 'static>(
@@ -1045,8 +1581,17 @@ async fn create_run<S: EventStore + 'static>(
     {
         return Ok((StatusCode::OK, Json(state.run_view(run_id).await?)));
     }
-    let spec = match &body.employee {
-        Some(employee) => {
+    let spec = match (&body.role, &body.employee) {
+        (Some(role), _) => {
+            let repo = body.repo.as_deref().map(|r| state.repo_for(r)).transpose()?;
+            let (runtime, agent, _) = state.assign_role(role, repo, body.isolation.as_deref())?;
+            RunSpec {
+                task: body.task,
+                agent,
+                runtime,
+            }
+        }
+        (None, Some(employee)) => {
             let repo = body.repo.as_deref().map(|label_or_path| {
                 state
                     .repo_path(label_or_path)
@@ -1060,7 +1605,7 @@ async fn create_run<S: EventStore + 'static>(
                 runtime,
             }
         }
-        None => {
+        (None, None) => {
             let mut runtime = body.runtime.unwrap_or_default();
             if let (Some(level), Runtime::Harness(h)) = (&body.isolation, &mut runtime) {
                 let label = h.repo.as_ref().and_then(|p| state.label_of(p));
@@ -1082,6 +1627,86 @@ async fn create_run<S: EventStore + 'static>(
         lock(&state.idempotency).insert(key, run_id);
     }
     Ok((StatusCode::CREATED, Json(state.run_view(run_id).await?)))
+}
+
+async fn report<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+) -> Result<String, ApiError> {
+    Ok(state.report(None).await)
+}
+
+async fn roles<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+) -> Json<Vec<Role>> {
+    Json(state.roles().to_vec())
+}
+
+async fn routines_list<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+) -> Json<Value> {
+    Json(json!({
+        "routines": state.options.routines,
+        "report": state.options.report,
+        "summary": state.routines_summary(),
+    }))
+}
+
+async fn routine_run<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(name): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let (run, reply) = state.fire_routine_run(&name).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "run": run, "message": reply })),
+    ))
+}
+
+#[derive(Deserialize)]
+struct CreatePlan {
+    /// A configured repository label.
+    repo: String,
+    goal: String,
+    /// A role for the planner; default: the broker's choice.
+    #[serde(default)]
+    role: Option<String>,
+}
+
+async fn create_plan<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Json(body): Json<CreatePlan>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let run_id = state
+        .start_plan(&body.repo, &body.goal, body.role.as_deref())
+        .await?;
+    Ok((StatusCode::CREATED, Json(json!({ "plan": run_id, "run": run_id }))))
+}
+
+async fn plans_list<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+) -> Json<Vec<Plan>> {
+    Json(state.plans_list())
+}
+
+async fn get_plan<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+) -> Result<Json<Plan>, ApiError> {
+    let plans = lock(&state.plans);
+    plans
+        .find(&id)
+        .cloned()
+        .map(Json)
+        .map_err(ApiError::NotFound)
+}
+
+async fn approve_plan<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let reply = state.approve_plan(&id).await?;
+    let plan = lock(&state.plans).find(&id).cloned().ok();
+    Ok(Json(json!({ "message": reply, "plan": plan })))
 }
 
 async fn capacity<S: EventStore + 'static>(

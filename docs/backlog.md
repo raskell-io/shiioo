@@ -12,6 +12,7 @@ Known rough edges and small debts, found while reviewing or documenting the code
 ## Behaviour
 
 - **Default rules**: `rm -rf /*` matches any absolute path, so `rm -rf /tmp/build` is denied rather than asked. Broader than its reason suggests; decide.
+- **Command substitution is not split**: `echo $(git push origin x)` is judged as one `echo` segment, so the inner push is not matched by `git push *`. The splitter understands quotes and escapes since phase 5; `$(…)` and backticks would need the same treatment.
 - **`shiioo-providers` sleeps twice** on a retryable status with `Retry-After`: the header's delay in `send`, then the loop's backoff. A 429 with `Retry-After: 30` waits 31 s. Drop the loop backoff when the header was honoured.
 - **The Telegram bot does not persist its update offset**, so a restart re-delivers unacknowledged updates. The owner gate and the office's own idempotency tolerate it; a persisted offset in `.shiioo/` would be cleaner.
 - **Intake never forgets an issue.** An issue relabelled `shiioo` after `done`/`failed` is not re-run; editing `intake-state.json` is the only way. A `shiioo:again` label or a `/rerun` command would do.

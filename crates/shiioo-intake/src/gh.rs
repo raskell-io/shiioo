@@ -77,6 +77,26 @@ impl Gh {
         Ok(serde_json::from_str(out.trim())?)
     }
 
+    /// Creates an issue with one label and returns its URL (what `gh
+    /// issue create` prints).
+    pub async fn create_issue(
+        &self,
+        repo: &Path,
+        title: &str,
+        body: &str,
+        label: &str,
+    ) -> Result<String, GhError> {
+        let out = self
+            .run(
+                repo,
+                &[
+                    "issue", "create", "--title", title, "--body", body, "--label", label,
+                ],
+            )
+            .await?;
+        Ok(out.trim().to_owned())
+    }
+
     pub async fn comment(&self, repo: &Path, number: u64, body: &str) -> Result<(), GhError> {
         self.run(
             repo,

@@ -18,7 +18,8 @@ serde_json.workspace = true
 uuid.workspace = true
 axum.workspace = true
 futures-util.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "net"] }
+tokio = { workspace = true, features = ["sync", "time", "net", "process"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 toml.workspace = true

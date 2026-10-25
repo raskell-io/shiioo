@@ -171,6 +171,59 @@ binary is not inside the container. Waits like `permissions` does.
 "<run id>", "approval_id": "…", "decision": "allow"}`. An id that matches no
 open approval → `404`.
 
+## The company: report, roles, routines, plans
+
+### `GET /v1/report` → `200`, `text/plain`
+
+The morning report as the phone gets it: runs finished, failed and needing
+the owner in the last 24 hours, approvals waiting, runs still going,
+`shiioo/*` branches with unmerged commits per repository, capacity, the
+next routines.
+
+### `GET /v1/roles` → `200`, `[Role]`
+
+The configured `[[roles]]`.
+
+### `GET /v1/routines` → `200`
+
+`{"routines": [Routine], "report": "<schedule>" | null, "summary": "<text>"}`:
+the configured `[[routines]]`, the report schedule, and the one-line-per-
+routine text with next firings that `/routines` shows.
+
+### `POST /v1/routines/{name}/run` → `202 Accepted`
+
+Fires a routine now. `{"run": "<run id>", "message": "⏰ routine … started run …"}`.
+`404` for an unknown name.
+
+### `POST /v1/plans` → `201 Created`
+
+```json
+{ "repo": "shiioo", "goal": "Ship v0.3", "role": null }
+```
+
+Starts the chief of staff: a harness run on `repo` (a configured label)
+with read-only tools and the planning instructions. `{"plan": "<id>", "run":
+"<id>"}`: the plan is referred to by the run's id or a 4+ character prefix.
+When the run completes, the office parses its answer into the plan and
+notifies the owner (`Notifications::message`), instead of the run's usual
+ending message.
+
+### `GET /v1/plans` → `200`, `[Plan]`; `GET /v1/plans/{id}` → `200`, `Plan`
+
+```json
+{ "run_id": "…", "repo": "shiioo", "goal": "Ship v0.3", "created_at": 1761400000000,
+  "notes": "…", "items": [{ "title": "…", "body": "…" }],
+  "status": { "status": "planning" | "proposed" | "approved" | "failed", "issues": ["<url>"], "reason": "…" } }
+```
+
+### `POST /v1/plans/{id}/approve` → `200`
+
+Creates one issue per item on the plan's repository, labelled for the
+intake (`ApiOptions.intake_label`), in order; `{"message": "<text for the
+owner>", "plan": Plan}`. `409` if the plan is not `proposed` or the office
+has no issue creator; `500` with the count of issues created if one fails
+midway (the plan is then `approved` with the issues that exist).
+
 ## Capacity
 
 ### `GET /v1/capacity` → `200`, `[ProviderCapacity]`

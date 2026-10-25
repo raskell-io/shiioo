@@ -99,6 +99,7 @@ impl Office for RecordingOffice {
     fn start_run(
         &self,
         repo: Option<String>,
+        _role: Option<String>,
         task: String,
     ) -> BoxFuture<'_, Result<String, String>> {
         lock(&self.calls).push(format!("start_run {repo:?} {task}"));

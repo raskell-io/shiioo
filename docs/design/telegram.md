@@ -28,6 +28,11 @@ Status: *(built)*. The client, commands, long-poll loop and notifier are in `cra
 | `/log <run>` | The run's last 25 steps, one line each. Accepts an id prefix (4+ characters). *(built)* |
 | `/cancel <run>` | Asks the run to stop at its next step boundary (`CancelRequested`). *(built)* |
 | `/repos` | The repo labels you can use in `/run`. *(built)* |
+| `/run @<role> [<repo>] <task…>`, or `@<role> <task…>` | The same, as a configured role (`[[roles]]`): its instructions, tools, model, level and limits over the employee's. `/roles` lists them. *(built)* |
+| `/plan [<repo>] <goal…>` | Asks the chief of staff for a plan: a read-only run on the repo that answers with work items. The plan arrives as a message when the run ends. *(built)* |
+| `/plan approve <id>`, `/plan show <id>`, `/plans` | Creates one labelled issue per item (the intake works them), shows a plan with every item's details, lists plans. *(built)* |
+| `/routines`, `/routine <name>` | The scheduled routines and the report with their next firing; fire one now. *(built)* |
+| `/report` | The morning report, now. *(built)* |
 | `/approve <id>`, `/deny <id>` | Answer an approval without the buttons (for example from a client that doesn't show them). *(built)* |
 | `/help`, `/start` | The command list. *(built)* |
 
@@ -72,7 +77,9 @@ The server speaks first in these cases (`Notifier::notify`), each as one short m
 | run stopped without finishing | `⏸ 7f3a21c9 stopped without finishing: <task>` (the worker gave up, for example after too many harness restarts) |
 | approval requested | the approval message above |
 | capacity | *(planned)* a warning when a subscription window passes a threshold (`CapacityObserved`) |
-| morning report | *(planned, phase 5)* |
+| morning report | `[report] schedule` (for example `weekdays 07:00`): what finished, failed or needs you since the last report, approvals waiting, branches awaiting review, capacity, next routines *(built)* |
+| routine started | `⏰ routine <name> started run <id> (<employee>): <task>` *(built)* |
+| plan ready | `📋 plan <id> for <repo>: <goal>`, the items, and the `/plan approve` line; a plan that could not be read says so *(built)* |
 
 The task is cut to 120 characters, the summary to 600; the branch or PR link is in the summary if the agent put it there *(a dedicated link is planned)*. Notifications are recorded text, nothing else; the office's secrets and its API token are redacted before recording ([security.md §3.2](security.md#32-secrets-never-reach-the-record-built-never-reach-the-model-holds-for-the-native-loop-planned)), so a leaked token shows as `[secret:<name>]` on the phone too. Anything else the agent printed arrives as is.
 

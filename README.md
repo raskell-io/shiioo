@@ -40,6 +40,7 @@ It is built for one owner with an always-on machine (a Mac Studio, say), not for
 | GitHub-issue intake (`[intake]`, label `shiioo`) | built (fake `gh` tests) |
 | `container` isolation (Docker/Podman, read-only root, worktree mounted), egress allow list through a proxy, encrypted secret store with redaction | built; container runs verified live with the real harness image |
 | `openshell` isolation | experimental adapter, not run against a gateway |
+| The company: `/plan` (a chief-of-staff run whose approval creates issues for the intake), `[[routines]]` on a typed schedule, the morning report, `[[roles]]` | built; planner verified live, the rest end to end over HTTP |
 | Planner, routines, morning report; remote nodes; asset and mail work | planned |
 | Fork, rewind, diff, replay as evals | planned |
 

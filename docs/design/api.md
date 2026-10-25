@@ -37,7 +37,10 @@ One office means no `{org}` or `{project}` segment in the built routes: `/v1/run
 | Secrets | `GET/POST /v1/secrets` (names and metadata only; values are write-only), `PUT/DELETE /v1/secrets/{secret}` *(planned)* |
 | Rules | `GET/PUT /v1/rules`, `POST /v1/rules/test` *(planned; `rules.toml` is edited on the machine today)* |
 | Budgets | `GET/PUT /v1/budgets`, `GET /v1/usage` *(planned)* |
-| Triggers | `GET/POST /v1/triggers`, `PATCH/DELETE /v1/triggers/{trigger}` *(planned, routines)* |
+| Report | `GET /v1/report` *(built)*: the morning report as text; what finished, failed or needs the owner in the last 24 hours, approvals waiting, branches awaiting review, capacity, next routines |
+| Roles | `GET /v1/roles` *(built)*: the configured `[[roles]]`; `POST /v1/runs` with `role: "<name>"` runs as one. `PATCH`/`POST` *(planned; config.toml today)* |
+| Routines | `GET /v1/routines` *(built)*: the configured `[[routines]]`, the report schedule and a summary with next firings; `POST /v1/routines/{name}/run` *(built)*: fire one now. Editing them over the API *(planned; config.toml today)*. These are the "triggers" of earlier drafts |
+| Plans | `POST /v1/plans` `{repo, goal, role?}` *(built)*: starts the chief of staff; `GET /v1/plans`, `GET /v1/plans/{id}` *(built)*; `POST /v1/plans/{id}/approve` *(built)*: one labelled issue per item for the intake |
 | Webhooks (outgoing) | `GET/POST /v1/webhooks`, `DELETE /v1/webhooks/{id}` *(planned)* |
 | API keys | `GET/POST /v1/keys`, `DELETE /v1/keys/{id}` *(planned; one bearer token today)* |
 

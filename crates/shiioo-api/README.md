@@ -36,6 +36,12 @@ shiioo-rules ─┘
 | --- | --- |
 | `src/lib.rs` | `router`, `ApiState`, `ApiOptions`, `Notifications`, `CapacityTracker`, `RunView`, permission/approval types, `ApiError`, the SSE `Feed`, `describe`. |
 | `src/employees.rs` | `Employee`, `EmployeeKind`, `pick`, `default_employees`: the capacity broker. |
+| `src/isolation.rs` | `IsolationPolicy`: the level a run gets (default, per repo, requested). |
+| `src/roles.rs` | `Role`: a reusable agent configuration laid over an employee. |
+| `src/schedule.rs` | `Schedule`: the owner's schedule words (`weekdays 07:00`, `every 6h`) and their next firing. |
+| `src/routines.rs` | `Routine`, `RoutineState`, `due`: scheduled runs and what already fired. |
+| `src/report.rs` | `ApiState::report`: the morning report, counted from the record and the repositories. |
+| `src/plans.rs` | `Plan`, `Plans`, `IssueCreator`, the planner's task and plan parsing: the chief of staff. |
 | `ui/index.html`, `ui/app.js`, `ui/app.css` | The dashboard, embedded into the binary and served at `/ui`. |
 
 ## Public API
@@ -87,6 +93,10 @@ Full request and response shapes are in [docs/http.md](docs/http.md).
 | `GET /v1/runs/{id}/diff` | yes | `git diff` of the run's branch |
 | `POST /v1/approvals/{id}` | yes | the owner answers allow or deny |
 | `GET /v1/capacity` | yes | subscription windows per provider |
+| `POST /v1/runs/{id}/hook/pre-tool-use` | yes | the hook in its own dialect, for sandboxes |
+| `GET /v1/report` | yes | the morning report |
+| `GET /v1/roles`, `GET /v1/routines`, `POST /v1/routines/{name}/run` | yes | roles, routines, fire one |
+| `POST /v1/plans`, `GET /v1/plans`, `GET /v1/plans/{id}`, `POST /v1/plans/{id}/approve` | yes | the chief of staff |
 
 Auth is one bearer token compared in constant time; `{id}` is a full run
 UUID (prefix resolution is a library feature, not an HTTP one).
@@ -106,6 +116,9 @@ cargo test -p shiioo-api
 - `tests/dashboard.rs`: dashboard files need no token, diff of a run without a
   repository is 404, diff shows the branch's changes after a fake harness
   commits on it.
+- `tests/company.rs`: roles, plans (proposed from a scripted planner, approved
+  into issues through a fake creator), routines fired on demand and the report,
+  over HTTP.
 - `src/employees.rs` unit tests cover the broker's thresholds and TOML
   shape.
 

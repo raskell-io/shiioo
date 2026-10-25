@@ -18,6 +18,8 @@ the office is gone, copy it and the office moves.
 | `api-token` | `serve` on first start | Bearer token for the API and dashboard, 32 hex bytes, mode 0600. |
 | `telegram-token` | `install --telegram-token` | Bot token, mode 0600. |
 | `intake-state.json` | intake | Which issues were already picked up. |
+| `plans.json` | `/plan` | The chief of staff's plans: goal, items, status (planning, proposed, approved with issue URLs, failed). |
+| `routines-state.json` | the scheduler | When each routine and the report last fired, so a restart neither repeats nor backfills. |
 | `logs/serve.log` | the installed service | stdout and stderr of `serve`. |
 
 `shiioo run`, `resume` and `log` only touch `shiioo.redb`; they do not read
@@ -112,6 +114,37 @@ that both carry the `[egress]` rules); `[env]` becomes `ApiOptions.env`,
 copied into every harness run's spec as references. `shiioo run --isolation`
 reads the same config.
 
+
+### `[[roles]]`, `[[routines]]`, `[report]`
+
+```toml
+[[roles]]
+name = "reviewer"
+employee = "auto"                 # or a name from [[employees]]
+system = "You review code and write findings to REVIEW.md. Never push."
+tools = ["Read", "Glob", "Grep", "Bash(git *)", "Write"]
+isolation = "container"
+max_minutes = 30
+
+[[routines]]
+name = "nightly-tests"
+schedule = "daily 02:00"          # hourly | every 6h | daily HH:MM | weekdays HH:MM | weekends HH:MM | mon,thu HH:MM
+repo = "myproject"
+role = "tester"                   # or employee = "codex"
+task = "Run the full test suite; fix any flaky test you find and open a PR."
+enabled = true
+
+[report]
+schedule = "weekdays 07:00"       # empty: only on /report
+```
+
+`roles` and `routines` go into `ApiOptions` as they are; `report.schedule`
+becomes `ApiOptions.report`; `data_dir` is `.shiioo/` so plans and the
+routine state are kept; `issues` is `GhIssues` over the intake's `gh`
+wrapper; `intake_label` is `[intake] label`, so approved plans land where
+the intake looks. `serve` spawns `ApiState::run_scheduler` after the API
+state exists.
+
 ## `rules.toml`
 
 The permission rules, documented in `shiioo-rules`. First match wins,
@@ -176,6 +209,10 @@ dashboard link once.
 | `/cancel <run>` | `cancel(run, "owner:telegram", …)`; replies `🛑 <id> will stop at its next step`. |
 | `/repos` | The configured labels and paths. |
 | `/approve <id>`, `/deny <id>`, or the buttons | `decide(approval_id, …, by "owner:telegram")`. |
+| `/run @role …`, `@role …` | `assign_role(role, repo, None)` instead of `assign("auto", repo)`; the reply names `<employee> as @role`. |
+| `/roles`, `/routines`, `/routine <name>`, `/report` | `roles_text()`, `routines_text()`, `fire_routine(name)`, `report(None)`. |
+| `/plan [<repo>] <goal>` | `start_plan(repo, goal, None)`; replies that the chief of staff is reading; the plan itself arrives through `Notifications::message` when the run ends. |
+| `/plan approve <id>`, `/plan show <id>`, `/plans` | `approve_plan`, `plan_details`, `plans_text`. |
 | `/help`, `/start` | The command list. |
 
 `TelegramNotifications` sends `🔐 <id> wants to run\n<summary>` with

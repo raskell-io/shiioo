@@ -47,7 +47,7 @@ Tool names are whatever the harness reports: Claude Code uses `Bash`, `Read`, `E
 2. If the command has several segments (split at `&&`, `||`, `;` and `|`), the whole command is evaluated once, and each segment is evaluated on its own with `command` replaced by the segment. The verdict with the most restrictive decision wins; the whole-command verdict only takes part if a rule (not the default) matched it. Ties keep the earlier candidate, so the whole-command verdict wins a tie with a segment, and earlier segments win ties with later ones.
 3. The verdict's `reason` is `rule N: <reason>` or, without a reason, `rule N (<tool> `<command>` …): <decision>`; `default: <decision>` for the default; and `segment "<text>": …` when a segment decided.
 
-Quotes are not understood by the splitter. `echo "a; b"` is judged as `echo "a` and `b"`, which can only make the result stricter.
+Single and double quotes and backslash escapes are respected, so a `|` inside a grep pattern is not a pipe; an unbalanced quote keeps the rest of the line in one segment, as the shell would. `echo "a; b"` is judged as `echo "a` and `b"`, which can only make the result stricter.
 
 Examples with the defaults:
 
@@ -93,7 +93,7 @@ Ask:
 | `cargo publish*` | publishes a crate |
 | `npm publish*` | publishes a package |
 
-Allowed, no reason recorded (the verdict describes the rule instead): `git status*`, `git diff*`, `git log*`, `git show*`, `git add *`, `git commit *`, `git checkout *`, `git switch *`, `git branch*`, `git stash*`, `git fetch*`, `git pull*`, `git worktree*`, `cargo *`, `npm *`, `pnpm *`, `yarn *`, `npx *`, `python*`, `pytest*`, `make*`, `ls*`, `cat *`, `pwd*`, `echo *`, `grep *`, `rg *`, `find *`, `head *`, `tail *`, `wc *`, `sed *`, `awk *`, `which *`, `env*`, `mkdir *`, `touch *`, `cp *`, `mv *`, `printf *`, `test *`, `true`, `cd *`.
+Allowed, no reason recorded (the verdict describes the rule instead): `git status*`, `git diff*`, `git log*`, `git show*`, `git add *`, `git commit *`, `git checkout *`, `git switch *`, `git branch*`, `git stash*`, `git fetch*`, `git pull*`, `git worktree*`, the read-only git queries `git tag` (bare, `-l*`, `--list*`, `-n*`), `git describe*`, `git remote` (bare, `-v`, `show*`), `git rev-parse*`, `git rev-list*`, `git ls-files*`, `git ls-tree*`, `git blame*`, `git shortlog*`, `git cat-file*`, `git config --get*`/`-l*`/`--list*`; the toolchains `cargo *`, `npm *`, `pnpm *`, `yarn *`, `npx *`, `python*`, `pytest*`, `make*`; and the shell utilities `ls*`, `cat *`, `pwd*`, `echo *`, `grep *`, `rg *`, `find *`, `head *`, `tail *`, `wc *`, `sed *`, `awk *`, `which *`, `env*`, `mkdir *`, `touch *`, `cp *`, `mv *`, `printf *`, `test *`, `true`, `cd *`, `tree*`, `file *`, `stat *`, `du *`, `df *`, `date*`, `uname*`, `sort *`, `uniq *`, `cut *`, `tr *`, `diff *`, `jq *`, `nl *`, `od *`, `xxd *`, `shasum *`, `sha256sum *`, `md5 *`, `basename *`, `dirname *`, `realpath *`, `seq *`, `expr *`. `git tag <name>` (creating a tag) and `git remote add` are not matched and ask.
 
 Tool rules:
 

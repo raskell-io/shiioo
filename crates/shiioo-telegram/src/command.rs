@@ -4,13 +4,40 @@ use crate::api::{InlineButton, InlineKeyboard};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// `/run <repo> <task…>`, `/run <task…>`, or plain text.
+    /// `/run [@role] [<repo>] <task…>`, or plain text (optionally starting
+    /// with `@role`).
     Run {
         repo: Option<String>,
+        role: Option<String>,
         task: String,
     },
     /// `/status`
     Status,
+    /// `/roles`: the configured roles.
+    Roles,
+    /// `/routines`: the configured routines and when they fire next.
+    Routines,
+    /// `/routine <name>`: fire a routine now.
+    Routine {
+        name: String,
+    },
+    /// `/report`: the morning report, now.
+    Report,
+    /// `/plan [<repo>] <goal…>`: ask the chief of staff for a plan.
+    Plan {
+        repo: Option<String>,
+        goal: String,
+    },
+    /// `/plan approve <id>`
+    PlanApprove {
+        plan: String,
+    },
+    /// `/plan show <id>`
+    PlanShow {
+        plan: String,
+    },
+    /// `/plans`
+    Plans,
     /// `/capacity`: how much of the subscriptions' windows is used.
     Capacity,
     /// `/log <run-id-or-prefix>`
@@ -45,10 +72,7 @@ pub fn parse_command(text: &str, known_repos: &[String]) -> Command {
         return Command::Unknown(String::new());
     }
     if !text.starts_with('/') {
-        return Command::Run {
-            repo: None,
-            task: text.to_owned(),
-        };
+        return parse_run(text, known_repos);
     }
     let (head, rest) = match text.split_once(char::is_whitespace) {
         Some((h, r)) => (h, r.trim()),
@@ -65,6 +89,16 @@ pub fn parse_command(text: &str, known_repos: &[String]) -> Command {
         ("run", "") => Command::Unknown(text.to_owned()),
         ("run", rest) => parse_run(rest, known_repos),
         ("status", _) => Command::Status,
+        ("roles", _) => Command::Roles,
+        ("routines", _) => Command::Routines,
+        ("routine", "") => Command::Unknown(text.to_owned()),
+        ("routine", name) => Command::Routine {
+            name: name.to_owned(),
+        },
+        ("report", _) => Command::Report,
+        ("plans", _) => Command::Plans,
+        ("plan", "") => Command::Unknown(text.to_owned()),
+        ("plan", rest) => parse_plan(rest, known_repos),
         ("capacity", _) => Command::Capacity,
         ("log", "") | ("cancel", "") | ("approve", "") | ("deny", "") => {
             Command::Unknown(text.to_owned())
@@ -87,21 +121,65 @@ pub fn parse_command(text: &str, known_repos: &[String]) -> Command {
     }
 }
 
+/// `[@role] [<repo>] <task>`: a leading `@word` names a role; a next word
+/// that is a known repo label names the repo; the rest is the task.
 fn parse_run(rest: &str, known_repos: &[String]) -> Command {
-    let (first, task) = match rest.split_once(char::is_whitespace) {
-        Some((f, t)) => (f, t.trim()),
+    let (role, rest) = take_role(rest);
+    let (repo, task) = take_repo(rest, known_repos);
+    Command::Run {
+        repo,
+        role,
+        task: task.to_owned(),
+    }
+}
+
+/// `approve <id>`, `show <id>`, or `[<repo>] <goal>`.
+fn parse_plan(rest: &str, known_repos: &[String]) -> Command {
+    let (first, after) = match rest.split_once(char::is_whitespace) {
+        Some((f, a)) => (f, a.trim()),
         None => (rest, ""),
     };
-    if known_repos.iter().any(|r| r == first) && !task.is_empty() {
-        return Command::Run {
-            repo: Some(first.to_owned()),
-            task: task.to_owned(),
+    match (first.to_ascii_lowercase().as_str(), after) {
+        ("approve", "") | ("show", "") => Command::Unknown(format!("/plan {rest}")),
+        ("approve", id) => Command::PlanApprove {
+            plan: id.to_owned(),
+        },
+        ("show", id) => Command::PlanShow {
+            plan: id.to_owned(),
+        },
+        _ => {
+            let (repo, goal) = take_repo(rest, known_repos);
+            Command::Plan {
+                repo,
+                goal: goal.to_owned(),
+            }
+        }
+    }
+}
+
+fn take_role(text: &str) -> (Option<String>, &str) {
+    let text = text.trim();
+    if let Some(stripped) = text.strip_prefix('@') {
+        let (role, rest) = match stripped.split_once(char::is_whitespace) {
+            Some((r, rest)) => (r, rest.trim()),
+            None => (stripped, ""),
         };
+        if !role.is_empty() {
+            return (Some(role.to_owned()), rest);
+        }
     }
-    Command::Run {
-        repo: None,
-        task: rest.to_owned(),
+    (None, text)
+}
+
+fn take_repo<'a>(text: &'a str, known_repos: &[String]) -> (Option<String>, &'a str) {
+    let (first, rest) = match text.split_once(char::is_whitespace) {
+        Some((f, r)) => (f, r.trim()),
+        None => (text, ""),
+    };
+    if known_repos.iter().any(|r| r == first) && !rest.is_empty() {
+        return (Some(first.to_owned()), rest);
     }
+    (None, text)
 }
 
 /// Decodes a button press: `approve:<id>` or `deny:<id>`.
@@ -143,6 +221,15 @@ mod tests {
     fn run(repo: Option<&str>, task: &str) -> Command {
         Command::Run {
             repo: repo.map(str::to_owned),
+            role: None,
+            task: task.to_owned(),
+        }
+    }
+
+    fn run_as(role: &str, repo: Option<&str>, task: &str) -> Command {
+        Command::Run {
+            repo: repo.map(str::to_owned),
+            role: Some(role.to_owned()),
             task: task.to_owned(),
         }
     }
@@ -159,6 +246,37 @@ mod tests {
             ("/run shiioo", run(None, "shiioo")),
             ("fix it", run(None, "fix it")),
             ("  fix it  ", run(None, "fix it")),
+            (
+                "/run @reviewer shiioo check PR 12",
+                run_as("reviewer", Some("shiioo"), "check PR 12"),
+            ),
+            ("/run @reviewer check PR 12", run_as("reviewer", None, "check PR 12")),
+            ("@reviewer check PR 12", run_as("reviewer", None, "check PR 12")),
+            ("@ check", run(None, "@ check")),
+            ("/roles", Command::Roles),
+            ("/routines", Command::Routines),
+            ("/routine nightly", Command::Routine { name: "nightly".into() }),
+            ("/routine", Command::Unknown("/routine".into())),
+            ("/report", Command::Report),
+            ("/plans", Command::Plans),
+            (
+                "/plan shiioo ship v0.3 this week",
+                Command::Plan {
+                    repo: Some("shiioo".into()),
+                    goal: "ship v0.3 this week".into(),
+                },
+            ),
+            (
+                "/plan ship v0.3",
+                Command::Plan {
+                    repo: None,
+                    goal: "ship v0.3".into(),
+                },
+            ),
+            ("/plan approve abcd", Command::PlanApprove { plan: "abcd".into() }),
+            ("/plan show abcd", Command::PlanShow { plan: "abcd".into() }),
+            ("/plan approve", Command::Unknown("/plan approve".into())),
+            ("/plan", Command::Unknown("/plan".into())),
             ("/status", Command::Status),
             ("/status@shiioo_bot", Command::Status),
             ("/STATUS", Command::Status),

@@ -11,7 +11,10 @@
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use shiioo_api::{ApiOptions, ApiState, CapacityTracker, Employee, IsolationPolicy, Notifications};
+use shiioo_api::{
+    ApiOptions, ApiState, CapacityTracker, Employee, IsolationPolicy, IssueCreator, Notifications,
+    Role, Routine,
+};
 use shiioo_core::{Event, EventStore, RunId, Seq, verify_chain};
 use shiioo_rules::RuleSet;
 use shiioo_runtime::{
@@ -91,6 +94,11 @@ enum Command {
         /// `openshell`. Default: the office's policy in config.toml.
         #[arg(long, requires = "harness", value_parser = ["worktree", "container", "openshell"])]
         isolation: Option<String>,
+        /// Run as a configured role ([[roles]] in config.toml): its
+        /// instructions, tools, model and limits are laid over the
+        /// harness's defaults.
+        #[arg(long, requires = "harness")]
+        role: Option<String>,
     },
     /// Continue a run, for example after the process was killed.
     Resume {
@@ -243,8 +251,19 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             max_budget_usd,
             max_minutes,
             isolation,
+            role,
         } => {
             let worker = worker(&store, &workspace, &data, &effort)?;
+            let chosen_role = match &role {
+                Some(name) => Some(
+                    Config::load(&data.join("config.toml"))?
+                        .roles
+                        .into_iter()
+                        .find(|r| &r.name == name)
+                        .ok_or_else(|| format!("no role named {name} in config.toml"))?,
+                ),
+                None => None,
+            };
             let runtime = match harness.as_deref() {
                 Some(kind) => {
                     let mut h = if kind == "codex" {
@@ -263,9 +282,12 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                             .find(|(_, p)| *p == path)
                             .map(|(l, _)| l.clone())
                     });
-                    h.isolation = config
-                        .isolation_policy()
-                        .resolve(label.as_deref(), isolation.as_deref())?;
+                    h.isolation = config.isolation_policy().resolve(
+                        label.as_deref(),
+                        isolation
+                            .as_deref()
+                            .or(chosen_role.as_ref().and_then(|r| r.isolation.as_deref())),
+                    )?;
                     h.env = config.env.clone();
                     if let Some(mode) = permission_mode {
                         h.permission_mode = mode;
@@ -282,9 +304,8 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 None => Runtime::Native,
             };
             let is_harness = matches!(runtime, Runtime::Harness(_));
-            let spec = RunSpec {
-                task,
-                agent: AgentSpec {
+            let mut runtime = runtime;
+            let mut agent = AgentSpec {
                     model: model.unwrap_or_else(|| {
                         if is_harness {
                             String::new()
@@ -305,7 +326,13 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
                     }),
                     max_turns,
-                },
+            };
+            if let Some(role) = &chosen_role {
+                role.apply(&mut runtime, &mut agent);
+            }
+            let spec = RunSpec {
+                task,
+                agent,
                 runtime,
             };
             let run = worker.create(&spec).await?;
@@ -459,6 +486,29 @@ async fn sandbox_command(
     }
 }
 
+/// Creates the issues of an approved plan through the `gh` CLI, run in the
+/// repository (so per-repository account wrappers apply).
+struct GhIssues(shiioo_intake::Gh);
+
+impl IssueCreator for GhIssues {
+    fn create_issue(
+        &self,
+        repo: &Path,
+        title: &str,
+        body: &str,
+        label: &str,
+    ) -> shiioo_api::plans::BoxFuture<'_, Result<String, String>> {
+        let repo = repo.to_path_buf();
+        let (title, body, label) = (title.to_owned(), body.to_owned(), label.to_owned());
+        Box::pin(async move {
+            self.0
+                .create_issue(&repo, &title, &body, &label)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
 /// The office's secret store as the workers see it: a missing or
 /// unreadable store means no secrets, never a crash in a run.
 struct StoreSecrets(SecretStore);
@@ -559,8 +609,29 @@ async fn serve(
             notifications,
             isolation: config.isolation_policy(),
             env: config.env.clone(),
+            roles: config.roles.clone(),
+            routines: config.routines.clone(),
+            report: Some(config.report.schedule.clone()).filter(|s| !s.trim().is_empty()),
+            data_dir: Some(data.to_path_buf()),
+            issues: Some(Arc::new(GhIssues(shiioo_intake::Gh::new(None)))),
+            intake_label: config.intake.label.clone(),
         },
     );
+    tokio::spawn(Arc::clone(&state).run_scheduler());
+    if !config.routines.is_empty() || !config.report.schedule.trim().is_empty() {
+        println!("routines:\n{}", state.routines_text());
+    }
+    if !config.roles.is_empty() {
+        println!(
+            "roles: {}",
+            config
+                .roles
+                .iter()
+                .map(|r| format!("@{}", r.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     if config.intake.enabled {
         let repos: Vec<shiioo_intake::RepoIntake> = config
             .repos
@@ -654,6 +725,19 @@ struct Config {
     /// Environment every harness run gets. Values are literal or
     /// `secret:<name>`.
     env: BTreeMap<String, String>,
+    /// Reusable agent configurations, named with `@` in `/run`.
+    roles: Vec<Role>,
+    /// Runs that start on a schedule.
+    routines: Vec<Routine>,
+    report: ReportSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ReportSection {
+    /// When the morning report is sent (`weekdays 07:00`); empty = only
+    /// on `/report`.
+    schedule: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -857,6 +941,29 @@ mode = "allowlist"
 # Environment for every harness run. `secret:<name>` reads the secret store
 # (`shiioo secret set <name>`); the log records the reference, not the value.
 # GH_TOKEN = "secret:gh-token"
+
+[report]
+# The morning report on Telegram: what finished, what needs you, branches
+# awaiting review, capacity left. Empty = only on /report.
+# schedule = "weekdays 07:00"
+
+# Roles: reusable agent configurations. `/run @reviewer <repo> <task>`.
+# [[roles]]
+# name = "reviewer"
+# employee = "auto"
+# system = "You review code and write findings to REVIEW.md. Never push."
+# tools = ["Read", "Glob", "Grep", "Bash(git *)", "Write"]
+# isolation = "container"
+# max_minutes = 30
+
+# Routines: runs that start on a schedule (hourly, every 6h, daily 02:00,
+# weekdays 07:00, weekends 10:00, mon,thu 09:30). /routines lists them.
+# [[routines]]
+# name = "nightly-tests"
+# schedule = "daily 02:00"
+# repo = "myproject"
+# role = "tester"            # or employee = "codex"
+# task = "Run the full test suite; fix any flaky test you find and open a PR."
 "#;
 
 impl Config {
@@ -947,6 +1054,7 @@ impl shiioo_telegram::Office for TelegramOffice {
     fn start_run(
         &self,
         repo: Option<String>,
+        role: Option<String>,
         task: String,
     ) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
         Box::pin(async move {
@@ -970,10 +1078,11 @@ impl shiioo_telegram::Office for TelegramOffice {
                 ),
                 None => None,
             };
-            let (runtime, agent, employee) = self
-                .state
-                .assign("auto", repo_path)
-                .map_err(|e| e.to_string())?;
+            let (runtime, agent, employee) = match &role {
+                Some(role) => self.state.assign_role(role, repo_path, None),
+                None => self.state.assign("auto", repo_path),
+            }
+            .map_err(|e| e.to_string())?;
             let employee = match &runtime {
                 Runtime::Harness(h) if h.isolation.level() != "worktree" => {
                     format!("{employee}, {}", h.isolation.level())
@@ -999,6 +1108,75 @@ impl shiioo_telegram::Office for TelegramOffice {
                 None => format!("▶️ {} started ({employee}): {task}", short(run)),
             })
         })
+    }
+
+    fn roles(&self) -> shiioo_telegram::BoxFuture<'_, String> {
+        Box::pin(async move { self.state.roles_text() })
+    }
+
+    fn routines(&self) -> shiioo_telegram::BoxFuture<'_, String> {
+        Box::pin(async move { self.state.routines_text() })
+    }
+
+    fn fire_routine(&self, name: String) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            self.state
+                .fire_routine(&name)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn report(&self) -> shiioo_telegram::BoxFuture<'_, String> {
+        Box::pin(async move { self.state.report(None).await })
+    }
+
+    fn plan(
+        &self,
+        repo: Option<String>,
+        goal: String,
+    ) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            let repos = self.state.repos();
+            let label = match (repo, repos.as_slice()) {
+                (Some(label), _) => label,
+                (None, [only]) => only.clone(),
+                (None, []) => return Err("no repos configured; a plan needs one".into()),
+                (None, many) => {
+                    return Err(format!(
+                        "which repo? /plan <repo> <goal>, one of: {}",
+                        many.join(", ")
+                    ));
+                }
+            };
+            let run = self
+                .state
+                .start_plan(&label, &goal, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "📋 planning {} for {label}: {goal}\nThe chief of staff is reading the repository; \
+                 you get the plan here when it is done.",
+                short(run)
+            ))
+        })
+    }
+
+    fn plan_approve(&self, plan: String) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            self.state
+                .approve_plan(&plan)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn plan_show(&self, plan: String) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { self.state.plan_details(&plan).map_err(|e| e.to_string()) })
+    }
+
+    fn plans(&self) -> shiioo_telegram::BoxFuture<'_, String> {
+        Box::pin(async move { self.state.plans_text() })
     }
 
     fn status(&self) -> shiioo_telegram::BoxFuture<'_, String> {
@@ -1137,6 +1315,12 @@ impl Notifications for TelegramNotifications {
                     .await
                     .ok();
             }
+        })
+    }
+
+    fn message(&self, text: String) -> shiioo_api::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.notifier.notify(&text).await.ok();
         })
     }
 

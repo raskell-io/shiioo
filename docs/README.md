@@ -20,9 +20,9 @@ Detailed designs, one per area. Each section is marked *(built)*, *(planned)* or
 | [Execution](design/execution.md) | Run lifecycle, scheduling, the worker loop, leases, cancellation, subagents, recovery, failure modes, simulation |
 | [Tools and machines](design/tools-and-machines.md) | Tool model, built-in and MCP tools, nodes and their protocol, isolation levels, worktrees and snapshots, secrets |
 | [Runtimes and providers](design/runtimes-and-providers.md) | The native loop, the Claude Code and Codex harness drivers, ACP (planned), model providers and the router, context building |
-| [Governance](design/governance.md) | The owner's rules, approvals, budgets, change management, the virtual-company template |
+| [Governance](design/governance.md) | The owner's rules, approvals, budgets, change management, the virtual-company template (the chief of staff, routines, roles, the report) |
 | [Fork and replay](design/fork-and-replay.md) | Rewind, fork, diff, replay and evals |
-| [API](design/api.md) | REST and SSE, employees, permissions and approvals, capacity, diff, the dashboard, errors, auth |
+| [API](design/api.md) | REST and SSE, employees, permissions and approvals, capacity, diff, plans, routines, the report, the dashboard, errors, auth |
 | [Telegram](design/telegram.md) | The owner's phone: commands, approvals with one tap, notifications, security of the bot |
 | [Intake](design/intake.md) | Work arriving as labelled GitHub issues: the label protocol, the task prompt, dedup and state, failure handling |
 | [Security](design/security.md) | Threat model, controls, today's posture (isolation levels, egress, secrets and redaction), and what is not protected |

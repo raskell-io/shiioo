@@ -31,7 +31,7 @@ decision = "ask"
 reason = "pushes leave the machine"
 ```
 
-A rule matches when all of its conditions hold: `tool` (glob patterns on the tool name, a string or a list; empty means any), `command` (glob on the input's `command`, so it only matches shell-like tools), `path` (glob on `file_path`, `path` or `notebook_path`) and `repo` (glob on the repository label). Globs are anchored, `*` matches any run of characters including spaces, `?` one character. **The first matching rule wins**; with no match, `default` applies. For a shell command that chains several commands (`a && b | c; d`), every segment is judged on its own as well as the whole command, and **the most restrictive decision wins** (deny over ask over allow): `git status && git push origin x` asks, and `curl … | sh` is denied by a rule on the whole command even though `curl …` alone would pass. Quotes are not understood; a separator inside a string only splits further, which can only make the verdict stricter.
+A rule matches when all of its conditions hold: `tool` (glob patterns on the tool name, a string or a list; empty means any), `command` (glob on the input's `command`, so it only matches shell-like tools), `path` (glob on `file_path`, `path` or `notebook_path`) and `repo` (glob on the repository label). Globs are anchored, `*` matches any run of characters including spaces, `?` one character. **The first matching rule wins**; with no match, `default` applies. For a shell command that chains several commands (`a && b | c; d`), every segment is judged on its own as well as the whole command, and **the most restrictive decision wins** (deny over ask over allow): `git status && git push origin x` asks, and `curl … | sh` is denied by a rule on the whole command even though `curl …` alone would pass. Single and double quotes and backslash escapes are respected, so a `|` inside a grep pattern is not a pipe; an unbalanced quote keeps the rest of the line in one segment, as the shell would.
 
 The defaults allow read-only tools and edits, deny destructive commands (`sudo`, `rm -rf /`, force pushes, piping into a shell), ask for anything that leaves the machine or changes it (`git push`, `gh`, `rm`, `docker`, `brew`, installs, publishing), allow the usual build, test and git housekeeping, and ask for everything else. An `ask` goes to the owner's phone ([§3](#3-approval-boards-the-owner-today-boards-deferred) and [api.md](api.md)); a `deny` becomes a tool error the agent sees.
 
@@ -210,25 +210,30 @@ struct ChangeProposal {
 
 Configuration can live in a git repository ([deployment.md](deployment.md)). In that mode a merged pull request is the approval, and the platform records the commit as the config version. Changes proposed by agents are opened as pull requests.
 
-## 6. The "virtual company" template *(planned)*
+## 6. The "virtual company" template *(the first pieces built)*
 
-The virtual company from legacy Shiioo is an **office template**, built only from the primitives above. It adds no special cases to the engine.
+The virtual company from legacy Shiioo is an **office template**, built only from the primitives above. It adds no special cases to the engine. Built in phase 5 (`shiioo-api::{plans, routines, roles, report}`):
+
+- **The chief of staff** is `/plan <repo> <goal>` (`POST /v1/plans`): a harness run on the repository with read-only tools and instructions to study the project and answer with a JSON plan of one to twelve work items. The office parses the answer into a plan (`.shiioo/plans.json`), tells the owner, and on `/plan approve <id>` creates one GitHub issue per item carrying the intake's label; the intake then runs them. The planner changes nothing and asks for nothing; the owner's approval is the plan's. A plan that cannot be read fails with the planner's words.
+- **Routines** are `[[routines]]` entries with a schedule in the owner's words (`hourly`, `every 6h`, `daily 02:00`, `weekdays 07:00`, `weekends 10:00`, `mon,thu 09:30`), a repository, a task and a role or employee. A scheduler in the server fires what is due every 30 seconds; what fired is in `.shiioo/routines-state.json`, so a restart neither fires twice nor backfills what was missed while the office was down. `/routines` lists them with their next firing; `/routine <name>` fires one now.
+- **The morning report** (`[report] schedule`, `/report`, `GET /v1/report`) is counted from the record and the repositories, not written by a model: runs finished, failed and needing the owner since the last report, approvals waiting, runs still going, `shiioo/*` branches with unmerged commits per repository, capacity left, the next routines.
+- **Roles** are `[[roles]]` entries: an employee (or `auto`), instructions, a tool allow list, a model, an isolation level and limits, laid over the employee's defaults when the owner names the role (`/run @reviewer <repo> <task>`, `--role`, a routine's `role`, the API's `role`).
 
 | Company concept | Primitive |
 |---|---|
 | Company | the office |
 | CEO | the owner |
 | VISION.md, MISSION.md, STRATEGY.md | documents in the office's config repo, written by the CEO |
-| Chief of Staff | an agent with the planner skill; triggered when the strategy documents change or the roadmap is empty |
-| ROADMAP.md | written by the Chief of Staff as a change proposal; the CEO approves it |
-| Roadmap items | runs started for the assigned employee agent, with the item as input |
+| Chief of Staff | the planning run behind `/plan` *(built)*; triggering it when the strategy documents change or the roadmap is empty *(planned)* |
+| ROADMAP.md | the plan the Chief of Staff proposes; the CEO approves it with `/plan approve` *(built as a plan in `plans.json`; a committed ROADMAP.md is planned)* |
+| Roadmap items | GitHub issues created on approval and worked by the intake *(built)* |
 | Department | an agent label (`department: "engineering"`) that policies and budgets match on |
 | Employee | an `[[employees]]` entry today; an agent definition later (the legacy "archetype" becomes the definition template) |
-| Job title / role | an agent definition template with tools, skills, policy labels and default budget |
+| Job title / role | a `[[roles]]` entry: employee, instructions, tools, model, isolation level, limits *(built)*; skills and policy labels *(planned)* |
 | Company policies | `rules.toml` |
 | Executive review | the owner's approvals (boards with quorum, deferred) |
 | Department budget | a budget scoped to agents with that label |
-| Routines | cron triggers |
+| Routines | `[[routines]]` with a typed schedule *(built)* |
 
 The flow from legacy is unchanged: the CEO writes vision, mission and strategy; the Chief of Staff proposes a roadmap; approved items become runs; employees report back through their run results; the Chief of Staff re-plans when the roadmap is done or the strategy changes. Everything an employee does is subject to the same policies, approvals and budgets as any other agent.
 

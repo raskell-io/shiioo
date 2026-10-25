@@ -21,13 +21,44 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 pub trait Office: Send + Sync {
     /// Labels of the repositories the owner can name in `/run`.
     fn repos(&self) -> Vec<String>;
-    /// Starts a run. `Ok` is the reply, `Err` a user-facing refusal.
+    /// Starts a run, as `role` if one was named. `Ok` is the reply, `Err`
+    /// a user-facing refusal.
     fn start_run(
         &self,
         repo: Option<String>,
+        role: Option<String>,
         task: String,
     ) -> BoxFuture<'_, Result<String, String>>;
     fn status(&self) -> BoxFuture<'_, String>;
+    /// The configured roles, one line each.
+    fn roles(&self) -> BoxFuture<'_, String> {
+        Box::pin(async { "No roles configured.".to_owned() })
+    }
+    /// The configured routines and when they fire next.
+    fn routines(&self) -> BoxFuture<'_, String> {
+        Box::pin(async { "No routines configured.".to_owned() })
+    }
+    /// Fires a routine now.
+    fn fire_routine(&self, name: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { Err(format!("no routine named {name}")) })
+    }
+    /// The morning report, now.
+    fn report(&self) -> BoxFuture<'_, String> {
+        Box::pin(async { "No report available.".to_owned() })
+    }
+    /// Asks the chief of staff for a plan.
+    fn plan(&self, _repo: Option<String>, goal: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { Err(format!("planning is not available ({goal})")) })
+    }
+    fn plan_approve(&self, plan: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { Err(format!("no plan {plan}")) })
+    }
+    fn plan_show(&self, plan: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { Err(format!("no plan {plan}")) })
+    }
+    fn plans(&self) -> BoxFuture<'_, String> {
+        Box::pin(async { "No plans.".to_owned() })
+    }
     /// Remaining capacity per provider (subscription windows), as text.
     fn capacity(&self) -> BoxFuture<'_, String>;
     fn log(&self, run: String) -> BoxFuture<'_, String>;
@@ -39,8 +70,13 @@ pub trait Office: Send + Sync {
 pub fn help_text() -> &'static str {
     "Shiioo, your virtual company.\n\n\
      Send a task as plain text to start a run, or:\n\
-     /run <repo> <task> – run a task on a named repo\n\
+     /run [@role] [<repo>] <task> – run a task, as a role, on a repo\n\
+     /plan [<repo>] <goal> – the chief of staff breaks a goal into issues\n\
+     /plan approve <id> – create the issues; /plan show <id>, /plans\n\
      /status – what everyone is doing\n\
+     /report – the morning report, now\n\
+     /routines – scheduled work; /routine <name> fires one now\n\
+     /roles – roles you can name with @\n\
      /capacity – how much of this week's subscription windows is left\n\
      /log <run> – a run's steps (id or prefix)\n\
      /cancel <run> – stop a run\n\
@@ -152,11 +188,31 @@ async fn handle(
 
 async fn reply_to(office: &dyn Office, command: Command) -> String {
     match command {
-        Command::Run { repo, task } => match office.start_run(repo, task).await {
+        Command::Run { repo, role, task } => match office.start_run(repo, role, task).await {
             Ok(reply) => reply,
             Err(e) => format!("Couldn't start that: {e}"),
         },
         Command::Status => office.status().await,
+        Command::Roles => office.roles().await,
+        Command::Routines => office.routines().await,
+        Command::Routine { name } => match office.fire_routine(name).await {
+            Ok(reply) => reply,
+            Err(e) => format!("Couldn't fire that: {e}"),
+        },
+        Command::Report => office.report().await,
+        Command::Plan { repo, goal } => match office.plan(repo, goal).await {
+            Ok(reply) => reply,
+            Err(e) => format!("Couldn't plan that: {e}"),
+        },
+        Command::PlanApprove { plan } => match office.plan_approve(plan).await {
+            Ok(reply) => reply,
+            Err(e) => format!("Couldn't approve that: {e}"),
+        },
+        Command::PlanShow { plan } => match office.plan_show(plan).await {
+            Ok(reply) => reply,
+            Err(e) => format!("Couldn't show that: {e}"),
+        },
+        Command::Plans => office.plans().await,
         Command::Capacity => office.capacity().await,
         Command::Log { run } => office.log(run).await,
         Command::Cancel { run } => match office.cancel(run).await {

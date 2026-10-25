@@ -9,9 +9,9 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 | Company | Project | A self-contained unit with its own agents, policies, budgets, machines and runs. |
 | CEO | Project owner | The human who sets direction and holds final approval. |
 | Employee | Agent | A configured agent: model, instructions, tools, skills, policy, budget. |
-| Job title / role | Agent definition (template) | A reusable agent configuration, versioned. Legacy name: archetype. |
+| Job title / role | Role (`[[roles]]`) | A reusable agent configuration: employee, instructions, tools, model, isolation, limits; named with `@` in `/run`. Versioning is planned. Legacy name: archetype. |
 | Department | Agent label / group | A grouping of agents for policies, budgets and reporting. |
-| Chief of Staff | Planner agent | An agent that turns direction documents into a roadmap and work items. |
+| Chief of Staff | The planning run behind `/plan` | A read-only run that turns a goal into work items; the owner's approval makes them issues the intake works. Re-planning from direction documents is planned. |
 | Vision, mission, strategy | Direction documents | Files in the project the planner reads. Inputs, not platform objects. |
 | Task / assignment | Run | One agent working on one goal, with its own event log. |
 | Delegating to a colleague | Child run (subagent) | A run started by another run, with narrower credentials. |
@@ -21,7 +21,7 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 | Office / workstation | Machine | A host or sandbox running `shiioo daemon`, where tools execute. |
 | System credentials | Secret | Credentials stored encrypted in the office, referenced by name (`secret:<name>`), injected when a harness starts and redacted from the record. |
 | Locked office | Isolation level | Where a run executes: `worktree` (the owner's user), `container` (a container per run with an egress allow list), `openshell` (experimental). |
-| Recurring duty | Trigger (cron) | Starts runs on a schedule or on external events. |
+| Recurring duty | Routine (`[[routines]]`) | Starts runs on a typed schedule (`weekdays 07:00`, `every 6h`); external events are planned. |
 | Proposal for a policy change | Change request | An agent-proposed diff to agent definitions, policies or skills, approved by a board. |
 | The company's records | Event logs + audit | Hash-chained logs of every decision and action. |
 

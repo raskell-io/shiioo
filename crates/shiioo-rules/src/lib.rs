@@ -189,6 +189,24 @@ impl RuleSet {
             "git fetch*",
             "git pull*",
             "git worktree*",
+            "git tag",
+            "git tag -l*",
+            "git tag --list*",
+            "git tag -n*",
+            "git describe*",
+            "git remote",
+            "git remote -v",
+            "git remote show*",
+            "git rev-parse*",
+            "git rev-list*",
+            "git ls-files*",
+            "git ls-tree*",
+            "git blame*",
+            "git shortlog*",
+            "git cat-file*",
+            "git config --get*",
+            "git config -l*",
+            "git config --list*",
             "cargo *",
             "npm *",
             "pnpm *",
@@ -219,6 +237,30 @@ impl RuleSet {
             "test *",
             "true",
             "cd *",
+            "tree*",
+            "file *",
+            "stat *",
+            "du *",
+            "df *",
+            "date*",
+            "uname*",
+            "sort *",
+            "uniq *",
+            "cut *",
+            "tr *",
+            "diff *",
+            "jq *",
+            "nl *",
+            "od *",
+            "xxd *",
+            "shasum *",
+            "sha256sum *",
+            "md5 *",
+            "basename *",
+            "dirname *",
+            "realpath *",
+            "seq *",
+            "expr *",
         ] {
             rules.push(shell(command, Decision::Allow, None));
         }
@@ -386,21 +428,40 @@ fn path_of(input: &Value) -> Option<&str> {
     PATH_KEYS.iter().find_map(|k| input[*k].as_str())
 }
 
-/// Splits a shell command at `&&`, `||`, `;` and `|`. Quotes are not
-/// understood; a separator inside a string splits too, which can only make
-/// the verdict more restrictive, never less.
+/// Splits a shell command at `&&`, `||`, `;` and `|`, outside quotes.
+/// Single quotes, double quotes and backslash escapes are respected the
+/// way a POSIX shell reads them, so a `|` inside a grep pattern is not a
+/// pipe. An unbalanced quote swallows the rest of the line, as it would in
+/// the shell (which would then refuse to run it).
 fn split_command(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut chars = command.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
     while let Some(c) = chars.next() {
         match c {
+            '\\' if !in_single => {
+                current.push(c);
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+                current.push(c);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                current.push(c);
+            }
+            _ if in_single || in_double => current.push(c),
             '&' if chars.peek() == Some(&'&') => {
                 chars.next();
                 segments.push(std::mem::take(&mut current));
             }
             '|' => {
-                if chars.peek() == Some(&'|') {
+                if matches!(chars.peek(), Some('|' | '&')) {
                     chars.next();
                 }
                 segments.push(std::mem::take(&mut current));
@@ -780,5 +841,37 @@ reason = "pushes leave the machine"
         );
         assert_eq!(split_command("  single  "), vec!["single"]);
         assert_eq!(split_command("a;;b"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn split_respects_quotes_and_escapes() {
+        // A grep alternation is one command, and so is a quoted `;`.
+        assert_eq!(
+            split_command(r#"grep -rn "a\|b" docs | head -3"#),
+            vec![r#"grep -rn "a\|b" docs"#, "head -3"]
+        );
+        assert_eq!(
+            split_command("echo 'x; y && z' && git status"),
+            vec!["echo 'x; y && z'", "git status"]
+        );
+        assert_eq!(
+            split_command(r"printf 'a\n' \| cat && ls"),
+            vec![r"printf 'a\n' \| cat", "ls"]
+        );
+        // `|&` pipes stderr too; still a separator.
+        assert_eq!(split_command("make |& tee log"), vec!["make", "tee log"]);
+        // An unbalanced quote keeps the rest together, as the shell would.
+        assert_eq!(split_command("echo \"oops && rm -rf /"), vec!["echo \"oops && rm -rf /"]);
+    }
+
+    #[test]
+    fn quoted_pipes_do_not_make_a_read_only_grep_ask() {
+        let set = RuleSet::defaults();
+        let v = judge(
+            &set,
+            "Bash",
+            &shell(r#"grep -rn "release\|changelog" docs/*.md | head -40"#),
+        );
+        assert_eq!(v.decision, Decision::Allow, "{}", v.reason);
     }
 }
