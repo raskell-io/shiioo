@@ -1,5 +1,5 @@
 use crate::context;
-use crate::harness::claude_code::{self, Line};
+use crate::harness::claude_code::{self, HookEndpoint, Line};
 use crate::harness::{HarnessError, HarnessProcess};
 use crate::machine::{CallStatus, Invocation, LocalMachine, MachineError};
 use crate::model::{
@@ -30,6 +30,7 @@ pub struct Worker<S> {
     pub ttl_ms: u64,
     pub faults: Faults,
     observer: Option<Observer>,
+    hooks: Option<HookEndpoint>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +43,8 @@ pub enum RunOutcome {
     /// Another worker took over, or the lease expired. Stop; the run is
     /// safe in the log.
     LostLease,
+    /// The owner cancelled the run.
+    Cancelled(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,7 +100,16 @@ impl<S: EventStore + 'static> Worker<S> {
             ttl_ms: 30_000,
             faults: Faults::default(),
             observer: None,
+            hooks: None,
         }
+    }
+
+    /// Routes harness permission requests through Shiioo's API (rules,
+    /// then the owner). Without it, the harness's own permission mode
+    /// decides.
+    pub fn with_hooks(mut self, hooks: HookEndpoint) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 
     pub fn with_faults(mut self, faults: Faults) -> Self {
@@ -158,6 +170,7 @@ impl<S: EventStore + 'static> Worker<S> {
         Ok(match log.last().map(|e| &*e.payload) {
             Some(Payload::RunCompleted { output }) => RunOutcome::Completed(as_text(output)),
             Some(Payload::RunFailed { reason }) => RunOutcome::Failed(reason.clone()),
+            Some(Payload::RunCancelled { reason }) => RunOutcome::Cancelled(reason.clone()),
             _ => RunOutcome::Failed("run is closed".into()),
         })
     }
@@ -220,6 +233,9 @@ const MAX_HARNESS_STARTS: usize = 5;
 
 impl<S: EventStore + 'static> Session<'_, S> {
     async fn run(&mut self) -> Result<RunOutcome, WorkerError> {
+        if let Some(outcome) = self.cancel_if_requested().await? {
+            return Ok(outcome);
+        }
         if let Runtime::Harness(spec) = self.spec.runtime.clone() {
             return self.run_harness(&spec).await;
         }
@@ -237,6 +253,9 @@ impl<S: EventStore + 'static> Session<'_, S> {
             return Ok(outcome);
         }
         loop {
+            if let Some(outcome) = self.cancel_if_requested().await? {
+                return Ok(outcome);
+            }
             let turns = self
                 .log
                 .iter()
@@ -362,6 +381,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
             Some(session) => (claude_code::CONTINUE_PROMPT, Some(session.as_str())),
             None => (self.spec.task.as_str(), None),
         };
+        let run_id = self.run_id.to_string();
         let cmd = claude_code::command(
             &claude_code::binary(spec),
             spec,
@@ -369,6 +389,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
             &cwd,
             prompt,
             resume,
+            self.worker.hooks.as_ref().map(|h| (h, run_id.as_str())),
         );
         let mut process = HarnessProcess::spawn(cmd)?;
         let mut lost = self.lease_lost.clone();
@@ -486,6 +507,12 @@ impl<S: EventStore + 'static> Session<'_, S> {
                     return Ok(outcome.1);
                 }
                 Line::Other(_) => {}
+            }
+            if cancel_requested(&self.log).is_some() {
+                process.kill().await;
+                if let Some(outcome) = self.cancel_if_requested().await? {
+                    return Ok(outcome);
+                }
             }
         }
         // Output ended without a result: the process died or was killed.
@@ -625,15 +652,60 @@ impl<S: EventStore + 'static> Session<'_, S> {
         Ok(RunOutcome::Failed(reason))
     }
 
+    /// Appends under the lease. The owner may have appended external input
+    /// (a decision, a cancellation) since this worker last read the log; a
+    /// `SeqConflict` then means "re-read and try again", not "stop".
     async fn append(&mut self, payloads: Vec<Payload>) -> Result<(), WorkerError> {
         let lease = self.current_lease()?;
-        let next = Seq(self.log.len() as u64);
-        let events = self.worker.store.append(&lease, next, payloads).await?;
+        for _ in 0..4 {
+            let next = Seq(self.log.len() as u64);
+            match self
+                .worker
+                .store
+                .append(&lease, next, payloads.clone())
+                .await
+            {
+                Ok(events) => {
+                    self.absorb(events);
+                    return Ok(());
+                }
+                Err(StoreError::SeqConflict { actual, .. }) if actual > next => {
+                    self.catch_up().await?;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(WorkerError::Spec(
+            "the log kept changing while appending".into(),
+        ))
+    }
+
+    /// Reads events appended by others since the last read.
+    async fn catch_up(&mut self) -> Result<(), WorkerError> {
+        let from = Seq(self.log.len() as u64);
+        let events = self.worker.store.read(self.run_id, from).await?;
+        self.absorb(events);
+        Ok(())
+    }
+
+    fn absorb(&mut self, events: Vec<Event>) {
         if let Some(observer) = &self.worker.observer {
             events.iter().for_each(|e| observer(e));
         }
         self.log.extend(events);
-        Ok(())
+    }
+
+    /// If the owner asked for cancellation, closes the run with
+    /// `RunCancelled` and reports it.
+    async fn cancel_if_requested(&mut self) -> Result<Option<RunOutcome>, WorkerError> {
+        let Some(reason) = cancel_requested(&self.log) else {
+            return Ok(None);
+        };
+        self.append(vec![Payload::RunCancelled {
+            reason: reason.clone(),
+        }])
+        .await?;
+        Ok(Some(RunOutcome::Cancelled(reason)))
     }
 
     fn crash(&self, point: CrashPoint) -> Result<(), WorkerError> {
@@ -685,6 +757,21 @@ fn truncate(s: &str, max: usize) -> String {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_owned(),
     }
+}
+
+/// The reason of a `CancelRequested` that no `RunCancelled` has answered.
+fn cancel_requested(log: &[Event]) -> Option<String> {
+    if log.last().is_some_and(|e| e.payload.is_terminal()) {
+        return None;
+    }
+    log.iter().rev().find_map(|e| match &*e.payload {
+        Payload::CancelRequested { by, reason } => Some(if reason.is_empty() {
+            format!("cancelled by {by}")
+        } else {
+            format!("cancelled by {by}: {reason}")
+        }),
+        _ => None,
+    })
 }
 
 fn result(call_id: CallId, output: ToolOutput) -> Payload {

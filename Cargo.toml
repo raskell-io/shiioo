@@ -6,6 +6,8 @@ members = [
     "crates/shiioo-runtime",
     "crates/shiioo-api",
     "crates/shiioo-sim",
+    "crates/shiioo-telegram",
+    "crates/shiioo-rules",
     "crates/shiioo",
 ]
 
@@ -22,6 +24,8 @@ shiioo-core = { path = "crates/shiioo-core" }
 shiioo-store = { path = "crates/shiioo-store", default-features = false }
 shiioo-runtime = { path = "crates/shiioo-runtime" }
 shiioo-api = { path = "crates/shiioo-api" }
+shiioo-telegram = { path = "crates/shiioo-telegram" }
+shiioo-rules = { path = "crates/shiioo-rules" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
@@ -37,6 +41,7 @@ futures-util = "0.3"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "migrate", "macros"] }
 redb = "4"
 tempfile = "3"
+toml = "0.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

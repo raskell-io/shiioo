@@ -11,9 +11,35 @@ Crate: `shiioo-policy` *(planned)*. Credentials and tokens: [security.md](securi
 3. **Waiting is free.** A run waiting for an approval releases its lease and parks. It can wait for days without holding a worker.
 4. **Governance changes are governed.** Changing a policy, an agent definition or a board is itself a change that goes through approval ([§5](#5-change-management-planned)).
 
-## 2. Policies *(planned)*
+## 2. Policies *(phase-2 rule set built; Cedar planned)*
 
-Policies are written in [Cedar](https://www.cedarpolicy.com/). Cedar is small, has a Rust implementation, is analyzable (it can prove that one policy set is more permissive than another), and its evaluation is deterministic, which replay needs.
+### 2.0 Phase 2: the owner's rule set *(built, `shiioo-rules`)*
+
+For a single owner, policies are one TOML file of allow / ask / deny rules, `<data>/rules.toml`, written with sensible defaults on first start and edited by hand:
+
+```toml
+default = "ask"
+
+[[rules]]
+tool = ["Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "TodoWrite", "ToolSearch"]
+decision = "allow"
+
+[[rules]]
+tool = "Bash"
+command = "git push *"
+decision = "ask"
+reason = "pushes leave the machine"
+```
+
+A rule matches when all of its conditions hold: `tool` (glob patterns on the tool name, a string or a list; empty means any), `command` (glob on the input's `command`, so it only matches shell-like tools), `path` (glob on `file_path`, `path` or `notebook_path`) and `repo` (glob on the repository label). Globs are anchored, `*` matches any run of characters including spaces, `?` one character. **The first matching rule wins**; with no match, `default` applies. For a shell command that chains several commands (`a && b | c; d`), every segment is judged on its own as well as the whole command, and **the most restrictive decision wins** (deny over ask over allow): `git status && git push origin x` asks, and `curl … | sh` is denied by a rule on the whole command even though `curl …` alone would pass. Quotes are not understood; a separator inside a string only splits further, which can only make the verdict stricter.
+
+The defaults allow read-only tools and edits, deny destructive commands (`sudo`, `rm -rf /`, force pushes, piping into a shell), ask for anything that leaves the machine or changes it (`git push`, `gh`, `rm`, `docker`, `brew`, installs, publishing), allow the usual build, test and git housekeeping, and ask for everything else. An `ask` goes to the owner's phone ([§3](#3-approval-boards-planned) and `design/api.md`); a `deny` becomes a tool error the agent sees.
+
+The rest of this section is the Cedar design, which remains the plan for when several owners share an office and need roles, boards and analysable policies.
+
+### 2.0.1 Why Cedar later
+
+Policies would then be written in [Cedar](https://www.cedarpolicy.com/). Cedar is small, has a Rust implementation, is analyzable (it can prove that one policy set is more permissive than another), and its evaluation is deterministic, which replay needs.
 
 ### 2.1 What is evaluated
 

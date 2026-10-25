@@ -41,12 +41,22 @@ impl EventStore for TempStore {
     ) -> Result<Vec<shiioo_core::Event>, StoreError> {
         self.store.append(lease, expected_next, payloads).await
     }
+    async fn append_external(
+        &self,
+        run_id: shiioo_core::RunId,
+        payloads: Vec<Payload>,
+    ) -> Result<Vec<shiioo_core::Event>, StoreError> {
+        self.store.append_external(run_id, payloads).await
+    }
     async fn read(
         &self,
         run_id: shiioo_core::RunId,
         from: Seq,
     ) -> Result<Vec<shiioo_core::Event>, StoreError> {
         self.store.read(run_id, from).await
+    }
+    async fn list_runs(&self) -> Result<Vec<shiioo_core::RunId>, StoreError> {
+        self.store.list_runs().await
     }
 }
 

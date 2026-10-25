@@ -20,6 +20,7 @@ pub mod worker;
 pub mod workspace;
 
 pub use anthropic::AnthropicProvider;
+pub use harness::claude_code::HookEndpoint;
 pub use harness::{HarnessError, HarnessProcess};
 pub use machine::{CallStatus, Invocation, LocalMachine, MachineError};
 pub use model::{
@@ -28,7 +29,7 @@ pub use model::{
 };
 pub use scripted::ScriptedProvider;
 pub use spec::{AgentSpec, HarnessBilling, HarnessKind, HarnessSpec, RunSpec, Runtime};
-pub use status::{RunStatus, run_status};
+pub use status::{RunStatus, open_approval, run_status};
 pub use tools::{Tool, ToolOutput, Toolbox};
 pub use unconfigured::UnconfiguredProvider;
 pub use worker::{CrashPoint, Faults, RunOutcome, Worker, WorkerError};

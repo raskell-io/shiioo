@@ -85,6 +85,20 @@ impl<S: EventStore> EventStore for Notifying<S> {
         Ok(events)
     }
 
+    async fn append_external(
+        &self,
+        run_id: RunId,
+        payloads: Vec<Payload>,
+    ) -> Result<Vec<Event>, StoreError> {
+        let events = self.inner.append_external(run_id, payloads).await?;
+        self.publish(run_id, false);
+        Ok(events)
+    }
+
+    async fn list_runs(&self) -> Result<Vec<RunId>, StoreError> {
+        self.inner.list_runs().await
+    }
+
     async fn read(&self, run_id: RunId, from: Seq) -> Result<Vec<Event>, StoreError> {
         self.inner.read(run_id, from).await
     }

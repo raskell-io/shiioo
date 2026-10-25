@@ -17,6 +17,7 @@ postgres = ["dep:sqlx"]
 shiioo-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 redb = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync"] }
 sqlx = { workspace = true, optional = true }

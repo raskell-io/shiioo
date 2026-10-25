@@ -113,10 +113,50 @@ pub enum Payload {
         provider: String,
         windows: Value,
     },
+    /// Input from the owner or an integration, written by the server
+    /// without the run's lease. Makes a parked run runnable.
+    UserMessage {
+        author: String,
+        content: String,
+    },
+    /// The rules' verdict on a tool call: `allow`, `deny` or `ask`.
+    /// Written by the server when the harness (or the native loop) asks.
+    PolicyDecision {
+        call_id: Option<CallId>,
+        tool: String,
+        decision: String,
+        rule: Option<String>,
+        reason: String,
+    },
+    /// The owner has been asked. The call waits for `ApprovalDecided`.
+    ApprovalRequested {
+        approval_id: String,
+        call_id: Option<CallId>,
+        tool: String,
+        input: Value,
+        summary: String,
+        expires_at: Option<Timestamp>,
+    },
+    /// The owner (or a timeout) answered: `allow` or `deny`.
+    ApprovalDecided {
+        approval_id: String,
+        decision: String,
+        by: String,
+        note: Option<String>,
+    },
+    /// The owner asked for the run to stop. The worker stops at its next
+    /// step boundary and writes `RunCancelled`.
+    CancelRequested {
+        by: String,
+        reason: String,
+    },
     RunCompleted {
         output: Value,
     },
     RunFailed {
+        reason: String,
+    },
+    RunCancelled {
         reason: String,
     },
 }
@@ -126,7 +166,21 @@ impl Payload {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Payload::RunCompleted { .. } | Payload::RunFailed { .. }
+            Payload::RunCompleted { .. } | Payload::RunFailed { .. } | Payload::RunCancelled { .. }
+        )
+    }
+
+    /// Input that comes from outside the run's worker and may be appended
+    /// without its lease: the owner's messages and decisions. Everything
+    /// else is written by the lease holder (or the store itself).
+    pub fn is_external(&self) -> bool {
+        matches!(
+            self,
+            Payload::UserMessage { .. }
+                | Payload::PolicyDecision { .. }
+                | Payload::ApprovalRequested { .. }
+                | Payload::ApprovalDecided { .. }
+                | Payload::CancelRequested { .. }
         )
     }
 }

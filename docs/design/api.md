@@ -20,7 +20,8 @@ Read [architecture.md](../architecture.md) first. Related: [ADR-0004](../adr/000
 | Agents | `GET/POST /v1/projects/{project}/agents`, `GET/PATCH /v1/agents/{agent}`, `GET /v1/agents/{agent}/versions` |
 | Runs | `GET/POST /v1/projects/{project}/runs`, `GET /v1/runs/{run}` |
 | Run events | `GET /v1/runs/{run}/events?from={seq}&limit=…`, `GET /v1/runs/{run}/events/stream` |
-| Run commands | `POST /v1/runs/{run}/messages`, `POST /v1/runs/{run}/cancel`, `POST /v1/runs/{run}/fork` |
+| Run commands | `POST /v1/runs/{run}/messages`, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` |
+| Permissions | `POST /v1/runs/{run}/permissions` *(built)*: a harness hook asks before a tool call; the rules answer, or the request waits for `POST /v1/approvals/{id}` *(built)* with `{"decision":"allow"\|"deny","note"}` |
 | Run verification | `GET /v1/runs/{run}/verify` (re-checks the hash chain server-side, returns the head hash) |
 | Approvals | `GET /v1/projects/{project}/approvals?state=pending`, `GET /v1/approvals/{id}`, `POST /v1/approvals/{id}/decisions` |
 | Machines | `GET /v1/projects/{project}/machines`, `POST /v1/projects/{project}/machines/enrollments`, `DELETE /v1/machines/{machine}` |
@@ -104,7 +105,9 @@ data: {"kind":"tool_output","call_id":"c_12","stream":"stdout","chunk":"Compilin
 - A comment line every 15 s keeps proxies from closing idle connections.
 - The stream ends with `event: end` after a terminal event.
 
-**Built today** (`crates/shiioo-api`): `GET /v1/runs/{id}/events/stream` sends each log event as `event: event` with `id: <seq>` and the event JSON as data, resumes after `Last-Event-ID` (or from `?from=`), and ends after the terminal event. The handler subscribes to change notifications before its first read, then alternates reading the log and waiting; the `Notifying` store wrapper wakes it on every write in the same process, and a 2-second re-read covers writes from other processes until Postgres `LISTEN/NOTIFY` is wired in. No `delta` frames yet: the provider is not streaming. Also built: `POST /v1/runs` (with `Idempotency-Key`, kept in memory for now), `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events?from=`, `POST /v1/runs/{id}/resume`, bearer-token auth and problem+json errors.
+**Built today** (`crates/shiioo-api`): `GET /v1/runs/{id}/events/stream` sends each log event as `event: event` with `id: <seq>` and the event JSON as data, resumes after `Last-Event-ID` (or from `?from=`), and ends after the terminal event. The handler subscribes to change notifications before its first read, then alternates reading the log and waiting; the `Notifying` store wrapper wakes it on every write in the same process, and a 2-second re-read covers writes from other processes until Postgres `LISTEN/NOTIFY` is wired in. No `delta` frames yet: the provider is not streaming. Also built: `POST /v1/runs` (with `Idempotency-Key`, kept in memory for now), `GET /v1/runs` (most recently updated first), `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events?from=`, `POST /v1/runs/{id}/resume`, `POST /v1/runs/{id}/cancel`, the permission and approval endpoints, bearer-token auth and problem+json errors.
+
+**The approval loop** *(built)*: the worker starts Claude Code with a `PreToolUse` hook (`shiioo hook pre-tool-use`, see [runtimes-and-providers.md](runtimes-and-providers.md)). Before every tool call the hook `POST`s the call to `/v1/runs/{run}/permissions`. The server evaluates the owner's rules ([governance.md](governance.md)) and records a `PolicyDecision`; `allow`/`deny` answer at once. `ask` records an `ApprovalRequested`, notifies the owner (Telegram), and holds the HTTP request open until `POST /v1/approvals/{id}` records an `ApprovalDecided`, or the request expires (just under the hook's six-hour timeout) and is denied as `by: timeout`. The hook prints Claude Code's `permissionDecision` and the call proceeds or is refused. If the server is unreachable the hook denies, so a dead office never means an unguarded agent.
 
 ### 3.2 Project stream
 

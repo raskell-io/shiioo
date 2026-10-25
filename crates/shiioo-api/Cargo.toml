@@ -12,6 +12,7 @@ repository.workspace = true
 shiioo-core.workspace = true
 shiioo-store.workspace = true
 shiioo-runtime.workspace = true
+shiioo-rules.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

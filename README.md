@@ -46,6 +46,15 @@ cargo run -p shiioo -- --workspace ~/shiioo-office run --harness claude-code --r
 
 The run gets its own git worktree and a `shiioo/<run>` branch; every step Claude Code takes is in the run's log (`shiioo log <run-id>`), and `shiioo resume <run-id>` continues the same Claude Code session after a crash. No API key needed.
 
+Run the office and direct it from your phone:
+
+```sh
+export SHIIOO_TELEGRAM_TOKEN=...     # a bot from @BotFather
+cargo run -p shiioo -- --workspace ~/shiioo-office serve
+```
+
+The first start writes `~/shiioo-office/.shiioo/config.toml` (put your Telegram user id under `[telegram] owner_chat_id` and your repositories under `[repos]`) and `rules.toml` (what agents may do without asking). Then, from Telegram: `/run myproject fix the flaky test`, `/status`, `/log <run>`, `/cancel <run>`. Before every tool call Claude Code asks Shiioo; the rules allow or deny most calls, and the rest arrive on your phone with Allow / Deny buttons. Everything is recorded in the run's log.
+
 Or use Shiioo's own loop with a model API key:
 
 ```sh

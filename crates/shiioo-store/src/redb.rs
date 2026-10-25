@@ -171,6 +171,34 @@ impl EventStore for RedbStore {
         .await
     }
 
+    async fn append_external(
+        &self,
+        run_id: RunId,
+        payloads: Vec<Payload>,
+    ) -> Result<Vec<Event>, StoreError> {
+        self.blocking(move |db, clock| {
+            write_run(db, clock, run_id, |head, now| {
+                let events = head.append_external(payloads, now)?;
+                Ok((events.clone(), events))
+            })
+        })
+        .await
+    }
+
+    async fn list_runs(&self) -> Result<Vec<RunId>, StoreError> {
+        self.blocking(move |db, _| {
+            let txn = db.begin_read().map_err(backend)?;
+            let heads = txn.open_table(HEADS).map_err(backend)?;
+            let mut out = Vec::new();
+            for entry in heads.iter().map_err(backend)? {
+                let (k, _) = entry.map_err(backend)?;
+                out.push(RunId(uuid::Uuid::from_bytes(*k.value())));
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     async fn read(&self, run_id: RunId, from: Seq) -> Result<Vec<Event>, StoreError> {
         self.blocking(move |db, _| {
             let txn = db.begin_read().map_err(backend)?;

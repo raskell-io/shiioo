@@ -96,11 +96,11 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 
 | Variant | Fields (sketch) | Writer | Meaning |
 |---|---|---|---|
-| `UserMessage` | `author, content: Content` | api | Input from a person or integration. Makes the run runnable. |
+| `UserMessage` | `author, content` | api *(built: payload; no sender yet)* | Input from a person or integration. Makes the run runnable. |
 | `ModelRequested` | `provider, model, params_digest, context_digest, turn` | worker | Digest of exactly what was sent. Replay matches on it ([fork-and-replay.md](fork-and-replay.md)). |
-| `PolicyDecision` | `call_id, decision: allow\|deny\|require_approval, policy_version, reasons` | worker | Result of evaluating Cedar policies for a tool call ([governance.md](governance.md)). |
-| `ApprovalRequested` | `call_id, board, summary, expires_at` | worker | Run waits for a decision. |
-| `ApprovalDecided` | `call_id, decision, approvers, quorum` | api | Recorded when the board's quorum is met or someone rejects. |
+| `PolicyDecision` | `call_id, tool, decision: allow\|deny\|ask, rule, reason` | api *(built)* | The owner's rules' verdict on a tool call ([governance.md](governance.md)). Written without the lease (external). |
+| `ApprovalRequested` | `approval_id, call_id, tool, input, summary, expires_at` | api *(built)* | The owner has been asked; the tool call waits. |
+| `ApprovalDecided` | `approval_id, decision: allow\|deny, by, note` | api *(built)* | The owner's answer, or `by: timeout`. |
 | `BudgetCharged` | `call_id?, tokens_in, tokens_out, cost_micros, budget_ids` | worker | Usage after each model or tool call. |
 | `ChildRunStarted` | `child_run_id, agent, task_digest` | worker | Parent spawned a subagent. |
 | `ChildRunFinished` | `child_run_id, outcome, output_ref` | scheduler | Copied into the parent when the child reaches a terminal event. |
@@ -110,8 +110,8 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 | `ReplayDiverged` | `turn, expected_digest, actual_digest` | worker | A replayed turn no longer matches the recording. |
 | `RunParked` | `waiting_for: input\|approval\|tool\|timer, wake_at?` | worker | The worker releases the run; no lease is held while parked. |
 | `RunWoken` | `reason` | worker | First event after a parked run is picked up again. |
-| `CancelRequested` | `by, reason` | api | The worker stops at the next step boundary and writes `RunCancelled`. |
-| `RunCancelled` | `reason` | worker | Terminal. |
+| `CancelRequested` | `by, reason` | api *(built)* | The worker stops at its next step and writes `RunCancelled`. |
+| `RunCancelled` | `reason` | worker *(built)* | Terminal. |
 | `ToolReconciled` | `call_id, outcome, source: daemon\|hook\|human` | worker | Resolves a `ToolOutcomeUnknown`. |
 | `BudgetWarning` / `BudgetExceeded` | `budget_id, used, limit` | worker | Soft limit crossed; hard limit hit (the run parks or fails, per budget) ([governance.md](governance.md)). |
 | `ConfigUpdated` | `kind, from_version, to_version` | worker | A change marked `applies_to_running` took effect mid-run ([governance.md](governance.md)). |
@@ -122,7 +122,7 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 
 Project-level events that are not part of a run (machine enrolment and revocation such as `MachineRevoked`, config changes, signed checkpoints, archival) go to a per-project audit log with the same format and chain rules.
 
-**Writes by the api.** `UserMessage`, `ApprovalDecided` and `CancelRequested` come from the api, which does not hold the run's lease. These go through a separate store operation, `append_external(run, payload)`, that does not take a lease and accepts only those external variants. It serializes with the run's head lock like any other write. The worker sees them on its next read. This keeps workers the only writers of execution events while still letting outside input in without waiting for a lease.
+**Writes by the api** *(built)*. `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided` and `CancelRequested` (`Payload::is_external`) come from the server, which does not hold the run's lease. They go through `EventStore::append_external(run, payloads)`, which takes no lease, accepts only external variants, refuses closed runs, and serializes with the run's head lock like any other write; the events carry the current epoch. The lease holder's next append then gets `SeqConflict`, re-reads the tail and retries, which is also how it learns of a cancellation or a decision. Workers stay the only writers of execution events.
 
 ## 4. Blobs *(planned)*
 

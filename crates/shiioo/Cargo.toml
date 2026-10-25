@@ -13,10 +13,15 @@ shiioo-core.workspace = true
 shiioo-store = { workspace = true, features = ["redb"] }
 shiioo-runtime.workspace = true
 shiioo-api.workspace = true
+shiioo-rules.workspace = true
+shiioo-telegram.workspace = true
+serde.workspace = true
+toml.workspace = true
 axum.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 clap.workspace = true
+reqwest.workspace = true
 tokio = { workspace = true, features = ["signal", "net"] }
 
 [lints]

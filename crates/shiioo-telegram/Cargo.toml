@@ -1,0 +1,23 @@
+[package]
+name = "shiioo-telegram"
+description = "The owner's phone: a small Telegram Bot API client, commands, approvals and notifications."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

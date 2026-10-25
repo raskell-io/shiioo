@@ -63,9 +63,23 @@ pub trait EventStore: Send + Sync {
         payloads: Vec<Payload>,
     ) -> impl Future<Output = Result<Vec<Event>, StoreError>> + Send;
 
+    /// Appends external input (owner messages, decisions, cancellation
+    /// requests) without a lease. Rejects execution payloads and closed
+    /// runs. See `RunHead::append_external`.
+    fn append_external(
+        &self,
+        run_id: RunId,
+        payloads: Vec<Payload>,
+    ) -> impl Future<Output = Result<Vec<Event>, StoreError>> + Send;
+
     fn read(
         &self,
         run_id: RunId,
         from: Seq,
     ) -> impl Future<Output = Result<Vec<Event>, StoreError>> + Send;
+
+    /// Every run in the store, in no particular order. A projection (run
+    /// list with status and times) is the long-term answer; this serves a
+    /// personal office with hundreds of runs well enough.
+    fn list_runs(&self) -> impl Future<Output = Result<Vec<RunId>, StoreError>> + Send;
 }

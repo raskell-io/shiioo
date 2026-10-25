@@ -28,6 +28,10 @@ macro_rules! conformance_suite {
             workers_cannot_forge_store_events,
             unknown_run_is_not_found,
             read_from_offset,
+            external_input_needs_no_lease,
+            external_append_rejects_execution_events,
+            external_append_rejects_closed_runs,
+            lists_runs,
         );
     };
     (@cases $setup:path; $($case:ident),* $(,)?) => {
@@ -361,5 +365,107 @@ pub async fn read_from_offset<S: EventStore>(store: &S, _: &ManualClock) -> Resu
         vec![Seq(2), Seq(3)]
     );
     assert!(store.read(run, Seq(10)).await?.is_empty());
+    Ok(())
+}
+
+fn decision() -> Payload {
+    Payload::ApprovalDecided {
+        approval_id: "ap-1".into(),
+        decision: "allow".into(),
+        by: "owner".into(),
+        note: None,
+    }
+}
+
+/// The owner answers an approval while the worker holds the lease. The
+/// decision lands in the log without a lease; the worker's next append
+/// (with its stale view) gets `SeqConflict`, re-reads, and continues.
+pub async fn external_input_needs_no_lease<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
+    store.append(&lease, Seq(2), vec![model_step(1)]).await?;
+
+    let external = store.append_external(run, vec![decision()]).await?;
+    assert_eq!(external[0].seq, Seq(3));
+    assert_eq!(
+        external[0].epoch, lease.epoch,
+        "attributed to the current epoch"
+    );
+
+    let err = store.append(&lease, Seq(3), vec![model_step(2)]).await;
+    assert_eq!(
+        err,
+        Err(StoreError::SeqConflict {
+            expected: Seq(3),
+            actual: Seq(4)
+        })
+    );
+    let tail = store.read(run, Seq(3)).await?;
+    assert!(matches!(*tail[0].payload, Payload::ApprovalDecided { .. }));
+    store.append(&lease, Seq(4), vec![model_step(2)]).await?;
+
+    let events = store.read(run, Seq(0)).await?;
+    assert_eq!(events.len(), 5);
+    assert_eq!(verify_chain(&events), Ok(()));
+    Ok(())
+}
+
+pub async fn external_append_rejects_execution_events<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let err = store
+        .append_external(
+            run,
+            vec![
+                decision(),
+                Payload::ToolResult {
+                    call_id: "x".into(),
+                    output: json!("forged"),
+                    is_error: false,
+                },
+            ],
+        )
+        .await;
+    assert!(matches!(err, Err(StoreError::InvalidPayload(_))), "{err:?}");
+    assert_eq!(store.read(run, Seq(0)).await?.len(), 1, "nothing written");
+    Ok(())
+}
+
+pub async fn external_append_rejects_closed_runs<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let lease = store.acquire_lease(run, "w1".into(), TTL).await?;
+    store
+        .append(
+            &lease,
+            Seq(2),
+            vec![Payload::RunCompleted {
+                output: json!("done"),
+            }],
+        )
+        .await?;
+    assert_eq!(
+        store.append_external(run, vec![decision()]).await,
+        Err(StoreError::RunClosed(run))
+    );
+    Ok(())
+}
+
+pub async fn lists_runs<S: EventStore>(store: &S, _: &ManualClock) -> Result<(), StoreError> {
+    let a = store.create_run(json!({})).await?;
+    let b = store.create_run(json!({})).await?;
+    let mut runs = store.list_runs().await?;
+    runs.retain(|r| *r == a || *r == b);
+    runs.sort();
+    let mut expected = vec![a, b];
+    expected.sort();
+    assert_eq!(runs, expected);
     Ok(())
 }

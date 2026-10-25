@@ -174,6 +174,29 @@ impl EventStore for PostgresStore {
         Ok(events)
     }
 
+    async fn append_external(
+        &self,
+        run_id: RunId,
+        payloads: Vec<Payload>,
+    ) -> Result<Vec<Event>, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let mut head = Self::lock_head(&mut tx, run_id).await?;
+        let now = self.now(&mut tx).await?;
+        let events = head.append_external(payloads, now)?;
+        Self::insert_events(&mut tx, &events).await?;
+        Self::save_head(&mut tx, &head).await?;
+        tx.commit().await.map_err(backend)?;
+        Ok(events)
+    }
+
+    async fn list_runs(&self) -> Result<Vec<RunId>, StoreError> {
+        let ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT run_id FROM runs")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(ids.into_iter().map(RunId).collect())
+    }
+
     async fn read(&self, run_id: RunId, from: Seq) -> Result<Vec<Event>, StoreError> {
         let rows = sqlx::query(
             "SELECT seq, epoch, recorded_at_ms, schema, prev_hash, hash, payload::text AS payload

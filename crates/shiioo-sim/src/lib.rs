@@ -762,6 +762,16 @@ pub fn compact(ev: &Event) -> String {
         Payload::HarnessSessionStarted { session_id, .. } => format!("harness {session_id}"),
         Payload::HarnessResult { subtype, .. } => format!("harness result {subtype}"),
         Payload::CapacityObserved { provider, .. } => format!("capacity {provider}"),
+        Payload::UserMessage { author, .. } => format!("message from {author}"),
+        Payload::PolicyDecision { tool, decision, .. } => format!("rules {decision} {tool}"),
+        Payload::ApprovalRequested { approval_id, .. } => format!("approval? {approval_id}"),
+        Payload::ApprovalDecided {
+            approval_id,
+            decision,
+            ..
+        } => format!("approval {approval_id} {decision}"),
+        Payload::CancelRequested { by, .. } => format!("cancel by {by}"),
+        Payload::RunCancelled { .. } => "cancelled".to_owned(),
         Payload::RunCompleted { .. } => "completed".to_owned(),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
     };

@@ -137,6 +137,37 @@ impl RunHead {
         Ok(events)
     }
 
+    /// Appends input from outside the worker (the owner's decisions,
+    /// messages, cancellation requests) without a lease. Only external
+    /// payloads are accepted; they are attributed to the current epoch.
+    /// The lease holder's next append sees `SeqConflict` and re-reads.
+    pub fn append_external(
+        &mut self,
+        payloads: Vec<Payload>,
+        now: Timestamp,
+    ) -> Result<Vec<Event>, StoreError> {
+        if payloads.is_empty() {
+            return Err(StoreError::InvalidPayload("empty batch"));
+        }
+        if payloads.iter().any(|p| !p.is_external()) {
+            return Err(StoreError::InvalidPayload(
+                "only external input (messages, decisions, cancellation requests) may be \
+                 appended without a lease",
+            ));
+        }
+        if self.closed {
+            return Err(StoreError::RunClosed(self.run_id));
+        }
+        let epoch = self.current_epoch();
+        let mut next = self.clone();
+        let events = payloads
+            .into_iter()
+            .map(|p| next.seal(epoch, now, p))
+            .collect::<Result<Vec<_>, _>>()?;
+        *self = next;
+        Ok(events)
+    }
+
     fn seal(
         &mut self,
         epoch: Epoch,

@@ -41,8 +41,50 @@ const SESSION_ENV: &[&str] = &[
 pub const CONTINUE_PROMPT: &str = "The process running you was stopped before you finished. \
     Check the current state of the workspace, then continue the task to completion.";
 
+/// Where a harness's permission requests go: Shiioo's own API. Claude Code
+/// runs `<exe> hook pre-tool-use` before every tool call; that subcommand
+/// asks the server and prints the decision ([`hook_settings`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookEndpoint {
+    pub server_url: String,
+    pub token: String,
+    pub exe: PathBuf,
+}
+
+/// Seconds a permission request may wait for the owner before Claude Code
+/// gives up on the hook (which denies the call).
+pub const HOOK_TIMEOUT_SECS: u64 = 6 * 60 * 60;
+
+/// The `--settings` JSON that installs the permission hook.
+pub fn hook_settings(exe: &Path) -> String {
+    serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("{} hook pre-tool-use", shell_quote(&exe.to_string_lossy())),
+                    "timeout": HOOK_TIMEOUT_SECS,
+                }]
+            }]
+        }
+    })
+    .to_string()
+}
+
+fn shell_quote(s: &str) -> String {
+    if s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"/._-+".contains(&b))
+    {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
 /// Builds the command for a new session, or for resuming `resume` with a
-/// follow-up prompt.
+/// follow-up prompt. With `hooks`, every tool call is first judged by
+/// Shiioo (rules, then the owner); the harness's own permission mode is
+/// then `default`, so nothing is auto-approved behind the rules' back.
 pub fn command(
     binary: &Path,
     spec: &HarnessSpec,
@@ -50,6 +92,7 @@ pub fn command(
     cwd: &Path,
     prompt: &str,
     resume: Option<&str>,
+    hooks: Option<(&HookEndpoint, &str)>,
 ) -> Command {
     let (model, system, tools, max_turns) = (
         agent.model.as_str(),
@@ -60,6 +103,11 @@ pub fn command(
     let mut cmd = Command::new(binary);
     // The prompt goes right after --print: later options take variable
     // numbers of values and would swallow a trailing positional.
+    let permission_mode = if hooks.is_some() {
+        "default"
+    } else {
+        spec.permission_mode.as_str()
+    };
     cmd.current_dir(cwd)
         .arg("--print")
         .arg(prompt)
@@ -67,7 +115,7 @@ pub fn command(
         .arg("stream-json")
         .arg("--verbose")
         .arg("--permission-mode")
-        .arg(&spec.permission_mode)
+        .arg(permission_mode)
         .arg("--setting-sources")
         .arg(&spec.setting_sources)
         .arg("--max-turns")
@@ -89,6 +137,13 @@ pub fn command(
         cmd.arg("--resume")
             .arg(session)
             .env("CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "1");
+    }
+    if let Some((endpoint, run_id)) = hooks {
+        cmd.arg("--settings")
+            .arg(hook_settings(&endpoint.exe))
+            .env("SHIIOO_SERVER_URL", &endpoint.server_url)
+            .env("SHIIOO_API_TOKEN", &endpoint.token)
+            .env("SHIIOO_RUN_ID", run_id);
     }
     // A Claude Code started from inside another one (as Shiioo itself may
     // be) must not inherit the parent session's identity.
@@ -292,6 +347,7 @@ mod tests {
             Path::new("/tmp"),
             "do it",
             Some("sess-1"),
+            None,
         );
         let std_cmd = cmd.as_std();
         let args: Vec<String> = std_cmd
@@ -343,5 +399,61 @@ mod tests {
             set.iter()
                 .any(|k| k == "CLAUDE_CODE_RESUME_INTERRUPTED_TURN")
         );
+    }
+
+    #[test]
+    fn hooks_switch_to_default_mode_and_install_the_hook() {
+        let spec = HarnessSpec::claude_code();
+        let agent = AgentSpec {
+            model: String::new(),
+            system: String::new(),
+            tools: vec![],
+            max_turns: 5,
+        };
+        let endpoint = HookEndpoint {
+            server_url: "http://127.0.0.1:7878".into(),
+            token: "tok".into(),
+            exe: PathBuf::from("/opt/my shiioo/shiioo"),
+        };
+        let cmd = command(
+            Path::new("claude"),
+            &spec,
+            &agent,
+            Path::new("/tmp"),
+            "go",
+            None,
+            Some((&endpoint, "run-1")),
+        );
+        let std_cmd = cmd.as_std();
+        let args: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let mode_at = args.iter().position(|a| a == "--permission-mode");
+        assert_eq!(
+            mode_at.and_then(|i| args.get(i + 1)).map(String::as_str),
+            Some("default")
+        );
+        let settings_at = args.iter().position(|a| a == "--settings");
+        let settings: serde_json::Value = serde_json::from_str(
+            args.get(settings_at.map_or(usize::MAX, |i| i + 1))
+                .map_or("", String::as_str),
+        )
+        .unwrap_or_else(|e| panic!("settings json: {e}"));
+        let hook = &settings["hooks"]["PreToolUse"][0]["hooks"][0];
+        assert_eq!(hook["type"], "command");
+        assert_eq!(hook["command"], "'/opt/my shiioo/shiioo' hook pre-tool-use");
+        assert_eq!(hook["timeout"], HOOK_TIMEOUT_SECS);
+        let env: Vec<(String, String)> = std_cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+        assert!(env.contains(&("SHIIOO_RUN_ID".into(), "run-1".into())));
+        assert!(env.contains(&("SHIIOO_API_TOKEN".into(), "tok".into())));
     }
 }

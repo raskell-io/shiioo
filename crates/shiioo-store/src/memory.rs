@@ -85,6 +85,25 @@ impl<C: Clock> EventStore for MemoryStore<C> {
         Ok(events)
     }
 
+    async fn append_external(
+        &self,
+        run_id: RunId,
+        payloads: Vec<Payload>,
+    ) -> Result<Vec<Event>, StoreError> {
+        let now = self.clock.now();
+        let mut runs = self.runs()?;
+        let log = runs
+            .get_mut(&run_id)
+            .ok_or(StoreError::RunNotFound(run_id))?;
+        let events = log.head.append_external(payloads, now)?;
+        log.events.extend(events.iter().cloned());
+        Ok(events)
+    }
+
+    async fn list_runs(&self) -> Result<Vec<RunId>, StoreError> {
+        Ok(self.runs()?.keys().copied().collect())
+    }
+
     async fn read(&self, run_id: RunId, from: Seq) -> Result<Vec<Event>, StoreError> {
         let runs = self.runs()?;
         let log = runs.get(&run_id).ok_or(StoreError::RunNotFound(run_id))?;
