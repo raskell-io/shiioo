@@ -92,13 +92,18 @@ enum Command {
         #[command(subcommand)]
         event: HookEvent,
     },
-    /// Serve the HTTP API (runs over REST, live events over SSE) on this
-    /// machine. Requests need the token stored in `.shiioo/api-token`.
+    /// Run the office: the API and dashboard, the Telegram bot, and the
+    /// workers, all in this process. `shiioo up` is the same command.
+    #[command(visible_alias = "up")]
     Serve {
         /// Address to listen on. Loopback by default: the API runs tools on
-        /// this machine.
+        /// this machine. Reach it from your phone over Tailscale.
         #[arg(long, default_value = "127.0.0.1:7878")]
         listen: String,
+        /// Keep the machine from sleeping while the office runs (macOS
+        /// `caffeinate`). The installed service turns this on.
+        #[arg(long)]
+        keep_awake: bool,
         /// Model for runs that don't name an agent.
         #[arg(long, default_value = DEFAULT_MODEL)]
         model: String,
@@ -111,6 +116,22 @@ enum Command {
         #[arg(long, default_value = "high")]
         effort: String,
     },
+    /// Install the office as a background service that starts at login,
+    /// restarts if it stops, and keeps the machine awake (macOS launchd;
+    /// Linux systemd --user).
+    Install {
+        #[arg(long, default_value = "127.0.0.1:7878")]
+        listen: String,
+        /// Telegram bot token to store for the service (default: the
+        /// SHIIOO_TELEGRAM_TOKEN variable, if set).
+        #[arg(long)]
+        telegram_token: Option<String>,
+        /// Print the service definition instead of installing it.
+        #[arg(long)]
+        print: bool,
+    },
+    /// Remove the background service (the office's data stays).
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -225,25 +246,40 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Command::Serve {
             listen,
+            keep_awake,
             model,
             tools,
             effort,
-        } => serve(&store, &workspace, &data, &listen, model, tools, &effort).await,
+        } => {
+            serve(
+                &store, &workspace, &data, &listen, keep_awake, model, tools, &effort,
+            )
+            .await
+        }
+        Command::Install {
+            listen,
+            telegram_token,
+            print,
+        } => install(&workspace, &data, &listen, telegram_token, print),
+        Command::Uninstall => uninstall(),
         // Answered before the store was opened: hooks run in the harness's
         // working directory, not in an office.
         Command::Hook { .. } => Ok(ExitCode::SUCCESS),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve(
     store: &Arc<RedbStore>,
     workspace: &Path,
     data: &Path,
     listen: &str,
+    keep_awake: bool,
     model: String,
     tools: Vec<String>,
     effort: &str,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let _awake = if keep_awake { stay_awake() } else { None };
     let config = Config::load(&data.join("config.toml"))?;
     let rules = load_rules(&data.join("rules.toml"))?;
     let store = Arc::new(Notifying::new(RedbStore::clone(store)));
@@ -280,10 +316,14 @@ async fn serve(
         .with_hooks(hooks.clone())
     });
 
-    let telegram = config.telegram_bot();
-    let notifications: Option<Arc<dyn Notifications>> = telegram
-        .as_ref()
-        .map(|(bot, owner)| Arc::new(TelegramNotifications::new(Arc::clone(bot), *owner)) as _);
+    let telegram = config.telegram_bot(data);
+    let notifications: Option<Arc<dyn Notifications>> = telegram.as_ref().map(|(bot, owner)| {
+        Arc::new(TelegramNotifications::new(
+            Arc::clone(bot),
+            *owner,
+            config.dashboard.url.clone(),
+        )) as _
+    });
     let state = ApiState::with_options(
         store,
         workers,
@@ -313,10 +353,13 @@ async fn serve(
         );
     }
     println!(
-        "listening on http://{addr}  (token: {}, {} repo(s), rules: {})",
-        token_path.display(),
+        "listening on http://{addr}  ({} repo(s), rules: {})",
         config.repos.len(),
         data.join("rules.toml").display()
+    );
+    println!(
+        "dashboard: http://{addr}/#token=<contents of {}>",
+        token_path.display()
     );
     axum::serve(listener, shiioo_api::router(state))
         .with_graceful_shutdown(async {
@@ -331,9 +374,18 @@ async fn serve(
 #[serde(default)]
 struct Config {
     telegram: TelegramConfig,
+    dashboard: DashboardConfig,
     /// Repository label → path. `/run <label> <task>` on the phone picks
     /// one; rules can be scoped to a label.
     repos: BTreeMap<String, PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct DashboardConfig {
+    /// Where the owner reaches the dashboard from the phone, for links in
+    /// notifications (for example `https://mac-studio.tailnet.ts.net`).
+    url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -352,6 +404,11 @@ const DEFAULT_CONFIG: &str = r#"# Shiioo office configuration.
 # (or `token = "..."` here). Create a bot with @BotFather.
 # Your own Telegram user id (the bot obeys nobody else). @userinfobot tells you yours.
 # owner_chat_id = 123456789
+
+[dashboard]
+# Where you reach the dashboard from your phone; notifications link to it.
+# After `tailscale serve --bg 7878`: url = "https://<machine>.<tailnet>.ts.net"
+# url = ""
 
 [repos]
 # label = "/absolute/path/to/repository"
@@ -377,11 +434,19 @@ impl Config {
         Ok(config)
     }
 
-    fn telegram_bot(&self) -> Option<(Arc<shiioo_telegram::Bot>, i64)> {
+    /// The bot token comes from the environment, the config, or the
+    /// `telegram-token` file `shiioo install` writes for the service.
+    fn telegram_bot(&self, data: &Path) -> Option<(Arc<shiioo_telegram::Bot>, i64)> {
         let token = std::env::var("SHIIOO_TELEGRAM_TOKEN")
             .ok()
             .filter(|t| !t.is_empty())
-            .or_else(|| self.telegram.token.clone())?;
+            .or_else(|| self.telegram.token.clone())
+            .or_else(|| {
+                std::fs::read_to_string(data.join("telegram-token"))
+                    .ok()
+                    .map(|t| t.trim().to_owned())
+                    .filter(|t| !t.is_empty())
+            })?;
         let owner = std::env::var("SHIIOO_TELEGRAM_OWNER")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -554,16 +619,26 @@ impl shiioo_telegram::Office for TelegramOffice {
 /// What the office tells the owner on its own initiative.
 struct TelegramNotifications {
     notifier: shiioo_telegram::Notifier,
+    dashboard_url: Option<String>,
     /// approval id → (message id, text) of the question we sent, so the
     /// message can be marked when the request expires.
     asked: Mutex<HashMap<String, (i64, String)>>,
 }
 
 impl TelegramNotifications {
-    fn new(bot: Arc<shiioo_telegram::Bot>, owner: i64) -> Self {
+    fn new(bot: Arc<shiioo_telegram::Bot>, owner: i64, dashboard_url: Option<String>) -> Self {
         Self {
             notifier: shiioo_telegram::Notifier::new(bot, owner),
+            dashboard_url,
             asked: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// A link to the run in the dashboard, when the owner configured one.
+    fn link(&self, run: RunId) -> String {
+        match &self.dashboard_url {
+            Some(url) => format!("\n{}/#run={run}", url.trim_end_matches('/')),
+            None => String::new(),
         }
     }
 }
@@ -576,7 +651,11 @@ impl Notifications for TelegramNotifications {
         summary: String,
     ) -> shiioo_api::BoxFuture<'_, ()> {
         Box::pin(async move {
-            let text = format!("🔐 {} wants to run\n{summary}", short(run));
+            let text = format!(
+                "🔐 {} wants to run\n{summary}{}",
+                short(run),
+                self.link(run)
+            );
             match self.notifier.ask_approval(&approval_id, &text).await {
                 Ok(message_id) => {
                     if let Ok(mut asked) = self.asked.lock() {
@@ -632,9 +711,260 @@ impl Notifications for TelegramNotifications {
                     format!("⏸ {} stopped without finishing: {task}", short(run))
                 }
             };
-            self.notifier.notify(&text).await.ok();
+            self.notifier
+                .notify(&format!("{text}{}", self.link(run)))
+                .await
+                .ok();
         })
     }
+}
+
+/// Keeps a Mac from sleeping while the office runs: `caffeinate` tied to
+/// this process. Dropping the child ends it.
+fn stay_awake() -> Option<tokio::process::Child> {
+    if !cfg!(target_os = "macos") {
+        eprintln!("--keep-awake is only implemented on macOS; ignoring");
+        return None;
+    }
+    match tokio::process::Command::new("caffeinate")
+        .args(["-s", "-i", "-w", &std::process::id().to_string()])
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!("could not start caffeinate: {e}");
+            None
+        }
+    }
+}
+
+const SERVICE_LABEL: &str = "io.raskell.shiioo";
+
+/// Installs the office as a login service and prints how to reach it.
+fn install(
+    workspace: &Path,
+    data: &Path,
+    listen: &str,
+    telegram_token: Option<String>,
+    print: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()?;
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var("HOME")?;
+    let logs = data.join("logs");
+    let log_file = logs.join("serve.log");
+    let definition = if cfg!(target_os = "macos") {
+        launchd_plist(&exe, workspace, listen, &path_var, &home, &log_file)
+    } else {
+        systemd_unit(&exe, workspace, listen, &path_var)
+    };
+    if print {
+        println!("{definition}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    std::fs::create_dir_all(&logs)?;
+    let token_source = telegram_token.or_else(|| {
+        std::env::var("SHIIOO_TELEGRAM_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty())
+    });
+    if let Some(token) = token_source {
+        let path = data.join("telegram-token");
+        std::fs::write(&path, token.trim())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        println!("telegram token stored in {}", path.display());
+    }
+    let api_token = api_token(&data.join("api-token"))?;
+
+    if cfg!(target_os = "macos") {
+        let plist = PathBuf::from(&home)
+            .join("Library/LaunchAgents")
+            .join(format!("{SERVICE_LABEL}.plist"));
+        std::fs::create_dir_all(plist.parent().unwrap_or(Path::new("/")))?;
+        std::fs::write(&plist, &definition)?;
+        let domain = format!("gui/{}", uid()?);
+        // Replace any earlier version, then start.
+        run_quiet(
+            "launchctl",
+            &["bootout", &format!("{domain}/{SERVICE_LABEL}")],
+        );
+        run_checked(
+            "launchctl",
+            &["bootstrap", &domain, &plist.to_string_lossy()],
+        )?;
+        println!("installed {} and started it", plist.display());
+    } else {
+        let unit_dir = PathBuf::from(&home).join(".config/systemd/user");
+        std::fs::create_dir_all(&unit_dir)?;
+        let unit = unit_dir.join("shiioo.service");
+        std::fs::write(&unit, &definition)?;
+        run_checked("systemctl", &["--user", "daemon-reload"])?;
+        run_checked(
+            "systemctl",
+            &["--user", "enable", "--now", "shiioo.service"],
+        )?;
+        println!("installed {} and started it", unit.display());
+    }
+
+    println!("logs: {}", log_file.display());
+    println!("dashboard on this machine: http://{listen}/#token={api_token}");
+    let port = listen.rsplit(':').next().unwrap_or("7878");
+    match tailscale_dns_name() {
+        Some(host) => {
+            println!("from your phone, once: tailscale serve --bg {port}");
+            println!("then open: https://{host}/#token={api_token}");
+            println!(
+                "and set [dashboard] url = \"https://{host}\" in {} for links in Telegram messages",
+                data.join("config.toml").display()
+            );
+        }
+        None => println!(
+            "to reach it from your phone, install Tailscale on this machine and the phone, then: \
+             tailscale serve --bg {port}"
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn uninstall() -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME")?;
+    if cfg!(target_os = "macos") {
+        let domain = format!("gui/{}", uid()?);
+        run_quiet(
+            "launchctl",
+            &["bootout", &format!("{domain}/{SERVICE_LABEL}")],
+        );
+        let plist = PathBuf::from(&home)
+            .join("Library/LaunchAgents")
+            .join(format!("{SERVICE_LABEL}.plist"));
+        if plist.exists() {
+            std::fs::remove_file(&plist)?;
+        }
+        println!("removed the launchd service");
+    } else {
+        run_quiet(
+            "systemctl",
+            &["--user", "disable", "--now", "shiioo.service"],
+        );
+        let unit = PathBuf::from(&home).join(".config/systemd/user/shiioo.service");
+        if unit.exists() {
+            std::fs::remove_file(&unit)?;
+        }
+        run_quiet("systemctl", &["--user", "daemon-reload"]);
+        println!("removed the systemd service");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn launchd_plist(
+    exe: &Path,
+    workspace: &Path,
+    listen: &str,
+    path_var: &str,
+    home: &str,
+    log_file: &Path,
+) -> String {
+    let x = xml_escape;
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{SERVICE_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+    <string>--workspace</string><string>{ws}</string>
+    <string>serve</string>
+    <string>--listen</string><string>{listen}</string>
+    <string>--keep-awake</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>{path}</string>
+    <key>HOME</key><string>{home}</string>
+  </dict>
+  <key>WorkingDirectory</key><string>{ws}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Standard</string>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#,
+        exe = x(&exe.to_string_lossy()),
+        ws = x(&workspace.to_string_lossy()),
+        listen = x(listen),
+        path = x(path_var),
+        home = x(home),
+        log = x(&log_file.to_string_lossy()),
+    )
+}
+
+fn systemd_unit(exe: &Path, workspace: &Path, listen: &str, path_var: &str) -> String {
+    format!(
+        "[Unit]\nDescription=Shiioo office\nAfter=network-online.target\n\n[Service]\n\
+         ExecStart={} --workspace {} serve --listen {listen}\nRestart=always\nRestartSec=3\n\
+         Environment=PATH={path_var}\nWorkingDirectory={}\n\n[Install]\nWantedBy=default.target\n",
+        exe.display(),
+        workspace.display(),
+        workspace.display()
+    )
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn uid() -> Result<String, Box<dyn std::error::Error>> {
+    let out = std::process::Command::new("id").arg("-u").output()?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+fn run_quiet(program: &str, args: &[&str]) {
+    std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok();
+}
+
+fn run_checked(program: &str, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let out = std::process::Command::new(program).args(args).output()?;
+    if !out.status.success() {
+        return Err(format!(
+            "{program} {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// This machine's MagicDNS name, if Tailscale is installed and up.
+fn tailscale_dns_name() -> Option<String> {
+    let out = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let status: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let name = status["Self"]["DNSName"].as_str()?.trim_end_matches('.');
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// Reads the API token, creating a random one (readable only by this user)

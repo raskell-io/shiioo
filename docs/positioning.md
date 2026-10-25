@@ -95,7 +95,7 @@ Secrets (GitHub tokens, mail credentials) are injected at execution time and nev
 
 Each phase ends with something new you can do from your phone.
 
-1. **One employee, one repo** *(built except the dashboard)*. Claude Code as a harness on the Mac, a worktree and branch per run, pushes to a branch, run log in the dashboard over Tailscale. *Start a task, watch it, open the PR.*
+1. **One employee, one repo** *(built)*. Claude Code as a harness on the Mac, a worktree and branch per run, pushes to a branch, run log in the dashboard over Tailscale. *Start a task, watch it, open the PR.*
 2. **Approvals and notifications** *(built; Telegram verified against a fake server, live check pending)*. Rules (allow / ask / deny per tool, repo and action, `rules.toml`); harness permission requests routed through the rules to Telegram; notifications on finish and on "needs you"; `/run`, `/status`, `/log`, `/cancel`. *Approve a push or a risky command with one tap.*
 3. **Staff and capacity.** Codex and local models as employees, the capacity broker across subscriptions, budgets per task, GitHub-issue intake. *Label an issue, come back to a PR; see remaining weekly capacity.*
 4. **Unattended safety.** `container` and `openshell` levels, secrets injection, egress rules. *Let it run overnight.*

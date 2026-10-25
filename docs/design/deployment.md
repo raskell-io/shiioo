@@ -6,28 +6,36 @@ Related: [architecture.md](../architecture.md) §4–5, [ADR-0003](../adr/0003-r
 
 ## 1. Modes
 
-| | On-device | Single server | Cluster |
+| | On-device (the office on one Mac) | Several machines | Cluster |
 |---|---|---|---|
-| Command | `shiioo up` | `shiioo serve` | `shiioo serve --roles …` per process |
-| Store | redb | redb or Postgres | Postgres (HA) |
-| Blobs | local directory | local directory or object storage | object storage |
-| Daemons | in-process, local machine | remote, dialing in | remote, dialing in |
-| Auth | none: the local OS user is the owner | OIDC or local accounts, API keys | OIDC/SSO, API keys |
-| TLS | localhost only | required | required, at the load balancer and for daemons |
-| Status | planned | planned | planned |
+| Command | `shiioo up` (= `shiioo serve`), installed by `shiioo install` | `shiioo serve` + `shiioo node --server …` on the others | not a goal ([ADR-0010](../adr/0010-single-binary-server-and-nodes.md)) |
+| Store | redb file | redb on the server | Postgres stays available behind a feature flag |
+| Phone | Telegram + the dashboard over Tailscale | same | |
+| Status | built | nodes planned | deferred |
 
-### 1.1 On-device: `shiioo up` *(planned)*
+### 1.1 On-device: `shiioo up` *(built)*
 
-One process runs every role plus a daemon for the local machine.
+One process runs everything: the API and dashboard, the Telegram bot, the workers, and the local machine that runs harnesses and tools.
 
-- **Data directory**: platform default, overridable with `SHIIOO_DATA_DIR`:
-  - Linux: `$XDG_DATA_HOME/shiioo` (default `~/.local/share/shiioo`)
-  - macOS: `~/Library/Application Support/shiioo`
-  - Windows (later): `%APPDATA%\shiioo`
-- Contents: `shiioo.redb` (event log, run heads, queue, config), `blobs/`, `snapshots/`, `secrets.age` (secrets encrypted to a locally generated `age` identity stored in the OS keychain).
-- Dashboard and API on `http://127.0.0.1:7878`, bound to loopback only. No accounts; a random token in the data directory protects the API from other local users.
-- The local machine is enrolled automatically at sandbox level `host` (or `process` on Linux if available).
-- Shut down: runs in progress are parked at the next safe point; anything interrupted is recovered from the log on next start, exactly like a worker crash.
+- **The office directory** is explicit: `shiioo --workspace ~/shiioo-office …`. Shiioo keeps its data in `.shiioo/` inside it:
+
+  | File | What |
+  |---|---|
+  | `shiioo.redb` | the event log and run heads, the only source of truth |
+  | `journal.jsonl` | the local machine's tool-call journal |
+  | `worktrees/<run>/` | one git worktree per harness run on a repository |
+  | `config.toml` | repositories, Telegram owner id, dashboard URL (written with comments on first start) |
+  | `rules.toml` | what agents may do without asking (written with defaults on first start) |
+  | `api-token` | bearer token for the API and dashboard, mode 0600 |
+  | `telegram-token` | the bot token, written by `shiioo install`, mode 0600 (or use `SHIIOO_TELEGRAM_TOKEN`) |
+  | `logs/serve.log` | the service's output |
+
+  Back up the directory and you have backed up the office; `shiioo.redb` alone is enough for the record.
+- **The API binds to loopback** (`127.0.0.1:7878`) and every call needs the token. Nothing listens publicly.
+- **Reaching it from the phone: Tailscale.** Install Tailscale on the Mac and the phone (same account). On the Mac, once: `tailscale serve --bg 7878`. The dashboard is then `https://<machine>.<tailnet>.ts.net/`, with TLS from Tailscale, reachable only from your devices. Open it once with `/#token=<api-token>` (the fragment never leaves the browser; the page stores the token locally) and add it to the home screen. Put the URL under `[dashboard] url` in `config.toml` so Telegram messages link to runs.
+- **Telegram** needs no inbound connectivity at all: the bot long-polls Telegram's servers.
+- **As a service:** `shiioo install` writes a launchd agent (`~/Library/LaunchAgents/io.raskell.shiioo.plist`) that starts the office at login, restarts it if it stops, runs it with the current `PATH` (so `claude` and `codex` are found) and `--keep-awake`, which ties a `caffeinate -s -i` to the process so the Mac doesn't sleep while the office runs. The agent runs in the user's GUI session, so Claude Code's keychain login works. `shiioo install --print` shows the definition; `shiioo uninstall` removes it. On Linux the same command writes a `systemd --user` unit (not yet tested).
+- **Shutting down:** runs in progress lose their worker; on the next start `shiioo` resumes them from the log exactly as after a crash (harness sessions are resumed with `--resume`).
 
 ### 1.2 Single server: `shiioo serve` *(planned)*
 

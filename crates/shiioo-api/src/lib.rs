@@ -14,7 +14,11 @@
 //!   tool call: the rules answer at once, or the owner is asked and the
 //!   request waits for `POST /v1/approvals/{id}`.
 //!
-//! Everything except `GET /v1/health` needs `Authorization: Bearer <token>`.
+//! - `GET  /v1/runs/{id}/diff` is the run's branch diff against the repo's HEAD.
+//! - `GET  /` serves the mobile dashboard (`ui/`), which calls the API with the token.
+//!
+//! Everything except `GET /v1/health` and the dashboard files needs
+//! `Authorization: Bearer <token>`.
 
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -30,7 +34,8 @@ use shiioo_core::{Event, EventStore, Payload, RunId, Seq, StoreError, Timestamp}
 use shiioo_rules::{Decision, PermissionRequest, RuleSet};
 use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
 use shiioo_runtime::{
-    AgentSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, open_approval, run_status,
+    AgentSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for, open_approval,
+    run_status,
 };
 use shiioo_store::Notifying;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -255,6 +260,43 @@ impl<S: EventStore + 'static> ApiState<S> {
             .join("\n"))
     }
 
+    /// The diff of the run's branch against the repository's current HEAD
+    /// (three-dot, so the owner's later commits don't show up). Capped at
+    /// 200 KiB.
+    pub async fn diff(&self, run_id: RunId) -> Result<String, ApiError> {
+        let log = self.store.read(run_id, Seq(0)).await?;
+        let repo = run_spec(&log)
+            .and_then(|spec| match spec.runtime {
+                Runtime::Harness(h) => h.repo,
+                Runtime::Native => None,
+            })
+            .ok_or_else(|| ApiError::NotFound("this run has no repository".into()))?;
+        let range = format!("HEAD...{}", branch_for(run_id));
+        let out = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["diff", "--stat", "-p", &range])
+            .output()
+            .await
+            .map_err(|e| ApiError::Failed(format!("running git: {e}")))?;
+        if !out.status.success() {
+            return Err(ApiError::Failed(
+                String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+            ));
+        }
+        const CAP: usize = 200 * 1024;
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if text.len() > CAP {
+            let mut end = CAP;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+            text.push_str("\n… truncated\n");
+        }
+        Ok(text)
+    }
+
     /// Asks a run to stop. The worker closes it at its next step.
     pub async fn cancel(&self, run_id: RunId, by: &str, reason: &str) -> Result<(), ApiError> {
         match self
@@ -477,14 +519,18 @@ fn now_ms() -> Timestamp {
     )
 }
 
+/// The run's spec, from its first event.
+fn run_spec(log: &[Event]) -> Option<RunSpec> {
+    match log.first().map(|e| &*e.payload) {
+        Some(Payload::RunCreated { spec }) => serde_json::from_value(spec.clone()).ok(),
+        _ => None,
+    }
+}
+
 /// The label of the repository a harness run works on: a configured label
 /// whose path matches, else the directory name.
 fn repo_label(repos: &BTreeMap<String, PathBuf>, log: &[Event]) -> Option<String> {
-    let spec: RunSpec = match log.first().map(|e| &*e.payload) {
-        Some(Payload::RunCreated { spec }) => serde_json::from_value(spec.clone()).ok()?,
-        _ => return None,
-    };
-    let Runtime::Harness(h) = spec.runtime else {
+    let Runtime::Harness(h) = run_spec(log)?.runtime else {
         return None;
     };
     let repo = h.repo?;
@@ -595,6 +641,7 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/runs/{id}/resume", post(resume_run::<S>))
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
         .route("/v1/runs/{id}/permissions", post(permission::<S>))
+        .route("/v1/runs/{id}/diff", get(diff_run::<S>))
         .route("/v1/approvals/{id}", post(decide::<S>))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -605,8 +652,43 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
             "/v1/health",
             get(|| async { Json(json!({ "status": "ok" })) }),
         )
+        .route("/", get(ui_index))
+        .route("/ui", get(ui_index))
+        .route("/ui/app.js", get(ui_js))
+        .route("/ui/app.css", get(ui_css))
         .merge(authenticated)
         .with_state(state)
+}
+
+// The dashboard: three static files compiled into the binary. The page
+// itself is public; everything it shows comes from authenticated calls.
+async fn ui_index() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        include_str!("../ui/index.html"),
+    )
+}
+
+async fn ui_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../ui/app.js"),
+    )
+}
+
+async fn ui_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../ui/app.css"),
+    )
+}
+
+async fn diff_run<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let text = state.diff(parse_run(&id)?).await?;
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text))
 }
 
 async fn require_token<S: EventStore + 'static>(
@@ -851,6 +933,9 @@ pub enum ApiError {
     NotFound(String),
     BadRequest(String),
     Conflict(String),
+    /// Something the request asked for could not be done (a failed git
+    /// command, for instance). Unlike `Internal`, the detail is shown.
+    Failed(String),
     Internal(String),
 }
 
@@ -861,6 +946,7 @@ impl std::fmt::Display for ApiError {
             ApiError::NotFound(d)
             | ApiError::BadRequest(d)
             | ApiError::Conflict(d)
+            | ApiError::Failed(d)
             | ApiError::Internal(d) => f.write_str(d),
         }
     }
@@ -892,6 +978,12 @@ impl IntoResponse for ApiError {
                 Some(d),
             ),
             ApiError::Conflict(d) => (StatusCode::CONFLICT, "conflict", "Conflict", Some(d)),
+            ApiError::Failed(d) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed",
+                "Operation failed",
+                Some(d),
+            ),
             ApiError::Internal(d) => {
                 eprintln!("internal error: {d}");
                 (

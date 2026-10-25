@@ -49,9 +49,13 @@ The run gets its own git worktree and a `shiioo/<run>` branch; every step Claude
 Run the office and direct it from your phone:
 
 ```sh
-export SHIIOO_TELEGRAM_TOKEN=...     # a bot from @BotFather
-cargo run -p shiioo -- --workspace ~/shiioo-office serve
+cargo install --path crates/shiioo                      # one binary: shiioo
+export SHIIOO_TELEGRAM_TOKEN=...                        # a bot from @BotFather
+shiioo --workspace ~/shiioo-office install              # launchd service, starts at login, keeps the Mac awake
+tailscale serve --bg 7878                               # https://<mac>.<tailnet>.ts.net from your phone
 ```
+
+`install` prints the dashboard link to open on your phone: runs, live logs, diffs, Allow/Deny and Cancel buttons, as a home-screen web app. (`shiioo up` runs the same thing in the foreground.)
 
 The first start writes `~/shiioo-office/.shiioo/config.toml` (put your Telegram user id under `[telegram] owner_chat_id` and your repositories under `[repos]`) and `rules.toml` (what agents may do without asking). Then, from Telegram: `/run myproject fix the flaky test`, `/status`, `/log <run>`, `/cancel <run>`. Before every tool call Claude Code asks Shiioo; the rules allow or deny most calls, and the rest arrive on your phone with Allow / Deny buttons. Everything is recorded in the run's log.
 

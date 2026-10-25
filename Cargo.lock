@@ -1595,6 +1595,7 @@ dependencies = [
  "shiioo-rules",
  "shiioo-runtime",
  "shiioo-store",
+ "tempfile",
  "tokio",
  "uuid",
 ]
