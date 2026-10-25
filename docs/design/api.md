@@ -2,66 +2,69 @@
 
 The public contract: REST resources, the event stream, idempotency, errors, auth, versioning, SDKs, the MCP server and outgoing webhooks.
 
+Built today (`crates/shiioo-api`): runs, events and the SSE stream, resume, cancel, the permission and approval endpoints, the diff, capacity, the dashboard, bearer-token auth and problem+json errors. Everything an owner needs from the phone goes through these. The rest of this document is the contract they grow into; sections marked *(deferred)* belong to the multi-owner shape set aside in [ADR-0008](../adr/0008-personal-workforce-not-managed-cloud.md) and [ADR-0010](../adr/0010-single-binary-server-and-nodes.md).
+
 Read [architecture.md](../architecture.md) first. Related: [ADR-0004](../adr/0004-rest-and-sse-api.md) (why REST + SSE), [execution.md](execution.md) (what commands do to a run), [governance.md](governance.md) (approvals), [security.md](security.md) (auth details), [ADR-0005](../adr/0005-cedar-policies-and-biscuit-credentials.md).
 
-## 1. Principles *(planned)*
+## 1. Principles *(built, except where marked)*
 
-- **One contract.** REST + JSON under `/v1`, plus Server-Sent Events for streams. No GraphQL, no second RPC API for clients ([ADR-0004](../adr/0004-rest-and-sse-api.md)).
-- **Generated from code.** The OpenAPI 3.1 document is generated from the handler types with `utoipa` and published at `/v1/openapi.json`. CI fails if it changes without a version-policy check (section 7).
-- **Commands write events.** Every mutating call on a run (`messages`, `cancel`, approval decisions) is turned into an event in the run's log by the API role, then a worker reacts. The response returns the event's `seq`, so clients can stream from exactly that point.
+- **One contract.** REST + JSON under `/v1`, plus Server-Sent Events for streams. No GraphQL, no second RPC API for clients ([ADR-0004](../adr/0004-rest-and-sse-api.md)). The Telegram bot and the dashboard are clients of the same handlers.
+- **Generated from code.** *(deferred, ADR-0010)* The OpenAPI 3.1 document generated from the handler types with `utoipa` and published at `/v1/openapi.json`, with CI failing on an unchecked change (section 7). Today the routes are documented here and in the crate's docs.
+- **Commands write events.** Every mutating call on a run (`cancel`, approval decisions; `messages` *(planned)*) is turned into an event in the run's log by the server (`RunHead::append_external`, no lease needed), then the worker reacts at its next step. *(planned)* The response returns the event's `seq`, so clients can stream from exactly that point; today `cancel` returns `202` with the run.
 - **Internals never leak.** Leases, epochs, `SeqConflict` and `Fenced` are worker concerns. A client never sees them; the API retries internally or returns a domain error.
 
-## 2. Resources *(planned)*
+## 2. Resources *(core built; the rest planned or deferred)*
+
+One office means no `{org}` or `{project}` segment in the built routes: `/v1/runs`, not `/v1/projects/{project}/runs`. The rows below keep the longer paths where they come from the multi-office design *(deferred, ADR-0008)*; if they are ever built for one office, the segment is dropped the same way.
 
 | Resource | Endpoints |
 |---|---|
-| Organizations | `GET /v1/orgs`, `GET /v1/orgs/{org}` |
-| Projects | `GET/POST /v1/orgs/{org}/projects`, `GET/PATCH/DELETE /v1/projects/{project}` |
-| Agents | `GET/POST /v1/projects/{project}/agents`, `GET/PATCH /v1/agents/{agent}`, `GET /v1/agents/{agent}/versions` |
-| Runs | `GET/POST /v1/projects/{project}/runs`, `GET /v1/runs/{run}` |
-| Run events | `GET /v1/runs/{run}/events?from={seq}&limit=…`, `GET /v1/runs/{run}/events/stream` |
-| Run commands | `POST /v1/runs/{run}/messages`, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` |
+| Health | `GET /v1/health` *(built)*: `{"status":"ok"}`, the one route without a token; the installer and scripts wait on it |
+| Organizations | `GET /v1/orgs`, `GET /v1/orgs/{org}` *(deferred, ADR-0008)* |
+| Projects | `GET/POST /v1/orgs/{org}/projects`, `GET/PATCH/DELETE /v1/projects/{project}` *(deferred, ADR-0008)* |
+| Agents | `GET/POST /v1/projects/{project}/agents`, `GET/PATCH /v1/agents/{agent}`, `GET /v1/agents/{agent}/versions` *(planned; today the agent is inline in the run body or an `[[employees]]` entry)* |
+| Runs | `POST /v1/runs` *(built)*, `GET /v1/runs` *(built; most recently updated first)*, `GET /v1/runs/{run}` *(built)* |
+| Run events | `GET /v1/runs/{run}/events?from={seq}` *(built; `limit` planned)*, `GET /v1/runs/{run}/events/stream` *(built)* |
+| Run commands | `POST /v1/runs/{run}/messages` *(planned)*, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` *(planned)* |
 | Dashboard | `GET /` (and `/ui`, `/ui/app.js`, `/ui/app.css`) *(built)*: the mobile web dashboard, static, no auth on the page itself; it stores the token from `#token=…` locally and sends it on every API call |
 | Capacity | `GET /v1/capacity` *(built)*: the latest rate-limit windows per provider (`five_hour`, `seven_day`: utilization, reset time), folded from `CapacityObserved` events; the broker and the phone read it |
 | Diff | `GET /v1/runs/{run}/diff` *(built)*: `git diff HEAD...shiioo/<run>` of a repo run, text/plain |
 | Employees | `POST /v1/runs` with `employee: "auto"` (the broker picks by capacity) or a configured name, plus `repo` (a label or path) *(built)*; the dashboard and Telegram use this |
 | Permissions | `POST /v1/runs/{run}/permissions` *(built)*: a harness hook asks before a tool call; the rules answer, or the request waits for `POST /v1/approvals/{id}` *(built)* with `{"decision":"allow"\|"deny","note"}` |
-| Run verification | `GET /v1/runs/{run}/verify` (re-checks the hash chain server-side, returns the head hash) |
-| Approvals | `GET /v1/projects/{project}/approvals?state=pending`, `GET /v1/approvals/{id}`, `POST /v1/approvals/{id}/decisions` |
-| Machines | `GET /v1/projects/{project}/machines`, `POST /v1/projects/{project}/machines/enrollments`, `DELETE /v1/machines/{machine}` |
-| Secrets | `GET/POST /v1/projects/{project}/secrets` (names and metadata only; values are write-only), `PUT/DELETE /v1/secrets/{secret}` |
-| Policies | `GET/POST /v1/projects/{project}/policies`, `GET/PUT /v1/policies/{policy}`, `POST /v1/policies/{policy}/test` |
-| Budgets | `GET/PUT /v1/projects/{project}/budgets`, `GET /v1/projects/{project}/usage` |
-| Triggers | `GET/POST /v1/projects/{project}/triggers`, `PATCH/DELETE /v1/triggers/{trigger}` |
-| Webhooks (outgoing) | `GET/POST /v1/projects/{project}/webhooks`, `DELETE /v1/webhooks/{id}` |
-| API keys | `GET/POST /v1/projects/{project}/keys`, `DELETE /v1/keys/{id}` |
+| Run verification | `GET /v1/runs/{run}/verify` *(planned; `shiioo log` verifies the chain locally today)* |
+| Approvals | `POST /v1/approvals/{id}` *(built, above)*; `GET /v1/approvals?state=pending`, `GET /v1/approvals/{id}` *(planned; the pending one is in the run's status today)* |
+| Machines | `GET /v1/machines`, `POST /v1/machines/enrollments`, `DELETE /v1/machines/{machine}` *(planned with remote nodes)* |
+| Secrets | `GET/POST /v1/secrets` (names and metadata only; values are write-only), `PUT/DELETE /v1/secrets/{secret}` *(planned)* |
+| Rules | `GET/PUT /v1/rules`, `POST /v1/rules/test` *(planned; `rules.toml` is edited on the machine today)* |
+| Budgets | `GET/PUT /v1/budgets`, `GET /v1/usage` *(planned)* |
+| Triggers | `GET/POST /v1/triggers`, `PATCH/DELETE /v1/triggers/{trigger}` *(planned, routines)* |
+| Webhooks (outgoing) | `GET/POST /v1/webhooks`, `DELETE /v1/webhooks/{id}` *(planned)* |
+| API keys | `GET/POST /v1/keys`, `DELETE /v1/keys/{id}` *(planned; one bearer token today)* |
 
-IDs are prefixed, opaque strings (`run_01J…`, `agt_…`, `prj_…`) using ULIDs, so they sort by creation time and say what they are in logs.
+Run ids are UUIDs today (`RunId`), shown by their first eight characters on the phone and in branch names (`shiioo/7f3a21c9`). *(planned)* Prefixed ULIDs (`run_01J…`, `agt_…`) that sort by creation time and say what they are in logs; the change is additive for clients that treat ids as opaque strings.
 
-### Starting a run
+### Starting a run *(built)*
 
 ```http
-POST /v1/projects/prj_01J9…/runs
+POST /v1/runs
 Idempotency-Key: 4f1c2e7a-…
 Content-Type: application/json
 
-{
-  "agent": "reviewer",
-  "input": { "text": "Review PR #482 in raskell-io/shiioo" },
-  "machine": { "labels": { "pool": "ci" } },
-  "budget": { "max_usd": 1.5 }
-}
+{ "task": "Review PR #482", "employee": "auto", "repo": "shiioo" }
 ```
+
+`employee` is `"auto"` (the broker picks the configured employee with the most capacity left, [runtimes-and-providers.md §5.4](runtimes-and-providers.md#54-capacity-broker-built-as-the-employee-broker-key-pools-deferred)) or an employee's name; `repo` is a label from `[repos]` or an absolute path. Without `employee`, the body names the runtime directly: `{ "task", "agent": { "model", "system", "tools", "max_turns" }, "runtime": { "kind": "native" } | { "kind": "harness", … } }`.
 
 ```http
 HTTP/1.1 201 Created
-Location: /v1/runs/run_01J9…
 
-{ "id": "run_01J9…", "state": "queued", "agent_version": 7, "head_seq": 0,
-  "stream": "/v1/runs/run_01J9…/events/stream" }
+{ "id": "7f3a21c9-…", "task": "Review PR #482", "next_seq": 2,
+  "status": { "state": "open" }, "updated_at": 1761376000000 }
 ```
 
-### Sending a message to a waiting run
+The same body is returned by `GET /v1/runs/{run}` and, one per run, by `GET /v1/runs`. `status` is one of `open`, `waiting_approval` (with the pending request), `completed` (with the final `output`), `failed`, `needs_attention`, `cancelled` (with a `reason`), folded from the log by `shiioo-runtime::status`. *(planned)* `Location` header, `machine` and `budget` fields, and a `stream` URL in the response.
+
+### Sending a message to a waiting run *(planned)*
 
 ```http
 POST /v1/runs/run_01J9…/messages
@@ -74,7 +77,7 @@ Idempotency-Key: 9b0d…
 { "seq": 41 }
 ```
 
-### Forking
+### Forking *(planned)*
 
 ```http
 POST /v1/runs/run_01J9…/fork
@@ -83,7 +86,7 @@ POST /v1/runs/run_01J9…/fork
 
 `at_seq` must be a turn boundary. Returns the new run. Semantics in [fork-and-replay.md](fork-and-replay.md).
 
-## 3. Streaming *(run stream built in `shiioo-api`; deltas, project stream and fan-out planned)*
+## 3. Streaming *(run stream built in `shiioo-api`; deltas and the office stream planned, fan-out deferred)*
 
 ### 3.1 Run stream
 
@@ -109,29 +112,29 @@ data: {"kind":"tool_output","call_id":"c_12","stream":"stdout","chunk":"Compilin
 - A comment line every 15 s keeps proxies from closing idle connections.
 - The stream ends with `event: end` after a terminal event.
 
-**Built today** (`crates/shiioo-api`): `GET /v1/runs/{id}/events/stream` sends each log event as `event: event` with `id: <seq>` and the event JSON as data, resumes after `Last-Event-ID` (or from `?from=`), and ends after the terminal event. The handler subscribes to change notifications before its first read, then alternates reading the log and waiting; the `Notifying` store wrapper wakes it on every write in the same process, and a 2-second re-read covers writes from other processes until Postgres `LISTEN/NOTIFY` is wired in. No `delta` frames yet: the provider is not streaming. Also built: `POST /v1/runs` (with `Idempotency-Key`, kept in memory for now), `GET /v1/runs` (most recently updated first), `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events?from=`, `POST /v1/runs/{id}/resume`, `POST /v1/runs/{id}/cancel`, the permission and approval endpoints, bearer-token auth and problem+json errors.
+**Built today** (`crates/shiioo-api`): `GET /v1/runs/{id}/events/stream` sends each log event as `event: event` with `id: <seq>` and the event JSON as data, resumes after `Last-Event-ID` (or from `?from=`), and ends after the terminal event. The handler subscribes to change notifications before its first read, then alternates reading the log and waiting; the `Notifying` store wrapper wakes it on every write in the same process, and a 2-second re-read covers writes from other processes (Postgres `LISTEN/NOTIFY` for that is *(deferred, ADR-0010)*; in one server process the wrapper is enough). No `delta` frames yet: neither the native provider nor the harness drivers stream partial output. Also built: `POST /v1/runs` (with `Idempotency-Key`, kept in memory for now), `GET /v1/runs` (most recently updated first), `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events?from=`, `POST /v1/runs/{id}/resume`, `POST /v1/runs/{id}/cancel`, the permission and approval endpoints, bearer-token auth and problem+json errors.
 
 **The approval loop** *(built)*: the worker starts Claude Code with a `PreToolUse` hook (`shiioo hook pre-tool-use`, see [runtimes-and-providers.md](runtimes-and-providers.md)). Before every tool call the hook `POST`s the call to `/v1/runs/{run}/permissions`. The server evaluates the owner's rules ([governance.md](governance.md)) and records a `PolicyDecision`; `allow`/`deny` answer at once. `ask` records an `ApprovalRequested`, notifies the owner (Telegram), and holds the HTTP request open until `POST /v1/approvals/{id}` records an `ApprovalDecided`, or the request expires (just under the hook's six-hour timeout) and is denied as `by: timeout`. The hook prints Claude Code's `permissionDecision` and the call proceeds or is refused. If the server is unreachable the hook denies, so a dead office never means an unguarded agent.
 
-### 3.2 Project stream
+### 3.2 Office stream *(planned)*
 
-`GET /v1/projects/{project}/events/stream` carries summary notifications (`run_started`, `run_finished`, `approval_requested`, `machine_offline`) for dashboards. It is resumable by a project-level cursor, not by run `seq`.
+`GET /v1/events/stream` carries summary notifications (`run_started`, `run_finished`, `approval_requested`, `machine_offline`) for dashboards. It is resumable by an office-level cursor, not by run `seq`. Today the dashboard polls `GET /v1/runs` and opens a run stream for the run it shows.
 
-### 3.3 Fan-out
+### 3.3 Fan-out *(deferred, ADR-0010)*
 
-Streams are served by the gateway role. On a single node, new events are pushed in-process. In a cluster, gateways subscribe to Postgres `LISTEN/NOTIFY` for run heads they're streaming and read the new events from the store; NATS is an optional replacement if that becomes the bottleneck (see [deployment.md](deployment.md)).
+In one server process new events are pushed in-process (`Notifying<S>`), which is the whole design for one office. The cluster form, gateways subscribing to Postgres `LISTEN/NOTIFY` for the run heads they stream with NATS as an optional replacement, is set aside with the cluster itself ([deployment.md](deployment.md)).
 
-## 4. Idempotency *(planned)*
+## 4. Idempotency *(simple form built)*
 
-- Every `POST` that creates or commands accepts an `Idempotency-Key` header (any string up to 255 bytes; SDKs send a UUID by default).
-- The server stores `(key, principal, endpoint) → (request digest, response)` for 24 hours. A repeat with the same key and body returns the stored response; the same key with a different body returns `409` with type `idempotency-key-reused`.
-- Run commands also carry the key into the event (`UserMessage { idempotency_key, … }`), so a retry that races the first attempt can't append twice even across API instances.
+- Built: `POST /v1/runs` accepts an `Idempotency-Key` header; a repeat with the same key returns the first run with `200` instead of creating another. The map is in memory and does not survive a restart; the body is not compared.
+- Planned: every creating or commanding `POST` accepts the header (any string up to 255 bytes; SDKs send a UUID by default). The server stores `(key, principal, endpoint) → (request digest, response)` for 24 hours in the store. A repeat with the same key and body returns the stored response; the same key with a different body returns `409` with type `idempotency-key-reused`.
+- Planned: run commands also carry the key into the event (`UserMessage { idempotency_key, … }`), so a retry that races the first attempt can't append twice.
 
-## 5. Pagination, filtering, errors *(planned)*
+## 5. Pagination, filtering, errors *(errors built; pagination planned)*
 
-- Lists use cursor pagination: `?limit=50&cursor=…`, response `{ "items": […], "next_cursor": "…" }`. Cursors are opaque and stable under inserts.
-- Event reads use `?from={seq}` instead, since `seq` is already a perfect cursor.
-- Errors are RFC 9457 `application/problem+json` with stable `type` URIs:
+- *(planned)* Lists use cursor pagination: `?limit=50&cursor=…`, response `{ "items": […], "next_cursor": "…" }`. Cursors are opaque and stable under inserts. Today `GET /v1/runs` returns every run, most recently updated first, as a plain array.
+- Event reads use `?from={seq}` *(built)*, since `seq` is already a perfect cursor.
+- Errors are RFC 9457 `application/problem+json` with stable `type` URIs *(built)*. Today's slugs are `unauthorized` (401), `not-found` (404), `bad-request` (400), `conflict` (409), `failed` and `internal` (500); the finer-grained ones below are the planned shape:
 
 ```json
 {
@@ -147,42 +150,47 @@ Streams are served by the gateway role. On a single node, new events are pushed 
 |---|---|---|
 | `validation-failed` | 422 | Body doesn't match the schema; `errors` lists JSON pointers |
 | `not-found` | 404 | Also used when the caller may not know the resource exists |
-| `forbidden` | 403 | Authenticated but not allowed (includes the Cedar decision id) |
+| `forbidden` | 403 | Authenticated but not allowed *(deferred with multi-owner auth, ADR-0008)* |
 | `run-closed` | 409 | Command on a finished run |
 | `idempotency-key-reused` | 409 | Same key, different body |
 | `budget-exceeded` | 402 | Starting a run whose budget is already spent |
 | `rate-limited` | 429 | With `Retry-After` |
 
-## 6. Authentication *(planned)*
+## 6. Authentication *(one token built; the rest planned or deferred)*
 
 Details and threat model in [security.md](security.md).
 
-| Principal | How it authenticates | Notes |
+**Today:** one bearer token, generated on first start into `.shiioo/api-token` (mode 0600), required on every `/v1` route except `/v1/health`. The dashboard, the Telegram office, the hook (`SHIIOO_API_TOKEN` in the harness's environment) and `curl` all present the same token. The API listens on loopback; the phone reaches it over Tailscale ([deployment.md](deployment.md)).
+
+| Principal | How it authenticates | Status |
 |---|---|---|
-| Humans (dashboard) | OAuth2 / OIDC with the org's identity provider; session cookie, `SameSite=Strict` | SSO per organization |
-| Humans (CLI) | OAuth2 device authorization flow (`shiioo login`) | Short-lived access token, refresh token in the OS keychain |
-| Services | API keys: `Authorization: Bearer shk_…`, scoped to a project and a role, optionally an expiry | Shown once; stored as a hash |
-| Agents | Biscuit tokens minted per run ([ADR-0005](../adr/0005-cedar-policies-and-biscuit-credentials.md)) | Attenuated for subagents; can only call the endpoints their run needs |
-| Machines | mTLS client certificate or key-bound Biscuit | Only on the daemon endpoint; see [tools-and-machines.md](tools-and-machines.md) |
+| Humans (dashboard) | the office token, pasted once as `#token=…` and kept in the browser | built |
+| Humans (dashboard, several owners) | OAuth2 / OIDC with the org's identity provider; session cookie, `SameSite=Strict` | deferred, ADR-0008 |
+| Humans (CLI) | OAuth2 device authorization flow (`shiioo login`) | planned (the CLI reads the token file today) |
+| Services | API keys: `Authorization: Bearer shk_…`, scoped to a role, optionally an expiry; shown once, stored as a hash | planned |
+| Agents | Biscuit tokens minted per run ([ADR-0005](../adr/0005-cedar-policies-and-biscuit-credentials.md)), attenuated for subagents | deferred, ADR-0008 |
+| Nodes | mTLS client certificate or key-bound token, only on the node endpoint ([tools-and-machines.md](tools-and-machines.md)) | planned with remote nodes |
 
-Authorization for every request goes through the same Cedar evaluation as tool calls, so "who may approve deploys" and "which agent may call `shell`" are one policy language.
+*(deferred, ADR-0008)* Authorization for every request through the same Cedar evaluation as tool calls, so "who may approve deploys" and "which agent may call `shell`" are one policy language. With one owner there is nothing to authorize beyond the token.
 
-**Rate limits** are per API key or user, per project: a token bucket on requests and a separate concurrency limit on open streams. Responses carry `RateLimit-*` headers (IETF draft fields).
+**Rate limits** *(planned)* are per API key or user: a token bucket on requests and a separate concurrency limit on open streams. Responses carry `RateLimit-*` headers (IETF draft fields).
 
-## 7. Versioning *(planned)*
+## 7. Versioning *(the rule applies today; the tooling is planned or deferred)*
 
-- `/v1` only gets **additive** changes: new endpoints, new optional fields, new enum values, new event types. Clients must ignore unknown fields and event types; the SDKs do.
+- `/v1` only gets **additive** changes: new endpoints, new optional fields, new enum values, new event types. Clients must ignore unknown fields and event types; the dashboard and the bot do.
 - A breaking change ships as `/v2` for the affected resources, with `/v1` kept for at least 12 months and announced via the `Deprecation` and `Sunset` headers.
-- **Event payload schemas are part of the API.** JSON Schemas for every event type are published at `/v1/schemas/events/{type}.json` and versioned by the event's `schema` field (see [event-log.md](event-log.md)).
-- CI compares the generated OpenAPI with the last release and fails on breaking diffs inside `/v1`.
+- **Event payload schemas are part of the API.** *(planned)* JSON Schemas for every event type are published at `/v1/schemas/events/{type}.json` and versioned by the event's `schema` field (see [event-log.md](event-log.md)). Today the schema is the `Payload` enum in `shiioo-core`, serialized with serde's tagging.
+- *(deferred, ADR-0010)* CI compares the generated OpenAPI with the last release and fails on breaking diffs inside `/v1`.
 
-## 8. SDKs *(planned)*
+## 8. SDKs *(deferred, ADR-0010)*
+
+One owner with a phone needs no SDK; the dashboard's `app.js` and the Telegram office are the two clients, and `curl` with the token covers scripts. If generation comes back:
 
 - **TypeScript first**, then **Python**: generated from the OpenAPI document, plus hand-written helpers where generation is weak:
   - a resumable stream reader that handles `Last-Event-ID`, backoff and the event/delta split;
   - `run.wait()` that streams until a terminal event or an approval is needed;
   - automatic `Idempotency-Key` on commands, reused across retries.
-- **Rust**: the server's own request and response types, published as `shiioo-api-types`, with a thin `reqwest` client.
+- **Rust**: the server's own request and response types (`RunView`, the create body), published as `shiioo-api-types`, with a thin `reqwest` client. *(planned; the hook in the `shiioo` binary is the one Rust client today and uses `reqwest` directly.)*
 
 ```ts
 const run = await shiioo.runs.create(projectId, { agent: "reviewer", input: { text } });
@@ -208,7 +216,7 @@ The MCP tools are thin wrappers over the same REST handlers and the same authori
 
 ## 10. Outgoing webhooks *(planned)*
 
-- Projects subscribe URLs to event kinds: `run.finished`, `run.failed`, `approval.requested`, `approval.decided`, `machine.offline`, `budget.threshold`.
+- The office subscribes URLs to event kinds: `run.finished`, `run.failed`, `approval.requested`, `approval.decided`, `machine.offline`, `budget.threshold`.
 - Deliveries are signed with HMAC-SHA256 over `timestamp.body` (`Shiioo-Signature: t=…,v1=…`), with a per-webhook secret, and rejected by receivers if older than 5 minutes.
 - At-least-once with exponential backoff for 24 hours; each delivery carries a stable `id` for deduplication. Delivery attempts are visible in the API.
 - Webhook payloads link back to the run and include the event `seq`, so the receiver can fetch the authoritative events.
@@ -216,4 +224,4 @@ The MCP tools are thin wrappers over the same REST handlers and the same authori
 ## 11. Open questions
 
 - Public domain for problem `type` URIs (`shiioo.dev` is a placeholder).
-- Whether the project stream should be filtered by Cedar per subscriber or only coarse-grained by role.
+- Whether the office stream needs filtering per subscriber at all; with one owner, no. *(deferred with ADR-0008)*

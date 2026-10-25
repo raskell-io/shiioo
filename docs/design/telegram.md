@@ -2,8 +2,7 @@
 
 Telegram is the owner's primary surface ([positioning.md](../positioning.md)): delegate work, get told when something finished or needs a decision, and answer with one tap. The web dashboard is for details; Telegram is for the day.
 
-Status: the client, commands, long-poll loop and notifier are built in `crates/shiioo-telegram`. The office side (what `/status` shows, how approvals are created and expire) is built by the server and is *(built)* where marked.
-Status: the client, commands, long-poll loop and notifier are built in `crates/shiioo-telegram`. The office side (what `/capacity` shows, how approvals are created and expire) is built by the server and is *(built)* where marked.
+Status: *(built)*. The client, commands, long-poll loop and notifier are in `crates/shiioo-telegram`; the office side (what the commands do, how approvals are created and expire, what is notified) is the `Office` and `Notifications` implementations in the `shiioo` binary and `shiioo-api`. Items marked *(planned)* are not there yet.
 
 ## Why Telegram, and why long polling
 
@@ -15,22 +14,22 @@ Status: the client, commands, long-poll loop and notifier are built in `crates/s
 
 1. Create a bot with [@BotFather](https://t.me/BotFather); it gives you a token.
 2. Find your own numeric user id (for example by messaging `@userinfobot`).
-3. On the office machine: `SHIIOO_TELEGRAM_TOKEN=<token>` and `SHIIOO_TELEGRAM_OWNER=<your id>` in the server's environment. The server refuses to start the bot with one but not the other.
+3. On the office machine: the token in `SHIIOO_TELEGRAM_TOKEN` or in `.shiioo/telegram-token` (mode 0600; `shiioo install --telegram-token …` writes it for the service), and your id as `owner_chat_id` under `[telegram]` in `.shiioo/config.toml` (or `SHIIOO_TELEGRAM_OWNER`). With a token but no owner the bot stays off and the server says so at start.
 4. Send `/start` to the bot. Only messages from the owner id get an answer.
 
 ## Commands
 
 | You send | What happens |
 |---|---|
-| plain text, e.g. `fix the flaky test in net.rs` | Starts a run with that task on the default repo (or workspace). Reply: the run id, the branch, and how to follow it. |
+| plain text, e.g. `fix the flaky test in net.rs` | Starts a run with that task. With one repo under `[repos]` it is used; with several the bot asks you to use `/run <repo> …`; with none the run has no repository. The employee is chosen by capacity (`auto`). Reply: `▶️ <id> started on <repo> (<employee>): <task>` and the branch. |
 | `/run <repo> <task…>` | Same, on a named repo. `<repo>` is one of the labels from `/repos`; if the first word isn't a label, the whole text is the task. |
 | `/status` | The 15 most recently updated runs, one line each: state glyph, id prefix, task, and what a waiting run waits for; then the capacity line. *(built)* |
 | `/capacity` | How much of each subscription's five-hour and seven-day window is used, and when it resets. *(built)* |
 | `/log <run>` | The run's last 25 steps, one line each. Accepts an id prefix (4+ characters). *(built)* |
 | `/cancel <run>` | Asks the run to stop at its next step boundary (`CancelRequested`). *(built)* |
-| `/repos` | The repo labels you can use in `/run`. |
-| `/approve <id>`, `/deny <id>` | Answer an approval without the buttons (for example from a client that doesn't show them). |
-| `/help`, `/start` | The command list. |
+| `/repos` | The repo labels you can use in `/run`. *(built)* |
+| `/approve <id>`, `/deny <id>` | Answer an approval without the buttons (for example from a client that doesn't show them). *(built)* |
+| `/help`, `/start` | The command list. *(built)* |
 
 Commands are case-insensitive and accept a bot suffix (`/status@shiioo_bot`), which Telegram adds in group chats. Anything unrecognised gets the help text back.
 
@@ -38,26 +37,25 @@ Replies longer than Telegram's limit are split at line boundaries into several m
 
 ## Approval flow
 
-When a harness or a Shiioo tool wants to do something the rules mark **ask**, the server:
+When a harness wants to do something the rules mark **ask** (Shiioo's own tools *(planned)*), the server:
 
-1. records `ApprovalRequested` in the run's log and parks the run;
+1. records `ApprovalRequested` in the run's log and holds the harness's hook request open; the run waits in place ([governance.md §3.0](governance.md#30-today-the-owner-is-the-board-built-shiioo-api));
 2. sends the owner a message with two inline buttons:
 
 ```
-🟡 sango · run 7f3a21c9 wants to run
-
-    git push origin shiioo/7f3a21c9
-
-Reason: the agent finished the fix and wants to open a PR.
-Expires in 30 min.
+🔐 7f3a21c9 wants to run
+Bash: git push origin shiioo/7f3a21c9
+https://studio.tail1234.ts.net/#run=7f3a21c9-…
 
 [ ✅ Allow ]  [ ⛔ Deny ]
 ```
 
-3. on a button press (`approve:<id>` / `deny:<id>` as callback data), calls the office's `decide`, which records `ApprovalDecided` and wakes the run;
+   The second line is the rule set's `summarize` of the call; the link appears when `[dashboard] url` is set. *(planned)* The rule's reason and the time left.
+
+3. on a button press (`approve:<id>` / `deny:<id>` as callback data), calls the office's `decide`, which records `ApprovalDecided { by: "telegram" }` and answers the hook;
 4. acknowledges the press (a short toast), and edits the original message: the buttons disappear and a footer is appended, `✅ allowed by you` or `⛔ denied by you`. A second press on a stale message gets `⚠️ <reason>` (already decided, or expired).
 
-Approvals bind to the exact call (tool, input digest, run), so a later, different `git push` asks again. If nobody answers before the expiry (just under six hours, the harness hook's own timeout minus a margin; per-rule expiries are planned), the server records `ApprovalDecided { decision: deny, by: timeout }`, the hook denies the call, the message is edited to show it expired, and the run continues with a denial the agent can see.
+Approvals bind to the exact request (one `ApprovalRequested`, answered once), so a later `git push`, even the same command, asks again. If nobody answers before the expiry (just under six hours, the harness hook's own timeout minus a margin; per-rule expiries are planned), the server records `ApprovalDecided { decision: deny, by: timeout }`, the hook denies the call, the message is edited to show it expired, and the run continues with a denial the agent can see.
 
 The office tracks the message id returned by `ask_approval`, so it can edit the request when it expires or is answered another way (`/approve`, the dashboard).
 
@@ -67,23 +65,25 @@ The server speaks first in these cases (`Notifier::notify`), each as one short m
 
 | Event | Message |
 |---|---|
-| run finished | `✅ sango · 7f3a21c9 done in 12 min` + the agent's final summary (first lines) + the branch or PR link |
-| run failed | `❌ sango · 7f3a21c9 failed: <reason>` + `/log 7f3a21c9` |
-| run needs attention | `🟠 sango · 7f3a21c9 needs you: <reason>` (for example a side-effecting call with an unknown outcome) |
+| run finished | `✅ 7f3a21c9 finished: <task>` + the agent's final summary (first 600 characters) + the dashboard link |
+| run failed | `❌ 7f3a21c9 failed: <task>` + the reason |
+| run cancelled | `🛑 7f3a21c9 <reason>: <task>` |
+| run needs attention | `⚠️ 7f3a21c9 needs you: <task>` + the reason (for example a side-effecting call with an unknown outcome) |
+| run stopped without finishing | `⏸ 7f3a21c9 stopped without finishing: <task>` (the worker gave up, for example after too many harness restarts) |
 | approval requested | the approval message above |
 | capacity | *(planned)* a warning when a subscription window passes a threshold (`CapacityObserved`) |
 | morning report | *(planned, phase 5)* |
 
-Notifications never contain secrets: tool output is redacted by the node before it is recorded, and the bot only ever sends recorded text.
+The task is cut to 120 characters, the summary to 600; the branch or PR link is in the summary if the agent put it there *(a dedicated link is planned)*. Notifications are recorded text, nothing else; secret redaction before recording is *(planned)*, so until then the final summary can contain whatever the agent chose to print.
 
 ## Security
 
-- **Owner gate.** Every update carries the sender's user id. Messages and button presses from anyone but `SHIIOO_TELEGRAM_OWNER` are ignored (and logged once per sender). Only the owner's private chat receives notifications. Group chats are not supported on purpose.
-- **Token.** `SHIIOO_TELEGRAM_TOKEN` is read from the environment, never from config files or the log. It is sent to Telegram in the request URL, which is Telegram's design; the connection is HTTPS.
+- **Owner gate.** Every update carries the sender's user id. Messages and button presses from anyone but the configured owner are ignored (and logged once per sender). Only the owner's private chat receives notifications. Group chats are not supported on purpose.
+- **Token.** The token is read from `SHIIOO_TELEGRAM_TOKEN` or the 0600 file `.shiioo/telegram-token`, never from `config.toml` or the log. It is sent to Telegram in the request URL, which is Telegram's design; the connection is HTTPS.
 - **No inbound traffic.** Long polling means no webhook, no public URL, no TLS certificate to manage. Nothing in Shiioo accepts connections because of Telegram.
 - **What a stolen token can do:** read the owner's messages to the bot, send messages as the bot, and, because it can read updates, see approval requests and press buttons in the office's name. **What it cannot do:** reach the office machine, read the event log, or start runs without Shiioo accepting the command from the owner id (the attacker would need to spoof Telegram's own `from.id`, which Telegram sets). Rotate the token with @BotFather if in doubt; Shiioo picks the new one up on restart.
 - **What the bot cannot grant.** Approvals only answer questions the rules asked. The bot has no command to change rules, add repos or disable isolation; those live in the server's configuration on the office machine.
-- **Audit.** Every command that changes anything (a started run, a decision) is an event in a run's log, attributed to the owner.
+- **Audit.** Every command that changes anything is an event in a run's log: a decision as `ApprovalDecided { by: "telegram" }`, a cancel as `CancelRequested { by: "telegram" }`, a started run as its `RunCreated`.
 
 ## Crate map
 

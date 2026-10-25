@@ -66,15 +66,17 @@ pub struct RunHead {
 | `acquire_lease(run, worker, ttl)` | run open; no other worker holds an unexpired lease | `LeaseAcquired` at the new epoch (`current + 1`, always new, even for the same worker id) | `RunNotFound`, `RunClosed`, `LeaseHeld` |
 | `renew_lease(lease, ttl)` | presented epoch is current and unexpired | head only (no event) | `Fenced`, `LeaseExpired` |
 | `append(lease, expected_next, payloads)` | batch valid; lease current and unexpired; run open; `expected_next == next_seq` | the batch, all or nothing | `InvalidPayload`, `Fenced`, `LeaseExpired`, `RunClosed`, `SeqConflict` |
+| `append_external(run, payloads)` | every payload `is_external()`; run open | the batch at the current epoch, no lease needed | `InvalidPayload`, `RunClosed` |
 | `read(run, from)` | — | — | `RunNotFound` |
+| `list_runs()` | — | — | — (every run id, unordered) |
 
 Batch validation: workers may not append `RunCreated` or `LeaseAcquired` (store-written), and a terminal event must be last in its batch. A terminal event closes the run; later appends and lease requests get `RunClosed`.
 
-Renewals are not logged: they carry no information a reader needs, and logging them would grow every long run by one event per 10 s. Takeovers are logged (`LeaseAcquired`) because they explain epoch changes. Lease semantics are in [ADR-0002](../adr/0002-leases-with-fencing.md) and [execution.md §4](execution.md#4-leases-in-the-worker-planned).
+Renewals are not logged: they carry no information a reader needs, and logging them would grow every long run by one event per 10 s. Takeovers are logged (`LeaseAcquired`) because they explain epoch changes. Lease semantics are in [ADR-0002](../adr/0002-leases-with-fencing.md) and [execution.md §4](execution.md#4-leases-in-the-worker-built).
 
 ## 3. Payload catalogue
 
-`Payload` is `#[serde(tag = "type", rename_all = "snake_case")]`. "Writer" is the component that appends it; the store rejects writes from anyone without the current lease, except where the writer is the store itself or the api writes through a short lease (see below).
+`Payload` is `#[serde(tag = "type", rename_all = "snake_case")]` (`crates/shiioo-core/src/event.rs`). "Writer" is the component that appends it; the store rejects writes from anyone without the current lease, except the store itself and the server's external input through `append_external` (see below).
 
 ### Built
 
@@ -89,40 +91,40 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 | `HarnessSessionStarted` | `harness, version, session_id, cwd, model` | worker | A harness started or resumed a session; its steps follow as the events above ([runtimes-and-providers.md](runtimes-and-providers.md)). |
 | `HarnessResult` | `harness, session_id, subtype, is_error, cost_usd, usage, permission_denials` | worker | The harness's own summary, before the terminal event. |
 | `CapacityObserved` | `provider, windows` | worker | A provider's rate-limit windows, as seen by a harness. Input for capacity routing. |
+| `UserMessage` | `author, content` | server (external) | Input from a person or integration. The payload exists; nothing sends it yet. |
+| `PolicyDecision` | `call_id?, tool, decision: allow\|deny\|ask, rule?, reason` | server (external, `shiioo-api::ApiState::permission`) | The owner's rules' verdict on a tool call ([governance.md](governance.md)). |
+| `ApprovalRequested` | `approval_id, call_id?, tool, input, summary, expires_at?` | server (external) | The owner has been asked; the tool call waits. |
+| `ApprovalDecided` | `approval_id, decision: allow\|deny, by, note?` | server (external) | The owner's answer, or `by: timeout`. |
+| `CancelRequested` | `by, reason` | server (external) | The worker stops at its next step and writes `RunCancelled`. |
 | `RunCompleted` | `output` | worker | Terminal. |
 | `RunFailed` | `reason` | worker | Terminal. |
+| `RunCancelled` | `reason` | worker | Terminal. |
 
 ### Planned
 
 | Variant | Fields (sketch) | Writer | Meaning |
 |---|---|---|---|
-| `UserMessage` | `author, content` | api *(built: payload; no sender yet)* | Input from a person or integration. Makes the run runnable. |
 | `ModelRequested` | `provider, model, params_digest, context_digest, turn` | worker | Digest of exactly what was sent. Replay matches on it ([fork-and-replay.md](fork-and-replay.md)). |
-| `PolicyDecision` | `call_id, tool, decision: allow\|deny\|ask, rule, reason` | api *(built)* | The owner's rules' verdict on a tool call ([governance.md](governance.md)). Written without the lease (external). |
-| `ApprovalRequested` | `approval_id, call_id, tool, input, summary, expires_at` | api *(built)* | The owner has been asked; the tool call waits. |
-| `ApprovalDecided` | `approval_id, decision: allow\|deny, by, note` | api *(built)* | The owner's answer, or `by: timeout`. |
-| `BudgetCharged` | `call_id?, tokens_in, tokens_out, cost_micros, budget_ids` | worker | Usage after each model or tool call. |
+| `BudgetCharged` | `call_id?, tokens_in, tokens_out, cost_micros, budget_ids` | worker | Usage after each model or tool call. Today harness usage and cost arrive in `HarnessResult`; a time budget (`HarnessSpec.max_minutes`) fails the run with `RunFailed`. |
 | `ChildRunStarted` | `child_run_id, agent, task_digest` | worker | Parent spawned a subagent. |
 | `ChildRunFinished` | `child_run_id, outcome, output_ref` | scheduler | Copied into the parent when the child reaches a terminal event. |
-| `SnapshotTaken` | `machine, snapshot_id, method, digest` | worker (from daemon reply) | Workspace snapshot at a turn boundary. |
+| `SnapshotTaken` | `machine, snapshot_id, method, digest` | worker (from the node's reply) | Workspace snapshot at a turn boundary. |
 | `ForkedFrom` | `parent_run_id, parent_seq, parent_hash, changes` | store (at create) | First own event of a forked run, instead of `RunCreated`. Written at `parent_seq + 1` with `prev_hash = parent_hash`, so seqs and the hash chain continue from the parent's prefix ([fork-and-replay.md](fork-and-replay.md)). |
 | `ReplayOf` | `source_run_id, mode: strict\|live_on_divergence\|stop_on_divergence, changes` | store (at create) | Seq 0 of a replay run ([fork-and-replay.md](fork-and-replay.md)). |
 | `ReplayDiverged` | `turn, expected_digest, actual_digest` | worker | A replayed turn no longer matches the recording. |
 | `RunParked` | `waiting_for: input\|approval\|tool\|timer, wake_at?` | worker | The worker releases the run; no lease is held while parked. |
 | `RunWoken` | `reason` | worker | First event after a parked run is picked up again. |
-| `CancelRequested` | `by, reason` | api *(built)* | The worker stops at its next step and writes `RunCancelled`. |
-| `RunCancelled` | `reason` | worker *(built)* | Terminal. |
-| `ToolReconciled` | `call_id, outcome, source: daemon\|hook\|human` | worker | Resolves a `ToolOutcomeUnknown`. |
+| `ToolReconciled` | `call_id, outcome, source: node\|hook\|human` | worker | Resolves a `ToolOutcomeUnknown`. |
 | `BudgetWarning` / `BudgetExceeded` | `budget_id, used, limit` | worker | Soft limit crossed; hard limit hit (the run parks or fails, per budget) ([governance.md](governance.md)). |
 | `ConfigUpdated` | `kind, from_version, to_version` | worker | A change marked `applies_to_running` took effect mid-run ([governance.md](governance.md)). |
 | `SecretResolved` | `call_id, secret_name` | worker | A tool call was given a secret. Name only, never the value ([tools-and-machines.md](tools-and-machines.md)). |
 | `SecretRedacted` | `call_id, count` | worker | Secret values were removed from a tool output before it was recorded ([security.md](security.md)). |
 | `ContextCompacted` | `from_seq, to_seq, summary_ref` | worker | A summary that stands in for a range of events when building context; the originals stay ([runtimes-and-providers.md](runtimes-and-providers.md)). |
-| `HarnessMessageRecorded` | `harness, content` | worker | Final message from an external harness run through ACP ([runtimes-and-providers.md](runtimes-and-providers.md)). |
+| `HarnessMessageRecorded` | `harness, content` | worker | Final message from an external harness run through ACP ([runtimes-and-providers.md](runtimes-and-providers.md)). The built adapters record harness messages as `ModelResponseRecorded` instead. |
 
-Project-level events that are not part of a run (machine enrolment and revocation such as `MachineRevoked`, config changes, signed checkpoints, archival) go to a per-project audit log with the same format and chain rules.
+*(planned)* Office-level events that are not part of a run (node enrolment and revocation such as `MachineRevoked`, config changes, signed checkpoints, archival) go to an office audit log with the same format and chain rules. (Earlier drafts said "project"; the single-owner product has one office, [ADR-0008](../adr/0008-personal-workforce-not-managed-cloud.md).)
 
-**Writes by the api** *(built)*. `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided` and `CancelRequested` (`Payload::is_external`) come from the server, which does not hold the run's lease. They go through `EventStore::append_external(run, payloads)`, which takes no lease, accepts only external variants, refuses closed runs, and serializes with the run's head lock like any other write; the events carry the current epoch. The lease holder's next append then gets `SeqConflict`, re-reads the tail and retries, which is also how it learns of a cancellation or a decision. Workers stay the only writers of execution events.
+**Writes by the server** *(built)*. `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided` and `CancelRequested` (`Payload::is_external`) come from the server (the API, the Telegram bot, the intake), which does not hold the run's lease. They go through `EventStore::append_external(run, payloads)` (`RunHead::append_external`), which takes no lease, accepts only external variants, refuses closed runs, and serializes with the run's head lock like any other write; the events carry the current epoch. The lease holder's next append then gets `SeqConflict`, re-reads the tail and retries (`Session::append` in `shiioo-runtime/src/worker.rs`, up to four times), which is also how it learns of a cancellation or a decision. Workers stay the only writers of execution events.
 
 ## 4. Blobs *(planned)*
 
@@ -139,7 +141,7 @@ pub struct BlobRef {
 - Blobs are written **before** the event that references them. A blob without an event is garbage, collected later; an event without its blob cannot happen.
 - Because `sha256` is inside the hashed payload, the hash chain covers blob content transitively. Anyone verifying the log can fetch and check each blob.
 - `shiioo-blob` wraps `object_store` (S3, R2, GCS, Azure, local disk). On-device, blobs go to a directory next to the redb file.
-- Blobs are per project, so deleting a project can delete its blobs without scanning other projects.
+- Blobs live beside the office's data; today large tool outputs are truncated to head and tail (`shiioo-runtime/src/tools.rs`) instead of stored.
 
 ## 5. Backends
 
@@ -156,11 +158,11 @@ A single file, no server ([ADR-0003](../adr/0003-redb-default-postgres-for-clust
 - The `(run, seq)` key makes `read(run, from)` a range scan.
 - `payload` is kept as `RawValue`, the exact JSON text that was hashed.
 - Inserting over an existing key aborts the transaction, a backstop for the `seq` rule.
-- **One writer per file**: writes to different runs queue behind each other. Readers never block. Fine for one device; it is why clusters use Postgres.
+- **One writer per file**: writes to different runs queue behind each other. Readers never block. Fine for one office on one machine, which is the product ([ADR-0010](../adr/0010-single-binary-server-and-nodes.md)).
 - Lease expiry uses the local clock; on one machine there is no skew to worry about.
 - `RunHead` is serialized as JSON, so its field names are part of the file format. Renaming a field needs a migration.
 
-### Postgres *(built, `postgres` feature)*
+### Postgres *(built, `postgres` feature; no further investment, ADR-0010)*
 
 ```sql
 runs   (run_id uuid PK, next_seq, last_hash bytea, closed,
@@ -174,7 +176,7 @@ events (run_id, seq, epoch, recorded_at_ms, schema, prev_hash, hash,
 - Lease expiry and `recorded_at` use the database clock (`clock_timestamp()`), so skew between worker machines can't extend a lease.
 - A trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` on `events`.
 - Check constraints mirror the core rules (`prev_hash` present iff `seq > 0`, hashes are 32 bytes, lease fields consistent).
-- *(planned)* Batch inserts with `UNNEST` instead of one statement per event; time-or-hash partitioning of `events` once tables grow.
+- *(deferred, ADR-0010)* Batch inserts with `UNNEST`; partitioning of `events`; `LISTEN/NOTIFY` wakeups. The backend stays behind the feature flag and the conformance suite, nothing more.
 
 ### Memory *(built)*
 
@@ -198,31 +200,29 @@ Turso, the Rust rewrite of SQLite, would give one embedded engine with concurren
 ## 7. Reading and streaming
 
 - `read(run, from: Seq)` returns events with `seq >= from` in order *(built)*.
-- *(planned)* `subscribe(run, from)` returns a stream: first the stored events from `from`, then new events as they are committed. A subscriber that falls behind is dropped and resumes with `read`.
-  - **Postgres:** after commit, the writer runs `NOTIFY shiioo_run, '<run_id>:<seq>'`. Gateways `LISTEN` and fan out to their SSE subscribers.
-  - **redb / on-device:** an in-process `tokio::sync::broadcast` channel per active run.
-- The api serves SSE with `id: <seq>`. A reconnecting client sends `Last-Event-ID` and gets everything after it, so no output is ever missed ([api.md](api.md), [ADR-0004](../adr/0004-rest-and-sse-api.md)).
-- Token-by-token model output is streamed to subscribers as **ephemeral deltas**, which are not events and carry no `seq`. The complete response is recorded as `ModelResponseRecorded`. A client that reconnects mid-response sees the final event, not the deltas it missed.
+- *(built)* Wake-ups: the `Notifying<S>` wrapper (`crates/shiioo-store/src/notify.rs`) announces every successful write to a run through a per-run `tokio::sync::watch` channel. Announcements are hints only: a stream always reads the events themselves, so a missed or coalesced hint delays nothing but a wake-up. *(deferred, ADR-0010)* `LISTEN/NOTIFY` for a Postgres office.
+- *(built)* The server serves SSE with `id: <seq>` (`GET /v1/runs/{id}/events/stream`): it subscribes, reads from `from`, and alternates reading and waiting, with a 2 s re-read as a backstop. A reconnecting client sends `Last-Event-ID` and gets everything after it, so no output is ever missed ([api.md](api.md), [ADR-0004](../adr/0004-rest-and-sse-api.md)).
+- *(planned)* Token-by-token model output streamed as **ephemeral deltas**, which are not events and carry no `seq`. The complete response is recorded as `ModelResponseRecorded`. A client that reconnects mid-response sees the final event, not the deltas it missed.
 
-## 8. Projections *(planned)*
+## 8. Projections *(planned; two folds exist)*
 
-Run lists, cost per agent, full-text search and dashboards are **projections**: tables fed by consuming events, keyed by `(run_id, seq)` so they are idempotent. They are never a source of truth. Any projection can be dropped and rebuilt from the logs, and a bug in one can never corrupt a run.
+Today the run list is `list_runs()` plus a read of each log (`shiioo-api::ApiState::list_runs`), and the capacity view is an in-memory fold of `CapacityObserved` events (`shiioo-api::CapacityTracker`, seeded from the logs at startup). Both are rebuildable from the logs, which is the point. Proper projections: run lists, cost per agent, full-text search and dashboards are **projections**: tables fed by consuming events, keyed by `(run_id, seq)` so they are idempotent. They are never a source of truth. Any projection can be dropped and rebuilt from the logs, and a bug in one can never corrupt a run.
 
 Each projection stores the last `(run_id, seq)` it applied per run. On Postgres they live in the same database; on-device they live in separate redb tables.
 
 ## 9. Retention and archival *(planned)*
 
-Finished runs stay hot for a configurable time (default 30 days), then are archived:
+Finished runs stay hot for a configurable time (default 30 days), then are archived (nothing is archived today; the hot store keeps everything):
 
 1. Verify the chain.
 2. Write the run's events to object storage as a segment (JSONL, or Parquet for analytics), plus a **signed checkpoint**: run id, last `seq`, last `hash`, signer key id.
-3. Write an `ArchivedRun` entry to the project's audit log (itself a hash-chained log).
+3. Write an `ArchivedRun` entry to the office's audit log (itself a hash-chained log).
 4. Replace the run's hot events with a **tombstone head**: run id, final `seq` and `hash`, archive location, checkpoint signature.
 
 Archival is the **only** path that removes events from the hot store. It runs through a dedicated, audited code path (on Postgres, as a role allowed to bypass the append-only trigger for archived runs only). Reading an archived run fetches the segment and verifies it against the tombstone. Legal holds block archival.
 
 ## 10. Open questions
 
-- Per-project logs for project-level events (policy changes, approvals config): reuse the run log machinery with a "project run", or a separate log type?
+- The office audit log (rules changes, node enrolment): reuse the run log machinery with an "office run", or a separate log type?
 - Whether `ModelResponseRecorded` should always store the response as a blob, so the event stays fixed-size.
 - Segment format for archives: JSONL is simpler to verify, Parquet is better for analytics. Possibly both.

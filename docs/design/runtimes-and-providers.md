@@ -4,22 +4,22 @@ What actually drives a run: the native agent loop or an external agent harness, 
 
 Read [architecture.md](../architecture.md) first. Related: [execution.md](execution.md) (leases, turns, recovery), [tools-and-machines.md](tools-and-machines.md) (where tools run), [governance.md](governance.md) (budgets and approvals), [fork-and-replay.md](fork-and-replay.md) (why responses are recorded the way they are).
 
-## 1. Two kinds of runtime *(planned)*
+## 1. Two kinds of runtime *(built)*
 
 | | Native runtime | Harness runtime |
 |---|---|---|
-| What runs the loop | `shiioo-runtime` in a worker | An external harness (Claude Code, Codex, Gemini CLI, OpenCode, Goose) on a Machine |
-| How Shiioo talks to it | Directly | Agent Client Protocol (ACP) through an adapter |
-| Model calls | Shiioo calls the provider and records every response | The harness calls its model; Shiioo sees what ACP exposes |
-| Tools | Shiioo tools, MCP | The harness's own tools; Shiioo MCP tools can be offered to it |
-| Policies and approvals | Before every tool call | On every permission request the harness raises, and on Shiioo tools it uses |
-| Replay and fork | Turn-level, deterministic | At the granularity the harness exposes; workspace snapshots still work |
+| What runs the loop | `shiioo-runtime` in a worker | An external harness (Claude Code and Codex built; Gemini CLI, OpenCode, Goose planned) on a Machine |
+| How Shiioo talks to it | Directly | Its headless JSON interface (`claude -p --output-format stream-json`, `codex exec --json`) through a `HarnessDriver`; the Agent Client Protocol (ACP) *(planned)* for harnesses that only speak it |
+| Model calls | Shiioo calls the provider and records every response | The harness calls its model; Shiioo records what the harness prints |
+| Tools | Shiioo tools (MCP *planned*) | The harness's own tools |
+| Rules and approvals | *(planned)* before every tool call | *(built)* on every tool call, through the harness's hook into the server |
+| Replay and fork *(planned)* | Turn-level, deterministic | At the granularity the harness exposes; workspace snapshots still work |
 
-An agent definition picks its runtime (`runtime: native` or `runtime: { harness: claude-code }`). Both write to the same event log, use the same leases, budgets, policies and audit.
+A run picks its runtime in `RunSpec.runtime`: `{"kind":"native"}` or `{"kind":"harness","harness":"claude-code"|"codex", …}` (`shiioo-runtime::spec`); the employee broker fills it in for tasks from the phone or the intake ([governance.md](governance.md)). Both write to the same event log and use the same leases and audit.
 
-## 2. The native runtime *(planned, `shiioo-runtime`)*
+## 2. The native runtime *(built in its simple form, `shiioo-runtime::worker`)*
 
-One turn, as executed by the worker that holds the run's lease:
+Built: steps 1, 2, 6 and 7 without the policy decision, plus `max_turns`. Planned: the budget check, the capacity broker, deltas, `BudgetCharged`, snapshots and parking. One turn, as executed by the worker that holds the run's lease:
 
 1. **Fold** the log into the run state (transcript, pending calls, budget used).
 2. **Recover** if this lease is a takeover: settle dangling intents (see [execution.md](execution.md) and [tools-and-machines.md §3.4](tools-and-machines.md)).
@@ -30,7 +30,7 @@ One turn, as executed by the worker that holds the run's lease:
 7. For each tool call: policy decision, approval if needed, `ToolIntent`, execute, `ToolResult`.
 8. Record `BudgetCharged`, take a workspace snapshot, then either loop, park (waiting for input or approval), or finish.
 
-The loop is a plain async function over a `RunContext` that only touches the outside world through traits (`EventStore`, `Provider`, `ToolExecutor`, `Clock`), so the simulator in `shiioo-sim` drives it unchanged.
+The loop touches the outside world only through traits and injected pieces (`EventStore`, `ModelProvider`, the `LocalMachine` and its `Toolbox`, `Clock`), so the simulator in `shiioo-sim` drives it unchanged.
 
 ## 3. Harness runtime *(Claude Code and Codex built; ACP planned)*
 
@@ -56,7 +56,7 @@ Rules the adapter follows:
 - **Crash = resume.** A worker that dies mid-run leaves `HarnessSessionStarted` in the log; the next lease holder runs `--resume <session>` with a continuation prompt and `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1`. After five such starts the run fails. A worker that loses its lease kills its harness process immediately (the heartbeat flags the loss).
 - **Workspaces.** A run on a repository gets `<data>/worktrees/<run>` on branch `shiioo/<run-prefix>`, created from the repo's HEAD and reused across resumes. Pushing is the harness's job and subject to its allow rules; merging is the owner's.
 
-Permissions today: the harness's own mode (`acceptEdits` by default) and allow rules (`Bash(git *)` form). Unanswered prompts in print mode are denied, and the denials show up in `HarnessResult.permission_denials`. Phase 2 routes them to the owner: the documented way is a `PreToolUse` / `PermissionRequest` hook passed via `--settings`, answered by Shiioo's rules or a Telegram approval (`--permission-prompt-tool` exists too, but its contract is undocumented).
+- **Permissions go through Shiioo** *(built)*. When the worker runs inside the server (`shiioo up`), it starts Claude Code with `--settings` installing a `PreToolUse` hook (`shiioo hook pre-tool-use`, six-hour timeout) and permission mode `default`; before every tool call the hook asks `POST /v1/runs/{id}/permissions`, where the rules answer or the owner is asked ([governance.md](governance.md), [api.md](api.md)). Without a server (`shiioo run`), the harness's own mode (`acceptEdits` by default) and its allow rules (`Bash(git *)` form) apply, unanswered prompts are denied, and the denials show up in `HarnessResult.permission_denials`.
 
 ### 3.2 Codex *(built, `shiioo-runtime::harness::codex`)*
 
@@ -78,7 +78,7 @@ Permissions today: the harness's own mode (`acceptEdits` by default) and allow r
 
 Rules the adapter follows:
 
-- **Sandbox from the permission mode.** `acceptEdits` (the default) → `workspace-write`, `default`/`plan` → `read-only`, `bypassPermissions` → `--dangerously-bypass-approvals-and-sandbox`; Codex's own names are accepted too. Codex's sandbox is real OS isolation (Seatbelt on macOS, Landlock/seccomp on Linux): commands may write only inside the worktree and have no network unless configured. `approval_policy="never"` because nobody is there to answer a prompt: a command the sandbox refuses fails, it is not escalated. (`untrusted` and `on-failure` are gone from current Codex.)
+- **Sandbox from the permission mode.** The default (`HarnessSpec::codex()`) is `danger-full-access`, for the reason above. Explicit modes map: `acceptEdits` → `workspace-write`, `default`/`plan` → `read-only`, `bypassPermissions` → `--dangerously-bypass-approvals-and-sandbox`; Codex's own names are accepted too. `workspace-write` is real OS isolation (Seatbelt on macOS, Landlock/seccomp on Linux): commands may write only inside the worktree and have no network unless configured, but cannot commit. `approval_policy="never"` because nobody is there to answer a prompt: a command the sandbox refuses fails, it is not escalated. (`untrusted` and `on-failure` are gone from current Codex.)
 - **Shiioo's rules still decide** when the worker has a `HookEndpoint`: the adapter passes `-c features.hooks=true -c 'hooks.PreToolUse=[{matcher="^(Bash|shell)$",hooks=[{type="command",command="<shiioo> hook pre-tool-use",timeout=21600}]}]' --dangerously-bypass-hook-trust`. Codex's hook contract is the same as Claude Code's: stdin JSON with `tool_name`, `tool_input.command`, `session_id`, `turn_id`, `cwd`, `model` (no `tool_use_id` observed), stdout `hookSpecificOutput.permissionDecision` `allow`/`deny` with a reason (`ask` is parsed but unsupported). Verified live: a denying hook blocked `date` and Codex told the model. Hooks inherit the harness's environment, so the `SHIIOO_*` variables reach `shiioo hook pre-tool-use` unchanged. The matcher is limited to shell commands: `apply_patch` edits are bounded by the sandbox, and the rules know `Edit`/`Write`, not `apply_patch` (widen the matcher once the rules do).
 - **Subscription by default.** `OPENAI_API_KEY` and `CODEX_API_KEY` are removed from the child environment under `HarnessBilling::Subscription`, so the saved ChatGPT login is used (`codex exec` "reuses saved CLI authentication"; an inline `CODEX_API_KEY` is the documented way to bill an API key for one run).
 - **No system prompt or allow rules.** Codex has no `--append-system-prompt`; the agent's `system` text is prepended to the prompt as "Instructions: … Task: …". `tools`, `max_turns` and `max_budget_usd` have no Codex equivalent and are ignored.
@@ -105,9 +105,9 @@ OpenCode, Gemini CLI, Goose and others expose the [Agent Client Protocol](https:
 
 Adapters are versioned per harness and tested against recorded output.
 
-## 4. Context building *(planned)*
+## 4. Context building *(simple form built; skills, memory and compaction planned)*
 
-The prompt for a turn is assembled in a fixed order, from most stable to least stable, so provider prompt caches hit as often as possible:
+Today (`shiioo-runtime::context`): the agent's `system` text, the task as the first user message, and the transcript folded from the log (assistant content verbatim, tool results grouped per turn). Target: the prompt for a turn is assembled in a fixed order, from most stable to least stable, so provider prompt caches hit as often as possible:
 
 | Order | Part | Changes when |
 |---|---|---|
@@ -115,7 +115,7 @@ The prompt for a turn is assembled in a fixed order, from most stable to least s
 | 2 | Agent instructions | Agent definition version |
 | 3 | Tool definitions (pinned at run start) | Never within a run |
 | 4 | Skills index (names + one-line descriptions) | Agent definition version |
-| 5 | Project memory (retrieved notes) | Per run start |
+| 5 | Office memory (retrieved notes) | Per run start |
 | 6 | Transcript folded from the log | Every turn (append-only, so the prefix stays stable) |
 
 Cache breakpoints are placed after parts 4 and 5 and at the end of the previous turn, for providers that support explicit breakpoints (Anthropic) or prefix caching (OpenAI, Gemini).
@@ -181,9 +181,11 @@ Tool results are recorded as `ToolResult { call_id, output, is_error }` and rebu
 
 Local models through `OpenAiCompatProvider` are first-class: `shiioo up` with Ollama is a fully offline setup for native runs.
 
-### 5.4 Capacity broker *(planned)*
+### 5.4 Capacity broker *(built as the employee broker; key pools deferred)*
 
-Ported from shiioo-legacy's `capacity.rs`. A project configures **pools**: ordered lists of endpoints and keys per model family.
+What exists (`shiioo-api::employees`, `shiioo-api::CapacityTracker`): the owner lists `[[employees]]` in order (Claude Code, Codex, native local models); every harness run's `CapacityObserved` events feed a per-provider view of the five-hour and seven-day windows; a new task goes to the first employee whose provider is under its `max_five_hour` / `max_seven_day` limits (unknown counts as available), or is refused with the reasons. `GET /v1/capacity` and `/capacity` show the windows. Codex reports none in its `exec` stream (§3.2), so it is always available until its app-server is wired.
+
+*(deferred, ADR-0008)* The pool design below, ported from shiioo-legacy's `capacity.rs`, assumed several API keys and providers per model family. One owner on subscriptions has no key pools; it stays here for the day that changes. A project configures **pools**: ordered lists of endpoints and keys per model family.
 
 ```toml
 [[pools]]
@@ -201,11 +203,11 @@ fallback = "local"                   # another pool, only if the agent's policy 
 - Retries overload and transport errors with jittered backoff, on another member when possible. Never retries invalid requests.
 - **Failover to a different model** (a fallback pool) changes behavior, so it requires the agent's policy to allow it, and is recorded in the response event.
 - Each response's usage is priced with the member's price table and recorded as `BudgetCharged { tokens, cost, pool, member }` (new), which is what budgets enforce (see [governance.md](governance.md)).
-- In a cluster, rate-limit state is per worker with a shared view in the store, refreshed every few seconds; exact global limiting isn't attempted.
+- With several machines, rate-limit state is per worker with a shared view in the store, refreshed every few seconds; exact global limiting isn't attempted.
 
 ## 6. Agent definitions as configuration *(planned)*
 
-An agent is versioned configuration: instructions, runtime, model pool, tools and MCP servers, skills, policy set, budget, isolation requirement, machine selector.
+Today an agent is the inline `AgentSpec` of a run (model, system text, tools, `max_turns`) plus the `[[employees]]` entries in `config.toml` (name, kind, capacity limits). Target: an agent is versioned configuration: instructions, runtime, employee or model, tools and MCP servers, skills, rules, budget, isolation requirement, machine selector.
 
 ```toml
 # agents/reviewer.toml
@@ -216,7 +218,7 @@ model = "claude-sonnet"
 instructions = "file:instructions/reviewer.md"
 tools = ["fs.read", "search", "shell", "mcp.github.*"]
 skills = ["skills/code-review"]
-policy = "policies/reviewer.cedar"
+rules = "rules/reviewer.toml"      # Cedar deferred, ADR-0008
 budget = { per_run_usd = 2.0, per_day_usd = 40.0 }
 isolation = "container"
 machines = { labels = { pool = "ci" } }

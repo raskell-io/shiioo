@@ -1,9 +1,12 @@
-//! `shiioo`: run agents on this machine.
+//! `shiioo`: the office on this machine.
 //!
-//! The run's event log lives in `<workspace>/.shiioo/shiioo.redb` and the
-//! machine's call journal in `<workspace>/.shiioo/journal.jsonl`. Kill the
-//! process at any point and `shiioo resume <run>` continues where the log
-//! left off.
+//! `run`, `resume` and `log` work on single runs from a terminal; `serve`
+//! (alias `up`) runs the office: the API and dashboard, the Telegram bot,
+//! the workers and the issue intake; `install` makes it a login service;
+//! `hook` is what the harnesses call before each tool call. Everything
+//! lives in `<workspace>/.shiioo/` (see `docs/office-layout.md` in this
+//! crate). Kill the process at any point and the runs continue from their
+//! logs on the next start.
 
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
@@ -39,8 +42,9 @@ enum Command {
     Run {
         /// What the agent should do.
         task: String,
-        /// Run the task with an external agent harness (`claude-code`)
-        /// instead of Shiioo's own loop. Uses the harness's own login.
+        /// Run the task with an external agent harness (`claude-code` or
+        /// `codex`) instead of Shiioo's own loop. Uses the harness's own
+        /// login, so no API key is needed.
         #[arg(long, value_parser = ["claude-code", "codex"])]
         harness: Option<String>,
         /// Git repository the harness works on. The run gets its own
@@ -73,7 +77,8 @@ enum Command {
         /// the subscription login.
         #[arg(long, requires = "harness")]
         api_billing: bool,
-        /// Stop a harness run at this estimated spend (API billing only).
+        /// Stop a harness run at this estimated spend (Claude Code with API
+        /// billing only; Codex ignores it).
         #[arg(long, requires = "harness")]
         max_budget_usd: Option<f64>,
         /// Fail a harness run that takes longer than this, across resumes.
@@ -140,8 +145,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum HookEvent {
-    /// Claude Code `PreToolUse`. Environment: SHIIOO_SERVER_URL,
-    /// SHIIOO_API_TOKEN, SHIIOO_RUN_ID (set by the worker on the harness).
+    /// The `PreToolUse` hook of Claude Code and Codex (same contract).
+    /// Environment: SHIIOO_SERVER_URL, SHIIOO_API_TOKEN, SHIIOO_RUN_ID, set
+    /// by the worker on the harness process.
     PreToolUse,
 }
 

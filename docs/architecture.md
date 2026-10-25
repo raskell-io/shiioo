@@ -52,10 +52,13 @@ Organization (tenant, billing, SSO)
   phone (Telegram, web dashboard over Tailscale) · GitHub · CLI
                  │  REST + resumable SSE  (/v1), Telegram long-polling
 ┌────────────────▼──────────────── shiioo server ─────────────────────────────┐
-│  api        auth, validation, writes commands as events, serves streams      │
-│  scheduler  finds runnable runs, fires triggers and timers, places work      │
-│  worker     leases a run, executes turns: context → model → rules → tools    │
-│  gateway    holds node connections and SSE subscribers, routes tool calls    │
+│  api        auth, runs, events and streams, permissions and approvals,       │
+│             capacity and employees, the dashboard                            │
+│  scheduler  (planned) finds runnable runs, fires triggers and timers; today  │
+│             the api starts a worker task per run, intake polls GitHub        │
+│  worker     leases a run, executes turns: context → model → rules → tools,   │
+│             or drives a harness and records its steps                        │
+│  gateway    (planned) holds node connections; today the only node is local   │
 │  telegram   delegation, approvals and notifications for the owner            │
 └───────┬──────────────────────────────┬─────────────────────────┬─────────────┘
         │ EventStore                   │ BlobStore               │ WebSocket + TLS, dialed out
@@ -64,9 +67,9 @@ Organization (tenant, billing, SSO)
                                                                sandboxes; owns workspaces
 ```
 
-- **One binary, `shiioo`, three roles** ([ADR-0010](adr/0010-single-binary-server-and-nodes.md)). `shiioo up` runs server and node in one process (the whole system on one Mac); `shiioo server` and `shiioo node --server …` split them across machines; the CLI is the same binary. Like Nomad: the server decides, nodes execute and dial out.
+- **One binary, `shiioo`, three roles** ([ADR-0010](adr/0010-single-binary-server-and-nodes.md)). `shiioo up` (alias of `serve`) runs server and node in one process: the whole system on one Mac, which is what exists today. `shiioo node --server …` on other machines is planned; the CLI is the same binary. Like Nomad: the server decides, nodes execute and dial out.
 - **Workers are stateless.** Any worker can run any turn of any run. A worker crash costs at most the current turn, which the next lease holder recovers from the log.
-- **Work runs on nodes, not in workers.** For harness runs the node starts the harness and streams its steps back; for tool calls the worker records the intent, the gateway forwards the call to the node, the node executes and returns the result, the worker records it.
+- **Work runs on nodes, not in workers.** For harness runs the node starts the harness and the worker records its steps as events; for native tool calls the worker records the intent, the node (today the in-process `LocalMachine`) executes it and journals the outcome, the worker records the result. Harness tool calls are gated by the hook calling back into the api before they run.
 - **Nodes dial out.** No inbound ports on machines; works behind NAT, and over Tailscale needs no public address at all.
 
 Details: [design/execution.md](design/execution.md), [design/tools-and-machines.md](design/tools-and-machines.md), [design/runtimes-and-providers.md](design/runtimes-and-providers.md).

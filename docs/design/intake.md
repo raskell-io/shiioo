@@ -1,6 +1,6 @@
 # Work intake: GitHub issues
 
-Labelling a GitHub issue hands it to the office. The intake turns it into a run, keeps the issue informed, and marks it when the run ends. Built in `crates/shiioo-intake` *(built; wiring into `shiioo serve` is the server's job)*.
+Labelling a GitHub issue hands it to the office. The intake turns it into a run, keeps the issue informed, and marks it when the run ends. *(built)*: the poller, label protocol, task prompt and state in `crates/shiioo-intake`; the wiring in `shiioo serve` (`[intake] enabled = true` in `config.toml`, the `IssueSink` that starts runs through the employee broker).
 
 ## The flow
 
@@ -8,7 +8,7 @@ Labelling a GitHub issue hands it to the office. The intake turns it into a run,
 owner labels issue #42 "shiioo"
         │  (poll, every 60 s, per configured repo: gh issue list --label shiioo)
         ▼
-intake starts a run on the repo  ──►  comment: "🏃 Shiioo started run <id> on branch shiioo/<id8>"
+intake starts a run on the repo  ──►  comment: "🏃 Shiioo started run `<id>` on branch `shiioo/<id8>`."
         │
         │  the run works in its worktree, commits, pushes, opens a PR (each tool call still
         │  goes through the rules and, where they say ask, the owner's phone)
@@ -36,7 +36,7 @@ The intake creates the three labels in each repo on start (`gh label create --fo
 - the issue number, title, URL and body (verbatim, between `---` markers);
 - standing instructions: the agent works in a git worktree on the named branch, commits with clear messages, pushes with `git push -u origin <branch>`, opens a pull request with `gh pr create --fill --head <branch>` whose description says `Closes #<n>`, and stops to explain rather than guess when something is unclear or shouldn't be done.
 
-The branch name is `shiioo/<first 8 chars of the run id>`, which only exists once the run does. The intake therefore writes the task with a `{branch}` placeholder (`BRANCH_PLACEHOLDER`) and the server substitutes the real name with `with_branch(task, branch)` when it creates the run. The run's `RunCreated` event carries the final task.
+The branch name is `shiioo/<first 8 chars of the run id>`, which only exists once the run does. The intake therefore writes the task with a `{branch}` placeholder (`BRANCH_PLACEHOLDER`) and the server replaces it with `with_branch(task, …)` before it creates the run. Today it substitutes `$(git branch --show-current)`, which the agent's shell expands inside the worktree, where that branch is checked out; the literal name would need the run id first. The run's `RunCreated` event carries the task as substituted.
 
 Pushing and opening the PR are the agent's actions and go through the rules: with the defaults, `git push *` and `gh *` ask the owner. An owner who trusts a repository can allow them for that repo in `rules.toml`:
 
@@ -65,7 +65,7 @@ decision = "allow"
 | What fails | What happens |
 |---|---|
 | `gh` can't list issues (network, auth, rate limit) | logged; retried next poll; nothing else changes |
-| the run can't be started | logged; the issue is not recorded, so it's retried next poll |
+| the run can't be started (for example every employee is above its capacity limit) | logged; the issue is not recorded, so it's retried next poll |
 | the comment or relabel fails | logged; the state is already saved, so the run is not started twice; the issue just lacks the comment |
 | the run fails, is cancelled, or needs the owner | `❌ <reason>` comment, `shiioo:failed` label; the owner sees the same in Telegram and the dashboard |
 | the server restarts mid-run | the run itself resumes from its log (see execution); the intake reloads its state and keeps polling the run's outcome |
@@ -81,4 +81,4 @@ Issue titles and bodies are **untrusted text handed to an agent**. The intake do
 
 ## Configuration
 
-In the server's `config.toml` the repositories under `[repos]` are the candidates; `[intake] repos = ["demo", …]` (planned in the server) selects which of them the intake watches, `label` overrides `shiioo`, `interval_secs` the poll interval. The intake runs inside `shiioo serve`; it needs `gh` on the `PATH` (the installed service captures it) and the owner logged in. `IntakeConfig.gh_bin` (or `SHIIOO_GH_BIN`) points at another `gh`; `gh_prefix_args` puts arguments before every call, which the tests use to run a fake through `/bin/sh <script>` (macOS stalls the first direct execution of a freshly written script for a long time).
+In the server's `config.toml`: `[intake] enabled = true` switches the intake on (it is off by default); it then watches every repository under `[repos]`. `label` overrides `shiioo`, `interval_secs` the poll interval (floor: 10 s). *(planned)* `repos = ["demo", …]` to watch a subset. Each run is assigned like a `/run` from the phone: `employee: "auto"`, so the capacity broker picks. The intake runs inside `shiioo serve`; it needs `gh` on the `PATH` (the installed service captures it) and the owner logged in. `IntakeConfig.gh_bin` (or `SHIIOO_GH_BIN`) points at another `gh`; `gh_prefix_args` puts arguments before every call, which the tests use to run a fake through `/bin/sh <script>` (macOS stalls the first direct execution of a freshly written script for a long time).

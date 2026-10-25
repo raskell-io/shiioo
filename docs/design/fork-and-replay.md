@@ -2,7 +2,7 @@
 
 This is Shiioo's differentiator: any run can be rewound to a turn, forked with a different prompt, model or policy, compared with its fork, and replayed against a new model as a regression test. It works because the log is complete ([ADR-0001](../adr/0001-event-log-is-the-only-state.md)) and the workspace is snapshotted at turn boundaries.
 
-Everything here is *(planned)*. It depends on the event log ([event-log.md](event-log.md)), the runtime ([execution.md](execution.md)) and workspace snapshots taken by the daemon ([tools-and-machines.md](tools-and-machines.md)).
+Everything here is *(planned)* except the branch diff noted in §4. It depends on the event log ([event-log.md](event-log.md)), the runtime ([execution.md](execution.md)) and workspace snapshots taken by the node ([tools-and-machines.md](tools-and-machines.md)). It is the last phase of the roadmap ([positioning.md](../positioning.md#roadmap)).
 
 ## 1. What makes it possible
 
@@ -18,7 +18,7 @@ Everything here is *(planned)*. It depends on the event log ([event-log.md](even
 
 A **turn boundary** is the point after all tool results of a turn are recorded and before the next model call. It is the only place a run can be forked: the conversation is consistent (no pending tool calls) and the workspace is quiescent.
 
-At each boundary, if the run has a workspace on a machine, the daemon takes a snapshot and the worker appends:
+At each boundary, if the run has a workspace on a machine, the node takes a snapshot and the worker appends:
 
 ```rust
 SnapshotTaken {
@@ -54,7 +54,7 @@ ForkedFrom {
 ```
 
 - **The prefix is shared, not copied.** Reading a forked run's log reads the parent's events `0..=seq` first, then the fork's own. The fork's first own event, `ForkedFrom`, is written at `seq + 1` with `prev_hash` set to the hash of the parent's event at `seq`. Seqs and the hash chain therefore continue unbroken, the combined history verifies end to end with the same `verify_chain`, and SSE resume works on the fork exactly as on any run.
-- **The workspace is restored** from the `SnapshotTaken` at or before `seq`, on the same machine or on any machine in the project for `Git` snapshots.
+- **The workspace is restored** from the `SnapshotTaken` at or before `seq`, on the same machine or on any machine of the office for `Git` snapshots.
 - **Rewind** is a fork with no changes, after which the user typically edits the next message. The original run is never modified; it stays in the record.
 - Forks of forks are allowed. Reads follow the chain of `ForkedFrom` links. To keep reads cheap, an archived run's log can be materialized (prefix copied) once it is no longer the newest member of a long chain.
 
@@ -62,7 +62,7 @@ API: `POST /v1/runs/{id}/fork { "at_seq": 42, "changes": { "model": "…" } }` (
 
 ## 4. Diff
 
-Two runs that share an ancestor can be compared from their fork point:
+*(built)* `GET /v1/runs/{id}/diff` shows a run's branch against the repository's `HEAD` (`git diff HEAD...shiioo/<run>`), in the dashboard's Diff panel. *(planned)* Two runs that share an ancestor can be compared from their fork point:
 
 | Dimension | How |
 |---|---|
@@ -155,7 +155,7 @@ struct ToolDeterminism {
 
 - Snapshots are content-addressed and incremental (git objects, CoW blocks), so a turn usually adds kilobytes, not a copy of the workspace.
 - Each snapshot has a reference count: the run that took it plus every fork whose `ForkedFrom.seq` needs it, plus every eval suite that pins it.
-- Retention per project: keep all snapshots of runs younger than N days; keep only the final snapshot plus pinned ones for older runs; delete unreferenced snapshots after a grace period.
+- Retention: keep all snapshots of runs younger than N days; keep only the final snapshot plus pinned ones for older runs; delete unreferenced snapshots after a grace period.
 - The event log itself is never garbage-collected by this process. Archival moves old logs to cold storage ([event-log.md](event-log.md)) but keeps them verifiable.
 
 ## 9. Events summary

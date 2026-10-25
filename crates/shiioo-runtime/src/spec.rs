@@ -71,7 +71,7 @@ pub struct HarnessSpec {
     #[serde(default)]
     pub billing: HarnessBilling,
     /// Path of the harness executable. Default: looked up on `PATH`
-    /// (`claude`), or `SHIIOO_CLAUDE_BIN`.
+    /// (`claude` or `codex`), or `SHIIOO_CLAUDE_BIN` / `SHIIOO_CODEX_BIN`.
     #[serde(default)]
     pub binary: Option<PathBuf>,
     /// Time budget: the run fails once the harness has run this long in
@@ -87,8 +87,6 @@ pub struct HarnessSpec {
 }
 
 impl HarnessSpec {
-    /// Codex with the defaults: subscription billing, `acceptEdits` (its
-    /// `workspace-write` sandbox), no repo.
     /// Codex with the defaults. Its own OS sandbox is off
     /// (`danger-full-access`): under `approval_policy = never` Codex cannot
     /// escalate, and `workspace-write` makes the checkout's git directory

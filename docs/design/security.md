@@ -2,16 +2,18 @@
 
 Agents act with real credentials on real systems, and they read untrusted text all day. This document states what Shiioo defends against, how, and, just as important, what it does not defend against.
 
-Related: [governance.md](governance.md) (policies, approvals), [tools-and-machines.md](tools-and-machines.md) (daemon and sandboxes), [event-log.md](event-log.md) (hash chain), [ADR-0005](../adr/0005-cedar-policies-and-biscuit-credentials.md), [ADR-0006](../adr/0006-daemon-dials-out-over-websocket.md).
+Related: [governance.md](governance.md) (rules, approvals), [tools-and-machines.md](tools-and-machines.md) (nodes and isolation), [event-log.md](event-log.md) (hash chain), [telegram.md](telegram.md#security) (the phone), [ADR-0005](../adr/0005-cedar-policies-and-biscuit-credentials.md), [ADR-0006](../adr/0006-daemon-dials-out-over-websocket.md) (the node, then called the daemon), [ADR-0008](../adr/0008-personal-workforce-not-managed-cloud.md) (one owner, one machine).
+
+Status: the controls are the design for the full platform. [§3.0](#30-todays-posture-built) says what stands today, for one owner on one Mac; the multi-owner controls (Biscuit, tenant isolation, SSO) are *(deferred, ADR-0008)*.
 
 ## 1. Assets
 
 | Asset | Why it matters |
 |---|---|
 | Credentials and secrets | API keys, deploy keys, cloud credentials the agents use |
-| Machines and workspaces | source code, data, anything the daemon can reach |
+| Machines and workspaces | source code, data, anything the node can reach |
 | The event log | the record of what happened; its integrity is the audit |
-| Configuration | policies, boards, agent definitions: changing them changes what agents may do |
+| Configuration | rules, employees, agent definitions: changing them changes what agents may do |
 | Model and tool spend | budgets are money |
 
 ## 2. Threat model
@@ -21,19 +23,31 @@ Related: [governance.md](governance.md) (policies, approvals), [tools-and-machin
 | T1 | **Prompt injection** through tool outputs | a web page, issue comment, README or email tells the agent to exfiltrate a secret or push to main |
 | T2 | **Malicious or compromised agent definition** | instructions or a skill crafted to abuse tools |
 | T3 | **Runaway agent** | loops, fork bombs of subagents, budget exhaustion |
-| T4 | **Compromised machine** | the daemon host is taken over; it can lie about tool results and see its workspace |
+| T4 | **Compromised machine** | the node's host is taken over; it can lie about tool results and see its workspace |
 | T5 | **Compromised worker** | an attacker controls a worker process: it holds a lease and can call models and dispatch tools |
 | T6 | **Insider with database access** | edits or deletes events to hide what happened |
-| T7 | **Cross-tenant access** | one organization reads or affects another's runs |
+| T7 | **Cross-tenant access** | one organization reads or affects another's runs *(deferred, ADR-0008: one owner)* |
 | T8 | **Supply chain** | a compromised dependency, MCP server, skill or harness |
 | T9 | **Stolen client credentials** | a leaked API key or session token |
 
 ## 3. Controls
 
-### 3.1 Least privilege by construction *(planned)*
+### 3.0 Today's posture *(built)*
 
-- Every run gets a **Biscuit token** minted by the server, scoped to its project, agent, run and the tools and resources its policy allows. Child runs get a token **attenuated** from the parent's: Biscuit attenuation can only remove rights, offline, so a subagent can never do more than its parent (T2, T3, T5).
-- The daemon checks the token on every tool invocation, independently of the worker. A compromised worker cannot use a machine it was not authorized for (T5).
+One owner, one Mac, the owner's own repositories. What stands:
+
+- **Nothing listens publicly.** The API binds to loopback and needs the office token on every call; the phone reaches it over Tailscale. Telegram is long-polled, and the bot obeys one user id ([telegram.md](telegram.md#security)). (T9: a stolen token is the one credential that matters; rotate by deleting `.shiioo/api-token` and restarting.)
+- **Every harness tool call goes through the server.** Claude Code and Codex run with their own permission prompts off and a hook that asks `POST /v1/runs/{run}/permissions` before each tool call; the owner's `rules.toml` answers allow, deny or ask, and ask reaches the phone ([governance.md](governance.md)). A dead server means deny. The default rule set allows reads, edits and build commands inside the worktree and asks for `git push`, `gh`, package installs and anything it does not recognize. (T1, T2: the line of defence is the owner's judgement on each ask.)
+- **Runaway runs are bounded** by `max_turns`, `max_minutes` and `max_budget_usd`, and the owner can `/cancel` from the phone (T3).
+- **No OS sandbox.** The `worktree` isolation level is the only one built: a harness runs as the owner's user with the owner's `PATH`, keychain and network, in its own git worktree. Codex's own sandbox is switched off because it blocks commits in a worktree ([runtimes-and-providers.md](runtimes-and-providers.md)). `container` and `openshell` are the next phase ([tools-and-machines.md §4](tools-and-machines.md#4-isolation-worktree-built-container-and-openshell-planned)).
+- **Credentials are the harnesses' own.** Claude Code uses its keychain login, Codex its own; the worker strips `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `CODEX_API_KEY` from their environment so the subscription pays. The office's own tokens live in `.shiioo/api-token` and `.shiioo/telegram-token`, mode 0600, or in environment variables. There is no secret store and no redaction yet: whatever a tool prints is recorded and may be shown on the phone.
+- **The record is hash-chained** (§3.5) and verified by `shiioo log`; it is not anchored anywhere outside the machine.
+- **One machine.** T4 to T8 are either the same host as the server (nothing to isolate against), or deferred with multi-owner use (T7).
+
+### 3.1 Least privilege by construction *(deferred, ADR-0008)*
+
+- Every run gets a **Biscuit token** minted by the server, scoped to its office, agent, run and the tools and resources its policy allows. Child runs get a token **attenuated** from the parent's: Biscuit attenuation can only remove rights, offline, so a subagent can never do more than its parent (T2, T3, T5).
+- The node checks the token on every tool invocation, independently of the worker. A compromised worker cannot use a machine it was not authorized for (T5).
 - Tokens are short-lived (default: lease TTL plus margin) and bound to the run id.
 
 ### 3.2 Secrets never reach the model *(planned)*
@@ -41,41 +55,44 @@ Related: [governance.md](governance.md) (policies, approvals), [tools-and-machin
 - Secrets are referenced by name in tool configuration (`env: { GITHUB_TOKEN: secret("gh-deploy") }`) and resolved on the machine or in the worker at the tool boundary, after the policy check.
 - Secret values are **never** placed in model context, tool inputs the model sees, or event payloads.
 - Tool outputs are scanned for known secret values (exact and common encodings: base64, URL-encoded) and redacted before they are recorded or returned to the model (T1).
-- Secrets are encrypted at rest with **envelope encryption**: a per-project data key encrypts the values; the data key is wrapped by a KMS key (AWS KMS, GCP KMS, Vault Transit) or, for on-device and self-hosting, by an `age` identity. Rotation re-wraps data keys without re-encrypting values.
+- Secrets are encrypted at rest with **envelope encryption**: an office data key encrypts the values; the data key is wrapped by an `age` identity on the Mac, or by a KMS key (AWS KMS, GCP KMS, Vault Transit) where one exists. Rotation re-wraps data keys without re-encrypting values.
 
-### 3.3 Approval gates on side effects *(planned)*
+### 3.3 Approval gates on side effects *(built for harness runs)*
 
-- The default policy template requires approval for every `side_effecting` tool. Projects loosen it deliberately.
-- Approval binds to the exact call (tool, input digest, resource), so an injected instruction cannot get one call approved and then make another (T1).
-- Separation of duties: the user who started a run cannot approve its requests by default.
+- The default rule set asks before anything that leaves the machine or changes it outside the worktree (`git push`, `gh`, installs, unknown commands) and allows the rest; the owner loosens or tightens it per tool, command, path and repo in `rules.toml` (`default = "ask"` is the fallback). *(planned)* The native loop's built-in tools go through the same rules; today only `shell` is side-effecting and the native loop has no hook.
+- Approval binds to the exact call (one `ApprovalRequested` per request, answered once), so an injected instruction cannot get one call approved and then make another (T1). *(planned)* An input digest in the request so the binding is checkable after the fact.
+- *(deferred, ADR-0008)* Separation of duties: the user who started a run cannot approve its requests by default. With one owner there is no second person.
 
-### 3.4 Sandboxing and egress *(planned)*
+### 3.4 Sandboxing and egress *(`worktree` built; `container` and `openshell` planned)*
 
-Machines run tools at one of these levels, set per machine and enforceable by policy:
+Runs execute at one of these levels, chosen per run or per repo ([positioning.md](../positioning.md#isolation-levels), [tools-and-machines.md §4](tools-and-machines.md#4-isolation-worktree-built-container-and-openshell-planned)):
 
-| Level | Isolation | Use |
-|---|---|---|
-| `host` | none beyond the daemon's OS user | trusted personal machine, `shiioo up` |
-| `process` | Landlock (filesystem), seccomp (syscalls), separate user, no access outside the workspace | default on Linux machines |
-| `container` | OCI container per run with read-only root | shared servers |
-| `microvm` | Firecracker microVM per run | untrusted code, multi-tenant pools |
+| Level | Isolation | Use | Status |
+|---|---|---|---|
+| `worktree` | own git worktree and branch; none beyond the node's OS user | trusted repos on the owner's Mac | built |
+| `container` | OCI container per run with read-only root, the worktree mounted | repos whose build or tests should not touch the host | planned |
+| `openshell` | NVIDIA OpenShell sandbox: filesystem, syscall and egress policy per run | untrusted inputs, egress allowlists | planned |
 
-**Egress allowlists** per machine and per policy (hosts and ports) are enforced by the daemon (proxy for HTTP, network namespace rules for `container` and `microvm`). An injected "send this to evil.example" fails at the network layer even if the policy check was fooled (T1, T8).
+Earlier drafts called these `host`, `process`, `container` and `microvm`; `host` became `worktree`, `process` is covered by `openshell`, and `microvm` is *(deferred, ADR-0008)*.
+
+**Egress allowlists** *(planned)* per machine and per rule (hosts and ports) are enforced by the node (proxy for HTTP, network namespace rules for `container`, OpenShell's own policy for `openshell`). An injected "send this to evil.example" fails at the network layer even if the rule check was fooled (T1, T8). Today egress is unrestricted.
 
 ### 3.5 Tamper-evident log *(built: chain; planned: anchoring)*
 
 - Every event is hash-chained to the previous one in its run ([event-log.md](event-log.md)). Edits, deletions, insertions and reordering inside a run are detectable by `verify_chain` *(built)*.
-- The Postgres backend rejects `UPDATE`, `DELETE` and `TRUNCATE` on `events` with triggers *(built)*. This stops accidents and casual edits; it does not stop a database superuser, which is why anchoring exists.
-- **Signed checkpoints** *(planned)*: periodically (default every 5 minutes, and at every run completion) the server builds a Merkle tree over the latest hash of every run that changed, signs the root with the deployment's key, and appends the checkpoint to a project-level checkpoint log.
+- The redb file is only ever appended to by the server (`shiioo-store`); the Postgres backend *(built, `postgres` feature; ADR-0010)* rejects `UPDATE`, `DELETE` and `TRUNCATE` on `events` with triggers. Either stops accidents and casual edits; neither stops someone with the file or a database superuser, which is why anchoring exists.
+- **Signed checkpoints** *(planned)*: periodically (default every 5 minutes, and at every run completion) the server builds a Merkle tree over the latest hash of every run that changed, signs the root with the office's key, and appends the checkpoint to an office checkpoint log.
 - **External anchoring** *(planned)*: checkpoint roots are published somewhere the operator does not control alone: a transparency log (Sigstore Rekor), a signed tag in a separate git repository, or an RFC 3161 timestamp authority. Verifiers check that a run's history is consistent with every anchored checkpoint (T6).
 
-### 3.6 Machine and daemon identity *(planned)*
+### 3.6 Machine and node identity *(planned with remote nodes)*
 
-- Daemons authenticate with **mTLS client certificates** issued at enrollment (one-time enrollment token from the dashboard or CLI). Certificates are short-lived and rotated automatically over the existing connection.
-- The daemon dials out ([ADR-0006](../adr/0006-daemon-dials-out-over-websocket.md)); machines expose no ports.
+- Nodes authenticate with **mTLS client certificates** issued at enrollment (one-time enrollment token from the dashboard or CLI). Certificates are short-lived and rotated automatically over the existing connection.
+- The node dials out ([ADR-0006](../adr/0006-daemon-dials-out-over-websocket.md)); machines expose no ports.
 - A compromised machine can lie about tool results for tools it runs (T4). Mitigations: the blast radius is limited to runs scheduled on that machine; results are recorded with the machine id, so they can be found and re-evaluated after an incident; machines can be revoked instantly, which fences all their pending calls.
 
-### 3.7 Tenant isolation *(planned)*
+### 3.7 Tenant isolation *(deferred, ADR-0008)*
+
+One office per server process is the design; there are no tenants to isolate. If several owners ever share one:
 
 - Every row and every blob key carries the organization and project id; every query is scoped by them in the store layer, not in handlers.
 - Biscuit tokens and API keys are bound to one organization.
@@ -84,27 +101,28 @@ Machines run tools at one of these levels, set per machine and enforceable by po
 ### 3.8 Admin and configuration audit *(planned)*
 
 - Configuration changes go through change management and produce versioned, hash-chained records ([governance.md](governance.md)).
-- Administrative actions (adding users, changing roles, revoking machines, raising budgets, exporting data) are written to a per-organization admin log with the same chaining and anchoring as run logs.
+- Administrative actions (changing rules or employees, revoking machines, raising budgets, exporting data) are written to an office admin log with the same chaining and anchoring as run logs. Today `config.toml` and `rules.toml` are files; git history in the office directory is the audit, if the owner keeps one.
 
-### 3.9 Client credentials *(planned)*
+### 3.9 Client credentials *(one token built; the rest planned or deferred)*
 
-- Humans sign in with OIDC; API keys are scoped (project, role, expiry) and stored hashed.
-- Destructive or governance-relevant API calls (approving, revoking, changing policy) require a session with recent authentication (T9).
+- Today: one bearer token for the office ([api.md §6](api.md#6-authentication-one-token-built-the-rest-planned-or-deferred)), held by the dashboard, the bot process and the hook.
+- *(planned)* API keys scoped by role and expiry, stored hashed. *(deferred, ADR-0008)* OIDC sign-in for several owners.
+- *(planned)* Destructive or governance-relevant API calls (approving, revoking, changing rules) require a session with recent authentication (T9).
 
 ### 3.10 Supply chain *(planned)*
 
 - Release binaries are built reproducibly in CI, signed (Sigstore), with an SBOM; `cargo deny` and `cargo audit` gate dependencies.
-- MCP servers, skills and harnesses are pinned by version and digest in agent definitions. Changing them is a governed config change.
+- MCP servers, skills and harnesses are pinned by version and digest in agent definitions. Changing them is a governed config change. Today the harness is whatever `claude` or `codex` is on the service's `PATH`; the version it reported is recorded in `HarnessSessionStarted`.
 - Remote MCP servers are subject to the same egress and policy rules as any tool (T8).
 
 ## 4. What is not protected
 
 Be explicit, so nobody relies on a guarantee that isn't there:
 
-- **A fully compromised server** (all workers and the signing key) can stop writing events, refuse to serve them, or rewrite any history **after the last external anchor**. The anchoring interval bounds that window. History before the last anchor cannot be rewritten undetected.
-- **Prompt injection is not solved.** The controls above limit what an injected agent can do (scoped tokens, approvals, egress, secret redaction); they do not prevent the model from being persuaded. Policies and approvals are the line of defence for anything that matters.
-- **A compromised machine controls its own tool results.** Shiioo records what the machine said, signed by the machine's identity; it cannot know whether it was true.
-- **`host` sandbox level offers no isolation.** It is meant for your own laptop.
+- **A fully compromised server** (all workers and the signing key) can stop writing events, refuse to serve them, or rewrite any history **after the last external anchor**. The anchoring interval bounds that window. History before the last anchor cannot be rewritten undetected. Today there is no anchor, so whoever controls the Mac controls the record.
+- **Prompt injection is not solved.** The controls above limit what an injected agent can do (approvals today; scoped tokens, egress and secret redaction when built); they do not prevent the model from being persuaded. Rules and approvals are the line of defence for anything that matters.
+- **A compromised machine controls its own tool results.** Shiioo records what the machine said, signed by the machine's identity once nodes exist; it cannot know whether it was true.
+- **`worktree` offers no isolation** beyond a separate branch and directory: the agent has the owner's user, files and network. It is meant for the owner's own repositories on the owner's own machine, which is the whole deployment today. A `rm -rf ~` typed by a persuaded agent is stopped only by the rules asking first.
 - **Model providers see the context you send them.** Shiioo does not protect data from the provider you chose; use self-hosted models for data that must not leave.
 - **Redaction is best-effort** for secrets that appear transformed in ways the scanner does not recognize.
 
@@ -112,8 +130,9 @@ Be explicit, so nobody relies on a guarantee that isn't there:
 
 | Event | Meaning |
 |---|---|
-| `PolicyDecision` | an authorization decision with the policy version |
-| `ApprovalRequested` / `ApprovalDecided` | human gate on a call |
-| `SecretRedacted` | a tool output contained a secret value; records the secret name, not the value |
-| `MachineRevoked` | appended to every run with pending calls on a revoked machine |
-| checkpoint log entries | signed Merkle roots and their external anchors |
+| `PolicyDecision` *(built)* | a rule decision, with the rule that decided and its reason (the policy set version, with Cedar) |
+| `ApprovalRequested` / `ApprovalDecided` *(built)* | human gate on a call; `by` is the owner's surface or `timeout` |
+| `CancelRequested` *(built)* | the owner stopped a run from the phone or the API |
+| `SecretRedacted` *(planned)* | a tool output contained a secret value; records the secret name, not the value |
+| `MachineRevoked` *(planned)* | appended to every run with pending calls on a revoked machine |
+| checkpoint log entries *(planned)* | signed Merkle roots and their external anchors |

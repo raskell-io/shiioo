@@ -39,12 +39,20 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 - **Outcome unknown**: a side-effecting call that may or may not have run; resolved by reconciling with the machine's journal or by a human.
 - **Parked**: a run waiting for input, approval or a timer, holding no lease.
 - **Worker**: a stateless process that leases runs and executes turns.
-- **Gateway**: a process that holds daemon connections and stream subscribers.
+- **Server**: the `shiioo` process that holds the record, decides (rules, approvals, capacity), serves the API, dashboard and Telegram bot, and runs the workers. Its gateway role holds node connections and stream subscribers.
 - **Scheduler**: finds runnable runs, fires triggers and timers.
-- **Daemon**: `shiioo daemon`, the tool host on a machine. Dials out to a gateway.
+- **Node**: `shiioo node`, the process on a machine that runs harnesses and tools and dials out to the server ([ADR-0010](adr/0010-single-binary-server-and-nodes.md)). Early docs called it the daemon. Today the only node is the one inside the server process (`shiioo up`).
 - **Snapshot**: a saved copy of a run's workspace at a turn boundary.
 - **Fork**: a new run that starts from another run's state at a given `seq`.
 - **Replay**: re-executing a recorded run, serving recorded tool outputs back, typically against a different model or prompt.
-- **Harness**: an external agent program (Claude Code, Codex, …) run as a Shiioo runtime through the Agent Client Protocol.
+- **Harness**: an external agent program (Claude Code, Codex) run headless as a Shiioo runtime; its output is recorded as events and its tool calls go through the hook. Harnesses that only speak the Agent Client Protocol are planned.
+- **Employee**: a configured staff entry (`[[employees]]`): a harness or a native-loop model, with the subscription-window limits above which it is skipped for new tasks.
+- **Capacity window**: a provider's rate-limit window (Claude: five-hour and seven-day) with its utilization and reset time, observed from harness output as `CapacityObserved`.
+- **Hook**: the program a harness runs before each tool call (`shiioo hook pre-tool-use`); it asks the server and prints allow or deny. A dead server means deny.
+- **Rules**: the owner's `rules.toml`: allow / ask / deny per tool, command, path and repo; first match wins, chained commands are judged by their most restrictive segment.
+- **Approval**: an `ask` verdict turned into a question for the owner (`ApprovalRequested`), answered by a tap or a timeout (`ApprovalDecided`).
+- **Office**: the directory the server runs in (`--workspace`), with its data in `.shiioo/`.
+- **Worktree**: the git worktree and `shiioo/<run>` branch a repo run works in, under `.shiioo/worktrees/<run>`.
+- **Intake**: a source of work other than the owner typing: today labelled GitHub issues.
 - **Projection**: a derived, rebuildable view over event logs (run lists, cost totals, search). Never a source of truth.
 - **Checkpoint**: a signed statement of a log's head hash, published outside the system to make tampering detectable.
