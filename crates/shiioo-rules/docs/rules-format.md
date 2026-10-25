@@ -47,7 +47,7 @@ Tool names are whatever the harness reports: Claude Code uses `Bash`, `Read`, `E
 2. If the command has several segments (split at `&&`, `||`, `;` and `|`), the whole command is evaluated once, and each segment is evaluated on its own with `command` replaced by the segment. The verdict with the most restrictive decision wins; the whole-command verdict only takes part if a rule (not the default) matched it. Ties keep the earlier candidate, so the whole-command verdict wins a tie with a segment, and earlier segments win ties with later ones.
 3. The verdict's `reason` is `rule N: <reason>` or, without a reason, `rule N (<tool> `<command>` …): <decision>`; `default: <decision>` for the default; and `segment "<text>": …` when a segment decided.
 
-Single and double quotes and backslash escapes are respected, so a `|` inside a grep pattern is not a pipe; an unbalanced quote keeps the rest of the line in one segment, as the shell would. `echo "a; b"` is judged as `echo "a` and `b"`, which can only make the result stricter.
+Single and double quotes and backslash escapes are respected, so a `|` inside a grep pattern is not a pipe; an unbalanced quote keeps the rest of the line in one segment, as the shell would. `echo "a; b"` is one segment, `echo "a"; b` is two.
 
 Examples with the defaults:
 
