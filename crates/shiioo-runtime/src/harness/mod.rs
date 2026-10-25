@@ -57,7 +57,7 @@ pub async fn driver_for(
     match spec.harness {
         HarnessKind::ClaudeCode => Box::new(ClaudeCodeDriver::default()),
         HarnessKind::Codex => {
-            let version = codex::version(&codex::binary(spec)).await;
+            let version = codex::version(&codex::binary(spec), &spec.binary_args).await;
             Box::new(CodexDriver::new(agent, cwd, version))
         }
     }

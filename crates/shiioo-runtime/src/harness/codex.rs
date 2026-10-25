@@ -152,10 +152,13 @@ pub fn binary(spec: &HarnessSpec) -> PathBuf {
 }
 
 /// `codex --version` → "0.163.0"; empty if the binary doesn't say.
-pub async fn version(binary: &Path) -> String {
+pub async fn version(binary: &Path, binary_args: &[String]) -> String {
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new(binary).arg("--version").output(),
+        Command::new(binary)
+            .args(binary_args)
+            .arg("--version")
+            .output(),
     )
     .await;
     match out {
