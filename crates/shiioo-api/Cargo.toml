@@ -20,6 +20,8 @@ axum.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "net", "process"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 toml.workspace = true

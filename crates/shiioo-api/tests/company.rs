@@ -44,7 +44,7 @@ impl Notifications for Recorder {
     fn approval_resolved(&self, _: String, _: String) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
-    fn run_ended(&self, run: RunId, _: String, _: RunStatus) -> BoxFuture<'_, ()> {
+    fn run_ended(&self, run: RunId, _: String, _: RunStatus, _: Vec<shiioo_api::Artifact>) -> BoxFuture<'_, ()> {
         lock(&self.ended).push(run);
         Box::pin(async {})
     }
@@ -152,6 +152,7 @@ async fn serve(script: Vec<shiioo_runtime::ModelResponse>) -> Company {
                 repo: Some("demo".into()),
                 role: Some("writer".into()),
                 employee: "auto".into(),
+                machine: None,
                 task: "Write the nightly note.".into(),
                 enabled: true,
             }],

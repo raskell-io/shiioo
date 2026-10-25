@@ -35,6 +35,9 @@ pub struct Worker<S> {
     observer: Option<Observer>,
     hooks: Option<HookEndpoint>,
     secrets: Arc<dyn SecretSource>,
+    /// This machine's repositories by label, for runs whose spec names a
+    /// repository of another machine (a node working for the office).
+    repos: std::collections::BTreeMap<String, std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,7 +109,19 @@ impl<S: EventStore + 'static> Worker<S> {
             observer: None,
             hooks: None,
             secrets: Arc::new(NoSecrets),
+            repos: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// The repositories on this machine by label. A harness run whose spec
+    /// names a label resolves it here; a path from another machine that
+    /// does not exist here fails the run with the label.
+    pub fn with_repos(
+        mut self,
+        repos: std::collections::BTreeMap<String, std::path::PathBuf>,
+    ) -> Self {
+        self.repos = repos;
+        self
     }
 
     /// Where `secret:<name>` references in a harness's environment are
@@ -363,7 +378,30 @@ impl<S: EventStore + 'static> Session<'_, S> {
     /// own tools; Shiioo records what it sees. A session that was started
     /// by a previous worker is resumed rather than started again.
     async fn run_harness(&mut self, spec: &HarnessSpec) -> Result<RunOutcome, WorkerError> {
-        let cwd = match &spec.repo {
+        // The repository as this machine has it: by label when the spec
+        // names one this machine knows, else by the spec's path.
+        let repo = match (&spec.repo_label, &spec.repo) {
+            (Some(label), _) if self.worker.repos.contains_key(label) => {
+                self.worker.repos.get(label).cloned()
+            }
+            (_, Some(path)) if path.join(".git").exists() => Some(path.clone()),
+            (label, Some(path)) => {
+                return self
+                    .fail(format!(
+                        "repository {} is not available on this machine ({} does not exist; \
+                         add it to [repos] here)",
+                        label.as_deref().unwrap_or("?"),
+                        path.display()
+                    ))
+                    .await;
+            }
+            (_, None) => None,
+        };
+        let spec = &HarnessSpec {
+            repo: repo.clone(),
+            ..spec.clone()
+        };
+        let cwd = match &repo {
             Some(repo) => {
                 let root = self.worker.machine.worktrees_root().ok_or_else(|| {
                     WorkerError::Spec("this machine has no worktree directory for repo runs".into())

@@ -38,10 +38,10 @@ One process runs everything: the API and dashboard, the Telegram bot, the worker
 - **As a service:** `shiioo install` writes a launchd agent (`~/Library/LaunchAgents/io.raskell.shiioo.plist`) that starts the office at login, restarts it if it stops, runs it with the current `PATH` (so `claude` and `codex` are found) and `--keep-awake`, which ties a `caffeinate -s -i` to the process so the Mac doesn't sleep while the office runs. The agent runs in the user's GUI session, so Claude Code's keychain login works. `shiioo install --print` shows the definition; `shiioo uninstall` removes it. On Linux the same command writes a `systemd --user` unit (not yet tested).
 - **Shutting down:** runs in progress lose their worker; on the next start `shiioo` resumes them from the log exactly as after a crash (harness sessions are resumed with `--resume`).
 
-### 1.2 Several machines: `shiioo serve` + `shiioo node` *(planned)*
+### 1.2 Several machines: `shiioo serve` + `shiioo node` *(built)*
 
-- The same process as today on the Mac, listening on the tailnet as well as loopback, still on redb.
-- Each other machine (a DGX Spark, a Linux box with containers) runs `shiioo node enroll --server https://<mac>.<tailnet>.ts.net --token <enrollment token>` once, then `shiioo node`. The node dials out and offers its labels and isolation levels ([tools-and-machines.md §2](tools-and-machines.md#2-machines-local-machine-built-remote-nodes-planned)).
+- The same process as today on the Mac, still on redb, reachable from the other machines over the tailnet: `tailscale serve --bg 7878` publishes the loopback API as `https://<mac>.<tailnet>.ts.net`.
+- Each other machine (a DGX Spark, a Linux box with containers) gets a one-time token from the phone (`/enroll spark gpu=true`) or `shiioo machines token`, runs `shiioo --workspace ~/shiioo-node node enroll --server https://<mac>.<tailnet>.ts.net --token … --name spark --label gpu=true` once, puts its clones of the repositories in its own `config.toml` under `[repos]` with the office's labels, then runs `shiioo node` (a login service like the office's is the next step). The node dials out, heartbeats, and takes runs addressed to it ([tools-and-machines.md §2](tools-and-machines.md#2-machines-local-machine-and-remote-nodes-built-the-tool-level-node-protocol-of-the-first-draft-superseded), [ADR-0012](../adr/0012-nodes-are-workers-over-the-offices-api.md)).
 - TLS from Tailscale; nothing else to terminate. Outside a tailnet: rustls with ACME, or a reverse proxy.
 
 ### 1.3 Cluster *(deferred, ADR-0010)*

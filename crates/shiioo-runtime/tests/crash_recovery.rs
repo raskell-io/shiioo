@@ -120,6 +120,7 @@ impl<S: EventStore + 'static> Fixture<S> {
                 max_turns: 10,
             },
             runtime: Runtime::Native,
+            machine: None,
         };
         self.worker("creator", None)
             .create(&spec)

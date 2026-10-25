@@ -24,13 +24,28 @@
 //! - `POST /v1/plans` starts the chief of staff on a goal; `GET /v1/plans`,
 //!   `GET /v1/plans/{id}` and `POST /v1/plans/{id}/approve` read and approve
 //!   plans (approval creates the issues the intake works on).
+//! - Machines (nodes working for the office): `POST /v1/machines/enrollments`
+//!   makes a one-time token; `POST /v1/machines/enroll` (the token is the
+//!   credential) exchanges it for a machine token; `GET /v1/machines`,
+//!   `DELETE /v1/machines/{name}`; nodes `POST …/{name}/heartbeat` and long-poll
+//!   `GET …/{name}/work`. Node workers use the office's log over HTTP:
+//!   `POST /v1/runs/{id}/lease`, `POST /v1/runs/{id}/lease/renew`,
+//!   `POST /v1/runs/{id}/events`, with store errors in a JSON form that keeps
+//!   fencing intact.
+//! - `GET  /v1/runs/{id}/artifacts` lists the files a run produced;
+//!   `GET /v1/runs/{id}/artifacts/{path}` downloads one.
+//! - `POST /v1/mail/send` sends a mail for a run (through the rules and the
+//!   owner's approval) or for the owner.
 //! - `GET  /` serves the mobile dashboard (`ui/`), which calls the API with the token.
 //!
 //! Everything except `GET /v1/health` and the dashboard files needs
 //! `Authorization: Bearer <token>`.
 
+pub mod artifacts;
 pub mod employees;
 pub mod isolation;
+pub mod machines;
+pub mod mail;
 pub mod plans;
 pub mod report;
 pub mod roles;
@@ -47,7 +62,7 @@ use axum::{Json, Router};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use shiioo_core::{Event, EventStore, Payload, RunId, Seq, StoreError, Timestamp};
+use shiioo_core::{Event, EventStore, Lease, Payload, RunId, Seq, StoreError, Timestamp, WorkerId};
 use shiioo_rules::{Decision, PermissionRequest, RuleSet};
 use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
 use shiioo_runtime::{
@@ -55,6 +70,9 @@ use shiioo_runtime::{
     open_approval, run_status,
 };
 pub use isolation::IsolationPolicy;
+pub use artifacts::Artifact;
+pub use machines::{Machine, Machines};
+pub use mail::{MailOutcome, MailRequest, MailSender};
 pub use plans::{IssueCreator, Plan, PlanItem, PlanStatus, Plans};
 pub use roles::Role;
 pub use routines::{Routine, RoutineState};
@@ -89,7 +107,16 @@ pub trait Notifications: Send + Sync {
     ) -> BoxFuture<'_, ()>;
     /// `outcome` is a short phrase: "allowed", "denied", "expired".
     fn approval_resolved(&self, approval_id: String, outcome: String) -> BoxFuture<'_, ()>;
-    fn run_ended(&self, run: RunId, task: String, status: RunStatus) -> BoxFuture<'_, ()>;
+    /// `media` is the files the run produced that are worth sending along
+    /// (images, audio, video, PDFs under the size limit), with their bytes
+    /// available through [`ApiState::artifact_bytes`].
+    fn run_ended(
+        &self,
+        run: RunId,
+        task: String,
+        status: RunStatus,
+        media: Vec<Artifact>,
+    ) -> BoxFuture<'_, ()>;
     /// Anything else the office says on its own: a routine that started, a
     /// finished plan, the morning report.
     fn message(&self, text: String) -> BoxFuture<'_, ()>;
@@ -125,6 +152,11 @@ pub struct ApiOptions {
     pub issues: Option<Arc<dyn IssueCreator>>,
     /// The label the intake watches, put on issues created from plans.
     pub intake_label: String,
+    /// Where this machine keeps run worktrees (`.shiioo/worktrees`), for
+    /// listing a run's files.
+    pub worktrees: Option<PathBuf>,
+    /// Sends mail for `POST /v1/mail/send`. None: the office has no mail.
+    pub mail: Option<Arc<dyn MailSender>>,
 }
 
 impl Default for ApiOptions {
@@ -143,6 +175,8 @@ impl Default for ApiOptions {
             data_dir: None,
             issues: None,
             intake_label: "shiioo".into(),
+            worktrees: None,
+            mail: None,
         }
     }
 }
@@ -302,6 +336,11 @@ pub struct ApiState<S> {
     /// When this process started, in ms: routines are not backfilled
     /// before it.
     started_at: u64,
+    /// Nodes that work for the office (`.shiioo/machines.json`).
+    machines: Mutex<Machines>,
+    /// Woken when a run addressed to a machine appears, so long-polling
+    /// nodes hear about it at once.
+    work_notify: tokio::sync::Notify,
 }
 
 /// A run as the API and the bot present it.
@@ -314,6 +353,12 @@ pub struct RunView {
     pub status: RunStatus,
     /// When the last event was recorded, in ms since the epoch.
     pub updated_at: u64,
+    /// The worker that last held the lease (`local-<pid>`, `node-<name>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    /// The machine the run is addressed to, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// What a harness asks before a tool call (Claude Code `PreToolUse` input).
@@ -394,6 +439,18 @@ impl<S: EventStore + 'static> ApiState<S> {
                 }
             })
             .unwrap_or_default();
+        let machines = options
+            .data_dir
+            .as_deref()
+            .map(|d| d.join("machines.json"))
+            .and_then(|path| match Machines::load(&path) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    eprintln!("machines: cannot read {}: {e}; starting without", path.display());
+                    None
+                }
+            })
+            .unwrap_or_default();
         Arc::new(Self {
             store,
             workers,
@@ -406,7 +463,134 @@ impl<S: EventStore + 'static> ApiState<S> {
             plans: Mutex::new(plans),
             routine_state: Mutex::new(routine_state),
             started_at: routines::now_ms(),
+            machines: Mutex::new(machines),
+            work_notify: tokio::sync::Notify::new(),
         })
+    }
+
+    // ----- machines: nodes working for the office -----
+
+    fn save_machines(&self, machines: &Machines) {
+        if let Some(dir) = &self.options.data_dir {
+            let path = dir.join("machines.json");
+            if let Err(e) = machines.save(&path) {
+                eprintln!("machines: cannot write {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// A one-time enrollment token for a new node, with these labels.
+    pub fn enrollment_token(&self, labels: BTreeMap<String, String>) -> String {
+        let mut machines = lock(&self.machines);
+        let token = machines.create_enrollment(labels, now_ms().0);
+        self.save_machines(&machines);
+        token
+    }
+
+    /// `POST /v1/machines/enroll`: the token is the credential.
+    pub fn enroll_machine(
+        &self,
+        enrollment_token: &str,
+        name: &str,
+        labels: BTreeMap<String, String>,
+        capabilities: Vec<String>,
+        version: String,
+    ) -> Result<String, ApiError> {
+        let mut machines = lock(&self.machines);
+        let token = machines
+            .enroll(enrollment_token, name, labels, capabilities, version, now_ms().0)
+            .map_err(ApiError::BadRequest)?;
+        self.save_machines(&machines);
+        Ok(token)
+    }
+
+    /// The machine a bearer token belongs to, if it is a machine's.
+    pub fn machine_for_token(&self, token: &str) -> Option<String> {
+        lock(&self.machines).authenticate(token).map(|m| m.name.clone())
+    }
+
+    pub fn machine_heartbeat(
+        &self,
+        name: &str,
+        version: Option<String>,
+        capabilities: Option<Vec<String>>,
+        in_flight: Vec<String>,
+    ) -> bool {
+        let mut machines = lock(&self.machines);
+        let known = machines.heartbeat(name, version, capabilities, in_flight, now_ms().0);
+        if known {
+            self.save_machines(&machines);
+        }
+        known
+    }
+
+    pub fn revoke_machine(&self, name: &str) -> bool {
+        let mut machines = lock(&self.machines);
+        let removed = machines.revoke(name);
+        if removed {
+            self.save_machines(&machines);
+        }
+        removed
+    }
+
+    pub fn machines_list(&self) -> Vec<Machine> {
+        lock(&self.machines).machines.values().cloned().collect()
+    }
+
+    pub fn machines_text(&self) -> String {
+        lock(&self.machines).text(now_ms().0)
+    }
+
+    /// Whether `selector` names a known machine (by name or label).
+    pub fn machine_known(&self, selector: &str) -> bool {
+        !lock(&self.machines).select(selector, now_ms().0).is_empty()
+    }
+
+    /// Open runs addressed to `machine` (by name or a label it has) that are
+    /// not finished. The node tries each lease; one held elsewhere is
+    /// refused by the store. Waits up to `wait` for work to appear.
+    pub async fn work_for(&self, machine: &str, wait: Duration) -> Result<Vec<RunId>, ApiError> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let runs = self.open_runs_for(machine).await?;
+            if !runs.is_empty() || tokio::time::Instant::now() >= deadline {
+                return Ok(runs);
+            }
+            tokio::select! {
+                () = self.work_notify.notified() => {}
+                () = tokio::time::sleep_until(deadline) => {}
+            }
+        }
+    }
+
+    async fn open_runs_for(&self, machine: &str) -> Result<Vec<RunId>, ApiError> {
+        let labels: Vec<String> = lock(&self.machines)
+            .machines
+            .get(machine)
+            .map(|m| m.labels.iter().map(|(k, v)| format!("{k}={v}")).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for run_id in self.store.list_runs().await? {
+            let Ok(log) = self.store.read(run_id, Seq(0)).await else {
+                continue;
+            };
+            let Some(selector) = run_spec(&log).and_then(|s| s.machine) else {
+                continue;
+            };
+            if selector != machine && !labels.contains(&selector) {
+                continue;
+            }
+            if matches!(run_status(&log), RunStatus::Open | RunStatus::WaitingApproval { .. }) {
+                out.push(run_id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Where a run is addressed to, if anywhere.
+    pub async fn run_machine(&self, run_id: RunId) -> Option<String> {
+        let log = self.store.read(run_id, Seq(0)).await.ok()?;
+        run_spec(&log)?.machine
     }
 
     pub fn roles(&self) -> &[Role] {
@@ -496,6 +680,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             task: plans::planner_task(repo_label, goal),
             agent,
             runtime,
+            machine: None,
         };
         let value = serde_json::to_value(&spec).map_err(|e| ApiError::Internal(e.to_string()))?;
         let run_id = self.store.create_run(value).await?;
@@ -699,6 +884,7 @@ impl<S: EventStore + 'static> ApiState<S> {
                 task: routine.task.clone(),
                 agent,
                 runtime,
+                machine: routine.machine.clone(),
             })
             .await?;
         {
@@ -952,6 +1138,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             EmployeeKind::ClaudeCode => {
                 let mut h = HarnessSpec::claude_code();
                 h.repo = repo;
+                h.repo_label = label;
                 h.isolation = isolation;
                 h.env = self.options.env.clone();
                 (Runtime::Harness(h), harness_agent)
@@ -959,6 +1146,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             EmployeeKind::Codex => {
                 let mut h = HarnessSpec::codex();
                 h.repo = repo;
+                h.repo_label = label;
                 h.isolation = isolation;
                 h.env = self.options.env.clone();
                 (Runtime::Harness(h), harness_agent)
@@ -991,6 +1179,13 @@ impl<S: EventStore + 'static> ApiState<S> {
 
     /// Starts a run and a worker for it.
     pub async fn start_run(self: &Arc<Self>, spec: RunSpec) -> Result<RunId, ApiError> {
+        if let Some(selector) = &spec.machine
+            && !self.machine_known(selector)
+        {
+            return Err(ApiError::BadRequest(format!(
+                "no enrolled machine matches {selector}; /machines lists them"
+            )));
+        }
         let spec = serde_json::to_value(&spec).map_err(|e| ApiError::Internal(e.to_string()))?;
         let run_id = self.store.create_run(spec).await?;
         self.spawn_drive(run_id);
@@ -1275,6 +1470,13 @@ impl<S: EventStore + 'static> ApiState<S> {
         }
         let state = Arc::clone(self);
         tokio::spawn(async move {
+            // A run addressed to a machine is the machine's to drive; the
+            // office only wakes the nodes that are waiting for work.
+            if state.run_machine(run_id).await.is_some() {
+                lock(&state.active).remove(&run_id);
+                state.work_notify.notify_waiters();
+                return;
+            }
             let worker = (state.workers)();
             for _ in 0..3 {
                 match worker.drive(run_id).await {
@@ -1287,19 +1489,38 @@ impl<S: EventStore + 'static> ApiState<S> {
                 }
             }
             lock(&state.active).remove(&run_id);
-            let Ok(view) = state.run_view(run_id).await else {
-                return;
-            };
-            // A finished planning run becomes a plan; the owner hears
-            // about the plan, not about the run.
-            let plan = state.plan_finished(run_id, &view.status);
-            if let Some(n) = &state.options.notifications {
-                match plan {
-                    Some(text) => n.message(text).await,
-                    None => n.run_ended(run_id, view.task, view.status).await,
+            state.after_run(run_id).await;
+        });
+    }
+
+    /// What happens when a run reaches its end, wherever it ran: a plan is
+    /// read out of a planning run, the owner is told.
+    async fn after_run(self: &Arc<Self>, run_id: RunId) {
+        let Ok(view) = self.run_view(run_id).await else {
+            return;
+        };
+        // A finished planning run becomes a plan; the owner hears about
+        // the plan, not about the run.
+        let plan = self.plan_finished(run_id, &view.status);
+        if let Some(n) = &self.options.notifications {
+            match plan {
+                Some(text) => n.message(text).await,
+                None => {
+                    let media = if matches!(view.status, RunStatus::Completed { .. }) {
+                        self.artifacts(run_id)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(Artifact::is_media)
+                            .take(5)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    n.run_ended(run_id, view.task, view.status, media).await;
                 }
             }
-        });
+        }
     }
 }
 
@@ -1347,12 +1568,22 @@ fn view_of(run_id: RunId, log: &[Event]) -> RunView {
         Some(Payload::RunCreated { spec }) => spec["task"].as_str().unwrap_or_default().to_owned(),
         _ => String::new(),
     };
+    let worker = log.iter().rev().find_map(|e| match &*e.payload {
+        Payload::LeaseAcquired { worker, .. } => Some(worker.0.clone()),
+        _ => None,
+    });
+    let machine = match log.first().map(|e| &*e.payload) {
+        Some(Payload::RunCreated { spec }) => spec["machine"].as_str().map(str::to_owned),
+        _ => None,
+    };
     RunView {
         id: run_id,
         task,
         next_seq: log.len() as u64,
         status: run_status(log),
         updated_at: log.last().map_or(0, |e| e.recorded_at.0),
+        worker,
+        machine,
     }
 }
 
@@ -1438,6 +1669,7 @@ pub fn describe(ev: &Event) -> String {
         Payload::SecretRedacted { name, count } => {
             format!("redacted secret {name} ({count} occurrence(s))")
         }
+        Payload::MailSent { to, subject, .. } => format!("mail sent to {}: {subject}", to.join(", ")),
         Payload::RunCompleted { output } => format!("completed: {}", one_line(output, 140)),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
         Payload::RunCancelled { reason } => format!("cancelled: {reason}"),
@@ -1457,16 +1689,29 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
     let authenticated = Router::new()
         .route("/v1/runs", post(create_run::<S>).get(list_runs::<S>))
         .route("/v1/runs/{id}", get(get_run::<S>))
-        .route("/v1/runs/{id}/events", get(list_events::<S>))
+        .route(
+            "/v1/runs/{id}/events",
+            get(list_events::<S>).post(append_events::<S>),
+        )
         .route("/v1/runs/{id}/events/stream", get(stream_events::<S>))
         .route("/v1/runs/{id}/resume", post(resume_run::<S>))
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
+        .route("/v1/runs/{id}/lease", post(acquire_lease::<S>))
+        .route("/v1/runs/{id}/lease/renew", post(renew_lease::<S>))
+        .route("/v1/machines", get(machines_list::<S>))
+        .route("/v1/machines/enrollments", post(create_enrollment::<S>))
+        .route("/v1/machines/{name}", axum::routing::delete(revoke_machine::<S>))
+        .route("/v1/machines/{name}/heartbeat", post(machine_heartbeat::<S>))
+        .route("/v1/machines/{name}/work", get(machine_work::<S>))
         .route("/v1/runs/{id}/permissions", post(permission::<S>))
         .route(
             "/v1/runs/{id}/hook/pre-tool-use",
             post(permission_hook::<S>),
         )
         .route("/v1/runs/{id}/diff", get(diff_run::<S>))
+        .route("/v1/runs/{id}/artifacts", get(list_artifacts::<S>))
+        .route("/v1/runs/{id}/artifacts/{*path}", get(get_artifact::<S>))
+        .route("/v1/mail/send", post(send_mail::<S>))
         .route("/v1/approvals/{id}", post(decide::<S>))
         .route("/v1/capacity", get(capacity::<S>))
         .route("/v1/report", get(report::<S>))
@@ -1485,6 +1730,7 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
             "/v1/health",
             get(|| async { Json(json!({ "status": "ok" })) }),
         )
+        .route("/v1/machines/enroll", post(enroll_machine::<S>))
         .route("/", get(ui_index))
         .route("/ui", get(ui_index))
         .route("/ui/app.js", get(ui_js))
@@ -1538,6 +1784,9 @@ async fn require_token<S: EventStore + 'static>(
         Some(token) if constant_time_eq(token.as_bytes(), state.token.as_bytes()) => {
             next.run(request).await
         }
+        // An enrolled machine's token is as good as the office's: the
+        // owner's own machines are the office.
+        Some(token) if state.machine_for_token(token).is_some() => next.run(request).await,
         _ => ApiError::Unauthorized.into_response(),
     }
 }
@@ -1564,6 +1813,8 @@ struct CreateRun {
     /// A configured role (`[[roles]]`) to run as. Overrides `runtime` and
     /// `agent` like `employee` does.
     role: Option<String>,
+    /// A machine to run on: an enrolled node's name or `label=value`.
+    machine: Option<String>,
 }
 
 async fn create_run<S: EventStore + 'static>(
@@ -1581,6 +1832,7 @@ async fn create_run<S: EventStore + 'static>(
     {
         return Ok((StatusCode::OK, Json(state.run_view(run_id).await?)));
     }
+    let machine = body.machine.clone();
     let spec = match (&body.role, &body.employee) {
         (Some(role), _) => {
             let repo = body.repo.as_deref().map(|r| state.repo_for(r)).transpose()?;
@@ -1589,6 +1841,7 @@ async fn create_run<S: EventStore + 'static>(
                 task: body.task,
                 agent,
                 runtime,
+                machine,
             }
         }
         (None, Some(employee)) => {
@@ -1603,6 +1856,7 @@ async fn create_run<S: EventStore + 'static>(
                 task: body.task,
                 agent,
                 runtime,
+                machine,
             }
         }
         (None, None) => {
@@ -1619,6 +1873,7 @@ async fn create_run<S: EventStore + 'static>(
                 task: body.task,
                 agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
                 runtime,
+                machine,
             }
         }
     };
@@ -1627,6 +1882,249 @@ async fn create_run<S: EventStore + 'static>(
         lock(&state.idempotency).insert(key, run_id);
     }
     Ok((StatusCode::CREATED, Json(state.run_view(run_id).await?)))
+}
+
+// ----- node-facing store routes -----
+
+#[derive(Deserialize)]
+struct AcquireLease {
+    worker: WorkerId,
+    ttl_ms: u64,
+}
+
+async fn acquire_lease<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    Json(body): Json<AcquireLease>,
+) -> Result<Json<Lease>, ApiError> {
+    let run_id = parse_run(&id)?;
+    Ok(Json(
+        state
+            .store
+            .acquire_lease(run_id, body.worker, body.ttl_ms)
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct RenewLease {
+    lease: Lease,
+    ttl_ms: u64,
+}
+
+async fn renew_lease<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    Json(body): Json<RenewLease>,
+) -> Result<Json<Lease>, ApiError> {
+    let run_id = parse_run(&id)?;
+    if body.lease.run_id != run_id {
+        return Err(ApiError::BadRequest("the lease is for another run".into()));
+    }
+    Ok(Json(state.store.renew_lease(&body.lease, body.ttl_ms).await?))
+}
+
+#[derive(Deserialize)]
+struct AppendEvents {
+    lease: Lease,
+    expected_next: Seq,
+    payloads: Vec<Payload>,
+}
+
+/// A node worker's append, under its lease. A terminal event ends the run
+/// for the office too: plans are read out and the owner is told.
+async fn append_events<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    Json(body): Json<AppendEvents>,
+) -> Result<Json<Vec<Event>>, ApiError> {
+    let run_id = parse_run(&id)?;
+    if body.lease.run_id != run_id {
+        return Err(ApiError::BadRequest("the lease is for another run".into()));
+    }
+    let terminal = body.payloads.iter().any(Payload::is_terminal);
+    let events = state
+        .store
+        .append(&body.lease, body.expected_next, body.payloads)
+        .await?;
+    if terminal {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move { state.after_run(run_id).await });
+    }
+    Ok(Json(events))
+}
+
+// ----- machines -----
+
+#[derive(Deserialize, Default)]
+struct CreateEnrollment {
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
+}
+
+async fn create_enrollment<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    body: Option<Json<CreateEnrollment>>,
+) -> (StatusCode, Json<Value>) {
+    let labels = body.map(|Json(b)| b.labels).unwrap_or_default();
+    let token = state.enrollment_token(labels);
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "token": token,
+            "expires_in_secs": machines::ENROLLMENT_TTL_MS / 1000,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+struct Enroll {
+    token: String,
+    name: String,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    version: String,
+}
+
+/// Unauthenticated on purpose: the one-time enrollment token in the body
+/// is the credential.
+async fn enroll_machine<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Json(body): Json<Enroll>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let token = state.enroll_machine(
+        &body.token,
+        &body.name,
+        body.labels,
+        body.capabilities,
+        body.version,
+    )?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "name": body.name.trim(), "machine_token": token })),
+    ))
+}
+
+async fn machines_list<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+) -> Json<Value> {
+    let now = now_ms().0;
+    let machines: Vec<Value> = state
+        .machines_list()
+        .into_iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "labels": m.labels,
+                "capabilities": m.capabilities,
+                "version": m.version,
+                "online": m.online(now),
+                "last_seen": m.last_seen,
+                "in_flight": m.in_flight,
+                "created_at": m.created_at,
+            })
+        })
+        .collect();
+    Json(json!({ "machines": machines, "text": state.machines_text() }))
+}
+
+async fn revoke_machine<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if state.revoke_machine(&name) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("no machine named {name}")))
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct HeartbeatBody {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    capabilities: Option<Vec<String>>,
+    #[serde(default)]
+    in_flight: Vec<String>,
+}
+
+async fn machine_heartbeat<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(name): Path<String>,
+    body: Option<Json<HeartbeatBody>>,
+) -> Result<Json<Value>, ApiError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    if state.machine_heartbeat(&name, body.version, body.capabilities, body.in_flight) {
+        Ok(Json(json!({ "ok": true })))
+    } else {
+        Err(ApiError::NotFound(format!(
+            "no machine named {name}; enroll it first"
+        )))
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct WorkQuery {
+    /// Seconds to wait for work before answering with none (at most 50).
+    #[serde(default)]
+    wait: u64,
+}
+
+async fn machine_work<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(name): Path<String>,
+    Query(q): Query<WorkQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let runs = state
+        .work_for(&name, Duration::from_secs(q.wait.min(50)))
+        .await?;
+    Ok(Json(json!({ "runs": runs })))
+}
+
+async fn list_artifacts<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Artifact>>, ApiError> {
+    Ok(Json(state.artifacts(parse_run(&id)?).await?))
+}
+
+async fn get_artifact<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path((id, path)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let (bytes, content_type) = state.artifact_bytes(parse_run(&id)?, &path).await?;
+    let name = path.rsplit('/').next().unwrap_or("file").to_owned();
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", name.replace('"', "")),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct SendMail {
+    /// The run asking; its rules and approvals apply. None: the owner.
+    #[serde(default)]
+    run: Option<RunId>,
+    #[serde(flatten)]
+    mail: MailRequest,
+}
+
+async fn send_mail<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Json(body): Json<SendMail>,
+) -> Result<Json<MailOutcome>, ApiError> {
+    Ok(Json(state.send_mail(body.run, body.mail).await?))
 }
 
 async fn report<S: EventStore + 'static>(
@@ -1741,6 +2239,7 @@ async fn resume_run<S: EventStore + 'static>(
         return Err(ApiError::Conflict("only open runs can be resumed".into()));
     }
     state.spawn_drive(run_id);
+    state.work_notify.notify_waiters();
     Ok((StatusCode::ACCEPTED, Json(current)))
 }
 
@@ -1923,6 +2422,11 @@ pub enum ApiError {
     NotFound(String),
     BadRequest(String),
     Conflict(String),
+    /// The rules or the owner said no.
+    Forbidden(String),
+    /// A store error a node worker must see as such (fencing, an expired
+    /// lease, a held lease, a sequence conflict): carried in JSON form.
+    Store(StoreError),
     /// Something the request asked for could not be done (a failed git
     /// command, for instance). Unlike `Internal`, the detail is shown.
     Failed(String),
@@ -1933,6 +2437,8 @@ impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiError::Unauthorized => f.write_str("unauthorized"),
+            ApiError::Store(e) => write!(f, "{e}"),
+            ApiError::Forbidden(d) => write!(f, "forbidden: {d}"),
             ApiError::NotFound(d)
             | ApiError::BadRequest(d)
             | ApiError::Conflict(d)
@@ -1946,6 +2452,12 @@ impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
         match e {
             StoreError::RunNotFound(id) => ApiError::NotFound(format!("run {id} not found")),
+            other @ (StoreError::Fenced { .. }
+            | StoreError::LeaseExpired(_)
+            | StoreError::LeaseHeld { .. }
+            | StoreError::SeqConflict { .. }
+            | StoreError::RunClosed(_)
+            | StoreError::InvalidPayload(_)) => ApiError::Store(other),
             other => ApiError::Internal(other.to_string()),
         }
     }
@@ -1968,6 +2480,21 @@ impl IntoResponse for ApiError {
                 Some(d),
             ),
             ApiError::Conflict(d) => (StatusCode::CONFLICT, "conflict", "Conflict", Some(d)),
+            ApiError::Forbidden(d) => (StatusCode::FORBIDDEN, "forbidden", "Forbidden", Some(d)),
+            ApiError::Store(e) => {
+                let status = match e {
+                    StoreError::RunNotFound(_) => StatusCode::NOT_FOUND,
+                    _ => StatusCode::CONFLICT,
+                };
+                let body = json!({
+                    "type": "https://shiioo.dev/problems/store",
+                    "title": "Store",
+                    "status": status.as_u16(),
+                    "detail": e.to_string(),
+                    "store": e.to_json(),
+                });
+                return (status, Json(body)).into_response();
+            }
             ApiError::Failed(d) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed",

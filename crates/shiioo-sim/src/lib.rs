@@ -409,6 +409,7 @@ impl<S: EventStore + 'static> Sim<S> {
                 max_turns: 50,
             },
             runtime: Runtime::Native,
+            machine: None,
         };
         self.run = match self.worker("creator".into(), None).create(&spec).await {
             Ok(run) => run,
@@ -773,6 +774,7 @@ pub fn compact(ev: &Event) -> String {
         Payload::CancelRequested { by, .. } => format!("cancel by {by}"),
         Payload::SandboxStarted { level, .. } => format!("sandbox {level}"),
         Payload::SecretRedacted { name, count } => format!("redacted {name} x{count}"),
+        Payload::MailSent { subject, .. } => format!("mail sent: {subject}"),
         Payload::RunCancelled { .. } => "cancelled".to_owned(),
         Payload::RunCompleted { .. } => "completed".to_owned(),
         Payload::RunFailed { reason } => format!("failed: {reason}"),

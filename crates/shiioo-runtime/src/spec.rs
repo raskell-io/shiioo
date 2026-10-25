@@ -9,6 +9,10 @@ pub struct RunSpec {
     pub agent: AgentSpec,
     #[serde(default)]
     pub runtime: Runtime,
+    /// Where the run must execute: a node's name or a `label=value`
+    /// selector. None: the office's own machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// The agent working on a run. Inline for now; versioned agent definitions
@@ -56,6 +60,10 @@ pub struct HarnessSpec {
     /// workspace directly.
     #[serde(default)]
     pub repo: Option<PathBuf>,
+    /// The repository's label in the office's `[repos]`. A node resolves
+    /// the label to its own clone; the path above is the office's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_label: Option<String>,
     /// The harness's permission mode when no human is attached
     /// (Claude Code: `default`, `acceptEdits`, `plan`, `bypassPermissions`).
     #[serde(default = "default_permission_mode")]
@@ -246,6 +254,7 @@ impl HarnessSpec {
         Self {
             harness: HarnessKind::ClaudeCode,
             repo: None,
+            repo_label: None,
             permission_mode: default_permission_mode(),
             setting_sources: default_setting_sources(),
             max_budget_usd: None,

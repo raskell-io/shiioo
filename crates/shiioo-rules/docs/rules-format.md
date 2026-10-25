@@ -99,6 +99,7 @@ Tool rules:
 
 | Tools | Decision | Reason |
 |---|---|---|
+| `mail.send` | ask | sends mail (a run asking the office to send on its behalf) |
 | `Read`, `Glob`, `Grep`, `LS`, `WebFetch`, `WebSearch`, `TodoWrite`, `ToolSearch`, `NotebookRead`, `read_file` | allow | read-only |
 | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `write_file` | allow | edits stay in the run's worktree |
 

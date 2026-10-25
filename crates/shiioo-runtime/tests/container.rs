@@ -124,6 +124,7 @@ impl Office {
                 max_turns: 10,
             },
             runtime: Runtime::Harness(harness),
+            machine: None,
         };
         self.worker()
             .create(&spec)

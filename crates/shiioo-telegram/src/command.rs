@@ -9,7 +9,25 @@ pub enum Command {
     Run {
         repo: Option<String>,
         role: Option<String>,
+        /// `on:<machine>`: an enrolled node's name or `label=value`.
+        machine: Option<String>,
         task: String,
+    },
+    /// `/files <run>`: the files a run produced.
+    Files {
+        run: String,
+    },
+    /// `/get <run> <path>`: send one of them.
+    Get {
+        run: String,
+        path: String,
+    },
+    /// `/machines`: the enrolled nodes and whether they are online.
+    Machines,
+    /// `/enroll <name> [label=value…]`: a one-time token for `shiioo node enroll`.
+    Enroll {
+        name: String,
+        labels: Vec<String>,
     },
     /// `/status`
     Status,
@@ -90,6 +108,26 @@ pub fn parse_command(text: &str, known_repos: &[String]) -> Command {
         ("run", rest) => parse_run(rest, known_repos),
         ("status", _) => Command::Status,
         ("roles", _) => Command::Roles,
+        ("machines", _) => Command::Machines,
+        ("files", "") | ("get", "") => Command::Unknown(text.to_owned()),
+        ("files", run) => Command::Files {
+            run: run.to_owned(),
+        },
+        ("get", rest) => match rest.split_once(char::is_whitespace) {
+            Some((run, path)) if !path.trim().is_empty() => Command::Get {
+                run: run.to_owned(),
+                path: path.trim().to_owned(),
+            },
+            _ => Command::Unknown(text.to_owned()),
+        },
+        ("enroll", "") => Command::Unknown(text.to_owned()),
+        ("enroll", rest) => {
+            let mut words = rest.split_whitespace();
+            Command::Enroll {
+                name: words.next().unwrap_or_default().to_owned(),
+                labels: words.map(str::to_owned).collect(),
+            }
+        }
         ("routines", _) => Command::Routines,
         ("routine", "") => Command::Unknown(text.to_owned()),
         ("routine", name) => Command::Routine {
@@ -121,16 +159,49 @@ pub fn parse_command(text: &str, known_repos: &[String]) -> Command {
     }
 }
 
-/// `[@role] [<repo>] <task>`: a leading `@word` names a role; a next word
+/// `[@role] [on:<machine>] [<repo>] <task>`, in any order of the first
+/// two: a leading `@word` names a role, `on:word` a machine; a next word
 /// that is a known repo label names the repo; the rest is the task.
 fn parse_run(rest: &str, known_repos: &[String]) -> Command {
-    let (role, rest) = take_role(rest);
+    let mut role = None;
+    let mut machine = None;
+    let mut rest = rest.trim();
+    for _ in 0..2 {
+        let (r, after) = take_role(rest);
+        if r.is_some() {
+            role = r;
+            rest = after;
+            continue;
+        }
+        let (m, after) = take_machine(rest);
+        if m.is_some() {
+            machine = m;
+            rest = after;
+            continue;
+        }
+        break;
+    }
     let (repo, task) = take_repo(rest, known_repos);
     Command::Run {
         repo,
         role,
+        machine,
         task: task.to_owned(),
     }
+}
+
+fn take_machine(text: &str) -> (Option<String>, &str) {
+    let text = text.trim();
+    if let Some(stripped) = text.strip_prefix("on:") {
+        let (machine, rest) = match stripped.split_once(char::is_whitespace) {
+            Some((m, rest)) => (m, rest.trim()),
+            None => (stripped, ""),
+        };
+        if !machine.is_empty() {
+            return (Some(machine.to_owned()), rest);
+        }
+    }
+    (None, text)
 }
 
 /// `approve <id>`, `show <id>`, or `[<repo>] <goal>`.
@@ -222,6 +293,7 @@ mod tests {
         Command::Run {
             repo: repo.map(str::to_owned),
             role: None,
+            machine: None,
             task: task.to_owned(),
         }
     }
@@ -230,6 +302,7 @@ mod tests {
         Command::Run {
             repo: repo.map(str::to_owned),
             role: Some(role.to_owned()),
+            machine: None,
             task: task.to_owned(),
         }
     }
@@ -253,6 +326,42 @@ mod tests {
             ("/run @reviewer check PR 12", run_as("reviewer", None, "check PR 12")),
             ("@reviewer check PR 12", run_as("reviewer", None, "check PR 12")),
             ("@ check", run(None, "@ check")),
+            (
+                "/run on:spark shiioo train the model",
+                Command::Run {
+                    repo: Some("shiioo".into()),
+                    role: None,
+                    machine: Some("spark".into()),
+                    task: "train the model".into(),
+                },
+            ),
+            (
+                "@trainer on:gpu=true run it",
+                Command::Run {
+                    repo: None,
+                    role: Some("trainer".into()),
+                    machine: Some("gpu=true".into()),
+                    task: "run it".into(),
+                },
+            ),
+            ("/machines", Command::Machines),
+            ("/files abcd", Command::Files { run: "abcd".into() }),
+            (
+                "/get abcd out/cover.png",
+                Command::Get {
+                    run: "abcd".into(),
+                    path: "out/cover.png".into(),
+                },
+            ),
+            ("/get abcd", Command::Unknown("/get abcd".into())),
+            (
+                "/enroll spark gpu=true os=linux",
+                Command::Enroll {
+                    name: "spark".into(),
+                    labels: vec!["gpu=true".into(), "os=linux".into()],
+                },
+            ),
+            ("/enroll", Command::Unknown("/enroll".into())),
             ("/roles", Command::Roles),
             ("/routines", Command::Routines),
             ("/routine nightly", Command::Routine { name: "nightly".into() }),

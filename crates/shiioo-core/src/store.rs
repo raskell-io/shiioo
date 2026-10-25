@@ -32,6 +32,67 @@ pub enum StoreError {
     Backend(String),
 }
 
+impl StoreError {
+    /// A JSON form that survives a trip over HTTP (`shiioo-node`'s remote
+    /// store speaks it), so a node worker sees the same fencing errors a
+    /// local one does.
+    pub fn to_json(&self) -> Value {
+        use serde_json::json;
+        match self {
+            StoreError::RunNotFound(run) => json!({ "kind": "run_not_found", "run": run }),
+            StoreError::RunClosed(run) => json!({ "kind": "run_closed", "run": run }),
+            StoreError::LeaseHeld { holder, expires_at } => {
+                json!({ "kind": "lease_held", "holder": holder, "expires_at": expires_at })
+            }
+            StoreError::Fenced { presented, current } => {
+                json!({ "kind": "fenced", "presented": presented, "current": current })
+            }
+            StoreError::LeaseExpired(epoch) => json!({ "kind": "lease_expired", "epoch": epoch }),
+            StoreError::SeqConflict { expected, actual } => {
+                json!({ "kind": "seq_conflict", "expected": expected, "actual": actual })
+            }
+            StoreError::InvalidPayload(detail) => {
+                json!({ "kind": "invalid_payload", "detail": detail })
+            }
+            StoreError::Backend(detail) => json!({ "kind": "backend", "detail": detail }),
+        }
+    }
+
+    /// The inverse of [`to_json`](Self::to_json). `invalid_payload` comes
+    /// back as `Backend` (its detail is not a static string).
+    pub fn from_json(v: &Value) -> Option<Self> {
+        fn field<T: serde::de::DeserializeOwned>(v: &Value, k: &str) -> Option<T> {
+            serde_json::from_value(v.get(k)?.clone()).ok()
+        }
+        let get = |k: &str| v.get(k).cloned();
+        Some(match v.get("kind")?.as_str()? {
+            "run_not_found" => StoreError::RunNotFound(field(v, "run")?),
+            "run_closed" => StoreError::RunClosed(field(v, "run")?),
+            "lease_held" => StoreError::LeaseHeld {
+                holder: field(v, "holder")?,
+                expires_at: field(v, "expires_at")?,
+            },
+            "fenced" => StoreError::Fenced {
+                presented: field(v, "presented")?,
+                current: field(v, "current")?,
+            },
+            "lease_expired" => StoreError::LeaseExpired(field(v, "epoch")?),
+            "seq_conflict" => StoreError::SeqConflict {
+                expected: field(v, "expected")?,
+                actual: field(v, "actual")?,
+            },
+            "invalid_payload" => StoreError::Backend(format!(
+                "invalid payload: {}",
+                get("detail").and_then(|d| d.as_str().map(str::to_owned)).unwrap_or_default()
+            )),
+            "backend" => StoreError::Backend(
+                get("detail").and_then(|d| d.as_str().map(str::to_owned)).unwrap_or_default(),
+            ),
+            _ => return None,
+        })
+    }
+}
+
 /// Durable, per-run, append-only log with leases. All backends must pass the
 /// same conformance tests (`shiioo-store/tests`).
 pub trait EventStore: Send + Sync {
@@ -82,4 +143,39 @@ pub trait EventStore: Send + Sync {
     /// list with status and times) is the long-term answer; this serves a
     /// personal office with hundreds of runs well enough.
     fn list_runs(&self) -> impl Future<Output = Result<Vec<RunId>, StoreError>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_errors_round_trip_through_json() {
+        let run = RunId::new();
+        for err in [
+            StoreError::RunNotFound(run),
+            StoreError::RunClosed(run),
+            StoreError::LeaseHeld {
+                holder: WorkerId("w".into()),
+                expires_at: Timestamp(5),
+            },
+            StoreError::Fenced {
+                presented: Epoch(1),
+                current: Epoch(2),
+            },
+            StoreError::LeaseExpired(Epoch(3)),
+            StoreError::SeqConflict {
+                expected: Seq(4),
+                actual: Seq(9),
+            },
+            StoreError::Backend("x".into()),
+        ] {
+            assert_eq!(StoreError::from_json(&err.to_json()), Some(err));
+        }
+        assert_eq!(
+            StoreError::from_json(&StoreError::InvalidPayload("bad").to_json()),
+            Some(StoreError::Backend("invalid payload: bad".into()))
+        );
+        assert_eq!(StoreError::from_json(&serde_json::json!({ "kind": "?" })), None);
+    }
 }

@@ -4,7 +4,9 @@ The single binary that is a Shiioo office. `shiioo serve` runs the API, the
 dashboard, the Telegram bot, the GitHub issue intake and the workers in one
 process; `shiioo install` makes that a background service that starts at
 login and keeps the Mac awake; `shiioo run` drives one task from the terminal
-without a server; `shiioo secret` manages the encrypted secret store;
+without a server; `shiioo node` makes another machine work for the office;
+`shiioo machines` lists and enrolls them; `shiioo mail send` sends mail
+through the office; `shiioo secret` manages the encrypted secret store;
 `shiioo sandbox` builds the container images; `shiioo hook pre-tool-use` is
 what Claude Code and Codex call to ask permission. There is one source file, `src/main.rs`, and no
 library: all behaviour lives in the crates it wires together.
@@ -13,7 +15,8 @@ library: all behaviour lives in the crates it wires together.
 
 ```
 shiioo-core, shiioo-store (redb), shiioo-runtime, shiioo-api,
-shiioo-rules, shiioo-providers, shiioo-intake, shiioo-telegram, shiioo-secrets
+shiioo-rules, shiioo-providers, shiioo-intake, shiioo-telegram, shiioo-secrets,
+shiioo-node, shiioo-mail
                           │
                           ▼
                     shiioo (binary)
@@ -33,6 +36,8 @@ service definitions for launchd and systemd.
 | `serve` | Builds the whole office: store, machine, provider, API state, hook endpoint, capacity tracker, Telegram bot, intake. [docs/office-layout.md](docs/office-layout.md). |
 | `Config`, `DEFAULT_CONFIG`, `load_rules`, `api_token` | `.shiioo/config.toml` (including `[isolation]`, `[egress]`, `[env]` → `IsolationPolicy`), `.shiioo/rules.toml`, `.shiioo/api-token`. |
 | `secret_command`, `sandbox_command`, `StoreSecrets` | The secret store CLI, image building and pruning, and the `SecretSource` the workers read. |
+| `node_command`, `machines_command`, `NodeFile`, `node_capabilities` | `shiioo node enroll` / `shiioo node` (a `Worker` over `shiioo_node::RemoteStore`), `shiioo machines`. |
+| `mail_command`, `MailerSender`, `MailSection` | `shiioo mail send` (through the office's API), the `MailSender` over `shiioo-mail`, `[mail]` config. |
 | `TelegramOffice` | Implements the bot's `Office` trait on top of `ApiState`: `/run` (with roles), `/status`, `/log`, `/cancel`, approvals, `/plan`, `/routines`, `/report`. |
 | `GhIssues` | Implements `shiioo_api::IssueCreator` over the intake's `gh` wrapper: an approved plan's issues. |
 | `TelegramNotifications` | Implements `shiioo_api::Notifications`: approval questions with Allow/Deny buttons, run endings. |
@@ -127,6 +132,29 @@ wait minutes. `prune` removes containers named `shiioo-*` left behind by
 runs that did not clean up. Both need the engine running (`docker` by
 default, `[isolation.container] engine`).
 
+### `shiioo node [enroll]`
+
+| Command | Meaning |
+| --- | --- |
+| `node enroll --server <url> --token <t> --name <n> [--label k=v]…` | Exchange a one-time token (from `/enroll` or `machines token`) for this machine's credential; writes `.shiioo/node.toml` and `.shiioo/node-token` (0600). |
+| `node [--effort <level>]` | Work for the office: heartbeat, take the runs addressed to this machine (`machine = "<name>"` or a label), drive them here. Repositories come from this machine's `[repos]` by label; isolation, egress and secrets from this machine's config. |
+
+### `shiioo machines [token|revoke]`
+
+Talks to the running office (`--server`, default `http://127.0.0.1:7878`,
+with `.shiioo/api-token`): list machines with their state; `token
+[--label k=v]…` prints a one-time enrollment token and the command to paste
+on the new machine; `revoke <name>` forgets a machine.
+
+### `shiioo mail send`
+
+`--to <addr>`… `[--cc <addr>]`… `--subject <s>` and `--body <text>`,
+`--body-file <path>` or stdin. Inside a run (the worker sets
+`SHIIOO_SERVER_URL`, `SHIIOO_API_TOKEN`, `SHIIOO_RUN_ID`) the request names
+the run, so the rules judge it as `mail.send` (default: ask the owner) and
+the office records `MailSent`. From a terminal it goes to the office with
+the owner's token and is sent as is. Needs `[mail]` in `config.toml`.
+
 ### Roles, routines, plans and the report
 
 There are no commands for these besides `shiioo run --role <name>`; they
@@ -156,6 +184,7 @@ asks the server, prints the decision. See [docs/hook.md](docs/hook.md).
 | `SHIIOO_CLAUDE_BIN`, `SHIIOO_CODEX_BIN` | harness adapters | Harness executables when not on `PATH` (host runs; a container uses its image's). |
 | `SHIIOO_OPENSHELL_BIN` | `openshell` level | The OpenShell CLI when not on `PATH`. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `container` level | Claude Code's token for containers when the secret `claude-code-oauth-token` is not set. |
+| `SHIIOO_SERVER_URL`, `SHIIOO_API_TOKEN`, `SHIIOO_RUN_ID` | `mail send` | Inside a run, where the mail request goes and which run it is for. |
 
 ## Testing
 

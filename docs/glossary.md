@@ -18,7 +18,9 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 | Company policy | Policy | Cedar rules: what is allowed, denied, or needs approval. |
 | Executive review | Approval board | A group of approvers with quorum rules. |
 | Department budget | Budget | Token, cost and time limits, enforced by the server. |
-| Office / workstation | Machine | A host or sandbox running `shiioo daemon`, where tools execute. |
+| Office / workstation | Machine | The office's own machine, or a node: another host running `shiioo node` that enrolled and takes the runs addressed to it. |
+| Deliverable | Artifact | A file a run produced: listed with `/files`, downloadable, sent to the phone when it is an image, audio, video or PDF. |
+| Outgoing letter | Mail (`mail.send`) | A mail the office sends for a run after the rules or the owner allowed it; recorded as `MailSent`. |
 | System credentials | Secret | Credentials stored encrypted in the office, referenced by name (`secret:<name>`), injected when a harness starts and redacted from the record. |
 | Locked office | Isolation level | Where a run executes: `worktree` (the owner's user), `container` (a container per run with an egress allow list), `openshell` (experimental). |
 | Recurring duty | Routine (`[[routines]]`) | Starts runs on a typed schedule (`weekdays 07:00`, `every 6h`); external events are planned. |
@@ -42,7 +44,7 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 - **Worker**: a stateless process that leases runs and executes turns.
 - **Server**: the `shiioo` process that holds the record, decides (rules, approvals, capacity), serves the API, dashboard and Telegram bot, and runs the workers. Its gateway role holds node connections and stream subscribers.
 - **Scheduler**: finds runnable runs, fires triggers and timers.
-- **Node**: `shiioo node`, the process on a machine that runs harnesses and tools and dials out to the server ([ADR-0010](adr/0010-single-binary-server-and-nodes.md)). Early docs called it the daemon. Today the only node is the one inside the server process (`shiioo up`).
+- **Node**: `shiioo node`, a worker on another machine that enrolls with the office, dials out over HTTP, takes the runs addressed to it and appends to the office's log through the API ([ADR-0010](adr/0010-single-binary-server-and-nodes.md), [ADR-0012](adr/0012-nodes-are-workers-over-the-offices-api.md)). Early docs called it the daemon. The office's own machine is the node inside the server process (`shiioo up`).
 - **Snapshot**: a saved copy of a run's workspace at a turn boundary.
 - **Fork**: a new run that starts from another run's state at a given `seq`.
 - **Replay**: re-executing a recorded run, serving recorded tool outputs back, typically against a different model or prompt.

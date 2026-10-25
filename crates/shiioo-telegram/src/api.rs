@@ -128,6 +128,49 @@ impl Bot {
         updates.iter().map(parse_update).collect()
     }
 
+    /// Sends a file (`sendDocument`), with an optional plain-text caption.
+    /// Telegram keeps documents as they are, which is what a rendered
+    /// image or an audio file wants. Up to 50 MB.
+    pub async fn send_document(
+        &self,
+        chat_id: i64,
+        filename: &str,
+        bytes: Vec<u8>,
+        caption: Option<&str>,
+    ) -> Result<i64, TelegramError> {
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename.to_owned())
+            .mime_str("application/octet-stream")
+            .map_err(|e| TelegramError::Decode(e.to_string()))?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("document", part);
+        if let Some(caption) = caption {
+            form = form.text("caption", caption.chars().take(1000).collect::<String>());
+        }
+        let response = self
+            .http
+            .post(format!("{}/bot{}/sendDocument", self.base_url, self.token))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| TelegramError::Http(e.to_string()))?;
+        let v: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| TelegramError::Decode(e.to_string()))?;
+        if v["ok"].as_bool() != Some(true) {
+            return Err(TelegramError::Api {
+                code: v["error_code"].as_i64().unwrap_or(0),
+                description: v["description"]
+                    .as_str()
+                    .unwrap_or("sendDocument failed")
+                    .to_owned(),
+            });
+        }
+        Ok(v["result"]["message_id"].as_i64().unwrap_or(0))
+    }
+
     /// Sends plain text (no parse mode, so arbitrary tool output is safe).
     /// Returns the new message's id.
     pub async fn send_message(

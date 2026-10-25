@@ -264,6 +264,7 @@ impl RuleSet {
         ] {
             rules.push(shell(command, Decision::Allow, None));
         }
+        rules.push(tools(&["mail.send"], Decision::Ask, "sends mail"));
         rules.push(tools(
             &[
                 "Read",

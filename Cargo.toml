@@ -11,6 +11,8 @@ members = [
     "crates/shiioo-providers",
     "crates/shiioo-intake",
     "crates/shiioo-secrets",
+    "crates/shiioo-node",
+    "crates/shiioo-mail",
     "crates/shiioo",
 ]
 
@@ -32,6 +34,8 @@ shiioo-rules = { path = "crates/shiioo-rules" }
 shiioo-providers = { path = "crates/shiioo-providers" }
 shiioo-intake = { path = "crates/shiioo-intake" }
 shiioo-secrets = { path = "crates/shiioo-secrets" }
+shiioo-node = { path = "crates/shiioo-node" }
+shiioo-mail = { path = "crates/shiioo-mail" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
@@ -40,7 +44,7 @@ hex = "0.4"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 clap = { version = "4", features = ["derive", "env"] }
 axum = "0.8"
 futures-util = "0.3"

@@ -24,6 +24,10 @@ pub struct Routine {
     /// An employee name, or `auto`. Ignored when `role` names one.
     #[serde(default = "auto")]
     pub employee: String,
+    /// A machine to run on (an enrolled node's name or `label=value`);
+    /// None: the office's own machine.
+    #[serde(default)]
+    pub machine: Option<String>,
     pub task: String,
     #[serde(default = "yes")]
     pub enabled: bool,

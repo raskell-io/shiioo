@@ -18,7 +18,7 @@ Detailed designs, one per area. Each section is marked *(built)*, *(planned)* or
 |---|---|
 | [Event log](design/event-log.md) | Event format, hashing over stored bytes, the payload catalogue, external input, blobs, schema evolution, backends, archival, streaming |
 | [Execution](design/execution.md) | Run lifecycle, scheduling, the worker loop, leases, cancellation, subagents, recovery, failure modes, simulation |
-| [Tools and machines](design/tools-and-machines.md) | Tool model, built-in and MCP tools, nodes and their protocol, isolation levels, worktrees and snapshots, secrets |
+| [Tools and machines](design/tools-and-machines.md) | Tool model, built-in and MCP tools, nodes (workers on other machines), isolation levels, worktrees and snapshots, secrets |
 | [Runtimes and providers](design/runtimes-and-providers.md) | The native loop, the Claude Code and Codex harness drivers, ACP (planned), model providers and the router, context building |
 | [Governance](design/governance.md) | The owner's rules, approvals, budgets, change management, the virtual-company template (the chief of staff, routines, roles, the report) |
 | [Fork and replay](design/fork-and-replay.md) | Rewind, fork, diff, replay and evals |
@@ -38,6 +38,8 @@ Each crate carries its own `README.md` (purpose, API, how to test) and a `docs/`
 | `shiioo-store` | [README](../crates/shiioo-store/README.md), [docs](../crates/shiioo-store/docs) |
 | `shiioo-runtime` | [README](../crates/shiioo-runtime/README.md), [docs](../crates/shiioo-runtime/docs) |
 | `shiioo-secrets` | [README](../crates/shiioo-secrets/README.md) |
+| `shiioo-node` | [README](../crates/shiioo-node/README.md) |
+| `shiioo-mail` | [README](../crates/shiioo-mail/README.md) |
 | `shiioo-rules` | [README](../crates/shiioo-rules/README.md), [docs](../crates/shiioo-rules/docs) |
 | `shiioo-providers` | [README](../crates/shiioo-providers/README.md), [docs](../crates/shiioo-providers/docs) |
 | `shiioo-api` | [README](../crates/shiioo-api/README.md), [docs](../crates/shiioo-api/docs) |

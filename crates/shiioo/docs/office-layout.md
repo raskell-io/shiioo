@@ -20,6 +20,8 @@ the office is gone, copy it and the office moves.
 | `intake-state.json` | intake | Which issues were already picked up. |
 | `plans.json` | `/plan` | The chief of staff's plans: goal, items, status (planning, proposed, approved with issue URLs, failed). |
 | `routines-state.json` | the scheduler | When each routine and the report last fired, so a restart neither repeats nor backfills. |
+| `machines.json` | `/enroll`, `shiioo node enroll`, heartbeats | The enrolled machines: names, labels, capabilities, last heartbeat, token hashes (never tokens). Mode 0600. |
+| `node.toml`, `node-token` | `shiioo node enroll` (on a node) | How this machine reaches its office and its credential (0600). A node's `.shiioo/` also holds its own journal, worktrees, sandboxes and secrets. |
 | `logs/serve.log` | the installed service | stdout and stderr of `serve`. |
 
 `shiioo run`, `resume` and `log` only touch `shiioo.redb`; they do not read
@@ -144,6 +146,25 @@ routine state are kept; `issues` is `GhIssues` over the intake's `gh`
 wrapper; `intake_label` is `[intake] label`, so approved plans land where
 the intake looks. `serve` spawns `ApiState::run_scheduler` after the API
 state exists.
+
+
+### `[mail]`
+
+```toml
+[mail]
+smtp_host = "smtp.fastmail.com"
+smtp_port = 587                   # default 587 for starttls, 465 for tls
+security = "starttls"             # starttls | tls | none
+from = "Shiioo <office@example.com>"
+user = "office@example.com"       # default: the from address
+password = "secret:smtp-password" # or a literal
+# outbox_dir = "/tmp/outbox"      # tests: write .eml files instead of sending
+```
+
+`MailSection::mailer` resolves the password through the secret store and
+builds a `shiioo_mail::Mailer`; `serve` wraps it as `ApiOptions.mail`. Without
+`smtp_host` or `outbox_dir` the office has no mail and `POST /v1/mail/send`
+answers 409.
 
 ## `rules.toml`
 

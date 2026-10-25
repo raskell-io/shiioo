@@ -12,8 +12,8 @@ use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shiioo_api::{
-    ApiOptions, ApiState, CapacityTracker, Employee, IsolationPolicy, IssueCreator, Notifications,
-    Role, Routine,
+    ApiOptions, ApiState, Artifact, CapacityTracker, Employee, IsolationPolicy, IssueCreator,
+    MailRequest, MailSender, Notifications, Role, Routine,
 };
 use shiioo_core::{Event, EventStore, RunId, Seq, verify_chain};
 use shiioo_rules::RuleSet;
@@ -28,7 +28,7 @@ use shiioo_store::{Notifying, RedbStore};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 #[derive(Parser)]
 #[command(name = "shiioo", version, about = "Shiioo, the Virtual Company OS")]
@@ -100,6 +100,34 @@ enum Command {
         #[arg(long, requires = "harness")]
         role: Option<String>,
     },
+    /// Work for an office from this machine: `shiioo node enroll` once
+    /// with a token from `/enroll` or `shiioo machines token`, then
+    /// `shiioo node` to take the runs addressed to this machine.
+    Node {
+        #[command(subcommand)]
+        action: Option<NodeAction>,
+        /// Reasoning effort for native runs on this node.
+        #[arg(long, default_value = "high")]
+        effort: String,
+    },
+    /// Send mail through the office. From a run, the rules and the owner's
+    /// approval apply; from a terminal, the owner's request goes out as is.
+    Mail {
+        #[command(subcommand)]
+        action: MailAction,
+        /// The office's API when not inside a run (SHIIOO_SERVER_URL).
+        #[arg(long, default_value = "http://127.0.0.1:7878")]
+        server: String,
+    },
+    /// The machines (nodes) enrolled with the office. Talks to the running
+    /// office over its API.
+    Machines {
+        #[command(subcommand)]
+        action: Option<MachinesAction>,
+        /// The office's API.
+        #[arg(long, default_value = "http://127.0.0.1:7878")]
+        server: String,
+    },
     /// Continue a run, for example after the process was killed.
     Resume {
         run: String,
@@ -170,6 +198,55 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum NodeAction {
+    /// Exchange a one-time enrollment token for this machine's credential
+    /// and write .shiioo/node.toml.
+    Enroll {
+        /// The office's URL as this machine reaches it (over Tailscale:
+        /// https://<mac>.<tailnet>.ts.net).
+        #[arg(long)]
+        server: String,
+        /// The enrollment token from `/enroll` or `shiioo machines token`.
+        #[arg(long)]
+        token: String,
+        /// This machine's name in the office (letters, digits, - and _).
+        #[arg(long)]
+        name: String,
+        /// Labels, `key=value`, that runs can select by (`gpu=true`).
+        #[arg(long = "label")]
+        labels: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MailAction {
+    /// Send a mail. The body comes from --body, --body-file or stdin.
+    Send {
+        #[arg(long = "to", required = true)]
+        to: Vec<String>,
+        #[arg(long = "cc")]
+        cc: Vec<String>,
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MachinesAction {
+    /// A one-time enrollment token for a new machine.
+    Token {
+        #[arg(long = "label")]
+        labels: Vec<String>,
+    },
+    /// Forget a machine; its token stops working.
+    Revoke { name: String },
+}
+
+#[derive(Subcommand)]
 enum SecretAction {
     /// Store a secret. The value is read from stdin (`echo -n … | shiioo
     /// secret set gh-token`), or from a variable or a file.
@@ -224,6 +301,20 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let workspace = std::fs::canonicalize(&cli.workspace)?;
     let data = workspace.join(".shiioo");
     std::fs::create_dir_all(&data)?;
+    // Commands that never touch the record: they must work while the
+    // office holds the database open (redb allows one process at a time).
+    match cli.command {
+        Command::Node { action, effort } => {
+            return node_command(&workspace, &data, action, &effort).await;
+        }
+        Command::Machines { action, server } => {
+            return machines_command(&data, &server, action).await;
+        }
+        Command::Secret { action } => return secret_command(&data, action),
+        Command::Sandbox { action } => return sandbox_command(&data, action).await,
+        Command::Mail { action, server } => return mail_command(&data, &server, action).await,
+        _ => {}
+    }
     let store = Arc::new(RedbStore::open(data.join("shiioo.redb"))?);
 
     match cli.command {
@@ -334,6 +425,7 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 task,
                 agent,
                 runtime,
+                machine: None,
             };
             let run = worker.create(&spec).await?;
             println!("run {run}");
@@ -368,12 +460,304 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             print,
         } => install(&workspace, &data, &listen, telegram_token, print),
         Command::Uninstall => uninstall(),
-        Command::Secret { action } => secret_command(&data, action),
-        Command::Sandbox { action } => sandbox_command(&data, action).await,
-        // Answered before the store was opened: hooks run in the harness's
-        // working directory, not in an office.
-        Command::Hook { .. } => Ok(ExitCode::SUCCESS),
+        // Answered before the store was opened.
+        Command::Hook { .. }
+        | Command::Node { .. }
+        | Command::Machines { .. }
+        | Command::Secret { .. }
+        | Command::Sandbox { .. }
+        | Command::Mail { .. } => Ok(ExitCode::SUCCESS),
     }
+}
+
+/// `.shiioo/node.toml`: how this machine reaches its office.
+#[derive(Debug, Default, Deserialize, serde::Serialize)]
+#[serde(default)]
+struct NodeFile {
+    server: String,
+    name: String,
+    labels: BTreeMap<String, String>,
+}
+
+fn parse_labels(labels: &[String]) -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
+    let mut map = BTreeMap::new();
+    for l in labels {
+        let (k, v) = l
+            .split_once('=')
+            .ok_or_else(|| format!("label {l:?} must be key=value"))?;
+        map.insert(k.trim().to_owned(), v.trim().to_owned());
+    }
+    Ok(map)
+}
+
+/// `shiioo node enroll …` and `shiioo node`.
+async fn node_command(
+    workspace: &Path,
+    data: &Path,
+    action: Option<NodeAction>,
+    effort: &str,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let node_file = data.join("node.toml");
+    let token_file = data.join("node-token");
+    match action {
+        Some(NodeAction::Enroll {
+            server,
+            token,
+            name,
+            labels,
+        }) => {
+            let labels = parse_labels(&labels)?;
+            let machine_token = shiioo_node::enroll(
+                &server,
+                &token,
+                &name,
+                &labels,
+                &node_capabilities(),
+                env!("CARGO_PKG_VERSION"),
+            )
+            .await?;
+            std::fs::write(&token_file, &machine_token)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600))?;
+            }
+            let file = NodeFile {
+                server: server.trim_end_matches('/').to_owned(),
+                name: name.clone(),
+                labels,
+            };
+            std::fs::write(&node_file, toml::to_string_pretty(&file)?)?;
+            println!(
+                "enrolled as {name} with {server}; token in {}. Start working with `shiioo \
+                 --workspace {} node`. Put this machine's repositories in {} under [repos], \
+                 with the same labels the office uses.",
+                token_file.display(),
+                workspace.display(),
+                data.join("config.toml").display()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        None => {
+            let file: NodeFile = toml::from_str(
+                &std::fs::read_to_string(&node_file)
+                    .map_err(|e| format!("{}: {e}; run `shiioo node enroll` first", node_file.display()))?,
+            )?;
+            let machine_token = std::fs::read_to_string(&token_file)
+                .map_err(|e| format!("{}: {e}", token_file.display()))?
+                .trim()
+                .to_owned();
+            let config = Config::load(&data.join("config.toml"))?;
+            let store = Arc::new(shiioo_node::RemoteStore::new(&file.server, &machine_token));
+            let provider = provider(effort);
+            let machine = Arc::new(
+                LocalMachine::open(workspace, data.join("journal.jsonl"), Toolbox::builtin())?
+                    .with_worktrees(data.join("worktrees"))
+                    .with_sandboxes(data.join("sandboxes")),
+            );
+            let secrets: Arc<dyn SecretSource> = Arc::new(StoreSecrets(SecretStore::open(data)?));
+            let hooks = HookEndpoint {
+                server_url: file.server.clone(),
+                token: machine_token.clone(),
+                command: HookCommand::Exe(std::env::current_exe()?),
+            };
+            let repos = config.repos.clone();
+            let name = file.name.clone();
+            let worker_store = Arc::clone(&store);
+            let workers: Arc<dyn Fn() -> Worker<shiioo_node::RemoteStore> + Send + Sync> =
+                Arc::new(move || {
+                    Worker::new(
+                        Arc::clone(&worker_store),
+                        Arc::clone(&provider),
+                        Arc::clone(&machine),
+                        format!("node-{name}").as_str(),
+                    )
+                    .with_hooks(hooks.clone())
+                    .with_secrets(Arc::clone(&secrets))
+                    .with_repos(repos.clone())
+                    .with_observer(Arc::new(print_event))
+                });
+            let mut node = shiioo_node::NodeConfig::new(&file.name);
+            node.capabilities = node_capabilities();
+            println!(
+                "node {}: {} repo(s) here: {}",
+                file.name,
+                config.repos.len(),
+                config.repos.keys().cloned().collect::<Vec<_>>().join(", ")
+            );
+            shiioo_node::run_node(node, store, workers).await;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// What this machine can run: the harnesses on its PATH and the
+/// isolation levels it has an engine for.
+fn node_capabilities() -> Vec<String> {
+    let mut caps = vec!["isolation.worktree".to_owned()];
+    for (bin, cap) in [("claude", "harness.claude-code"), ("codex", "harness.codex"), ("docker", "isolation.container"), ("openshell", "isolation.openshell")] {
+        if std::process::Command::new(bin)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            caps.push(cap.to_owned());
+        }
+    }
+    caps
+}
+
+/// `shiioo mail send …`: inside a run (`SHIIOO_SERVER_URL` set by the
+/// worker) the request carries the run id, so the rules and the owner
+/// decide; from a terminal it goes to the office with the owner's token.
+async fn mail_command(
+    data: &Path,
+    server: &str,
+    action: MailAction,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let MailAction::Send {
+        to,
+        cc,
+        subject,
+        body,
+        body_file,
+    } = action;
+    let body = match (body, body_file) {
+        (Some(b), _) => b,
+        (None, Some(f)) => std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?,
+        (None, None) => {
+            let mut b = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut b)?;
+            b
+        }
+    };
+    let (base, token, run) = match (
+        std::env::var("SHIIOO_SERVER_URL"),
+        std::env::var("SHIIOO_API_TOKEN"),
+    ) {
+        (Ok(url), Ok(token)) => (url, token, std::env::var("SHIIOO_RUN_ID").ok()),
+        _ => (
+            server.to_owned(),
+            std::fs::read_to_string(data.join("api-token"))
+                .map_err(|e| format!("{}: {e}; is the office here?", data.join("api-token").display()))?
+                .trim()
+                .to_owned(),
+            None,
+        ),
+    };
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(
+            shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS + 60,
+        ))
+        .build()?;
+    let response = http
+        .post(format!("{}/v1/mail/send", base.trim_end_matches('/')))
+        .bearer_auth(token)
+        .json(&json!({ "run": run, "to": to, "cc": cc, "subject": subject, "body": body }))
+        .send()
+        .await?;
+    let status = response.status();
+    let v: Value = response.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        eprintln!(
+            "not sent: {}",
+            v["detail"].as_str().unwrap_or(status.as_str())
+        );
+        return Ok(ExitCode::from(1));
+    }
+    println!(
+        "sent to {} from {} (message id {})",
+        to.join(", "),
+        v["from"].as_str().unwrap_or_default(),
+        v["message_id"].as_str().unwrap_or_default()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The office's mail account as `shiioo_api` uses it.
+struct MailerSender(shiioo_mail::Mailer);
+
+impl MailSender for MailerSender {
+    fn send(&self, mail: MailRequest) -> shiioo_api::mail::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            self.0
+                .send(&shiioo_mail::Mail {
+                    to: mail.to,
+                    cc: mail.cc,
+                    subject: mail.subject,
+                    body: mail.body,
+                })
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn sender_address(&self) -> String {
+        self.0.from_address()
+    }
+}
+
+/// `shiioo machines [token|revoke]`, over the office's API.
+async fn machines_command(
+    data: &Path,
+    server: &str,
+    action: Option<MachinesAction>,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let token = std::fs::read_to_string(data.join("api-token"))
+        .map_err(|e| format!("{}: {e}; is this the office's workspace?", data.join("api-token").display()))?
+        .trim()
+        .to_owned();
+    let http = reqwest::Client::new();
+    let base = server.trim_end_matches('/');
+    match action {
+        None => {
+            let v: Value = http
+                .get(format!("{base}/v1/machines"))
+                .bearer_auth(&token)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            println!("{}", v["text"].as_str().unwrap_or_default());
+        }
+        Some(MachinesAction::Token { labels }) => {
+            let labels = parse_labels(&labels)?;
+            let v: Value = http
+                .post(format!("{base}/v1/machines/enrollments"))
+                .bearer_auth(&token)
+                .json(&json!({ "labels": labels }))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            println!(
+                "enrollment token (valid {} min, single use):\n{}\n\nOn the new machine:\n\
+                 shiioo --workspace ~/shiioo-node node enroll --server <this office's URL> \
+                 --token {} --name <name>{}",
+                v["expires_in_secs"].as_u64().unwrap_or(0) / 60,
+                v["token"].as_str().unwrap_or_default(),
+                v["token"].as_str().unwrap_or_default(),
+                labels
+                    .iter()
+                    .map(|(k, val)| format!(" --label {k}={val}"))
+                    .collect::<String>()
+            );
+        }
+        Some(MachinesAction::Revoke { name }) => {
+            http.delete(format!("{base}/v1/machines/{name}"))
+                .bearer_auth(&token)
+                .send()
+                .await?
+                .error_for_status()?;
+            println!("revoked {name}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// `shiioo secret set|list|rm`.
@@ -580,13 +964,20 @@ async fn serve(
     });
 
     let telegram = config.telegram_bot(data);
-    let notifications: Option<Arc<dyn Notifications>> = telegram.as_ref().map(|(bot, owner)| {
+    let telegram_notifications = telegram.as_ref().map(|(bot, owner)| {
         Arc::new(TelegramNotifications::new(
             Arc::clone(bot),
             *owner,
             config.dashboard.url.clone(),
-        )) as _
+        ))
     });
+    let notifications: Option<Arc<dyn Notifications>> = telegram_notifications
+        .as_ref()
+        .map(|n| Arc::clone(n) as Arc<dyn Notifications>);
+    let mailer: Option<Arc<dyn MailSender>> = config
+        .mail
+        .mailer(&*secrets)?
+        .map(|m| Arc::new(MailerSender(m)) as Arc<dyn MailSender>);
     let state = ApiState::with_options(
         store,
         workers,
@@ -615,7 +1006,22 @@ async fn serve(
             data_dir: Some(data.to_path_buf()),
             issues: Some(Arc::new(GhIssues(shiioo_intake::Gh::new(None)))),
             intake_label: config.intake.label.clone(),
+            worktrees: Some(data.join("worktrees")),
+            mail: mailer,
         },
+    );
+    if let Some(n) = &telegram_notifications {
+        n.attach(&state);
+    }
+    println!(
+        "mail: {}",
+        if config.mail.outbox_dir.is_empty() && config.mail.smtp_host.is_empty() {
+            "off ([mail] in config.toml)".to_owned()
+        } else if !config.mail.outbox_dir.is_empty() {
+            format!("to files in {}", config.mail.outbox_dir)
+        } else {
+            format!("via {} as {}", config.mail.smtp_host, config.mail.from)
+        }
     );
     tokio::spawn(Arc::clone(&state).run_scheduler());
     if !config.routines.is_empty() || !config.report.schedule.trim().is_empty() {
@@ -730,6 +1136,60 @@ struct Config {
     /// Runs that start on a schedule.
     routines: Vec<Routine>,
     report: ReportSection,
+    mail: MailSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct MailSection {
+    /// SMTP server; empty = the office has no mail.
+    smtp_host: String,
+    smtp_port: u16,
+    /// `starttls` (default, port 587), `tls` (465) or `none`.
+    security: String,
+    /// `Name <address>` or `address`.
+    from: String,
+    /// Login; default: the from address.
+    user: String,
+    /// Literal or `secret:<name>`.
+    password: String,
+    /// For tests and dry runs: write .eml files here instead of sending.
+    outbox_dir: String,
+}
+
+impl MailSection {
+    fn mailer(&self, secrets: &dyn SecretSource) -> Result<Option<shiioo_mail::Mailer>, Box<dyn std::error::Error>> {
+        if !self.outbox_dir.is_empty() {
+            return Ok(Some(shiioo_mail::Mailer::file(&self.outbox_dir, &self.from)?));
+        }
+        if self.smtp_host.is_empty() {
+            return Ok(None);
+        }
+        let password = match self.password.strip_prefix("secret:") {
+            Some(name) => secrets
+                .get(name)
+                .ok_or_else(|| format!("[mail] password: secret {name} is not set"))?,
+            None => self.password.clone(),
+        };
+        let security = shiioo_mail::Security::parse(&self.security)
+            .ok_or_else(|| format!("[mail] security {:?}: use starttls, tls or none", self.security))?;
+        let port = if self.smtp_port == 0 {
+            match security {
+                shiioo_mail::Security::Tls => 465,
+                _ => 587,
+            }
+        } else {
+            self.smtp_port
+        };
+        Ok(Some(shiioo_mail::Mailer::smtp(&shiioo_mail::SmtpConfig {
+            host: self.smtp_host.clone(),
+            port,
+            security,
+            from: self.from.clone(),
+            user: self.user.clone(),
+            password,
+        })?))
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -947,6 +1407,17 @@ mode = "allowlist"
 # awaiting review, capacity left. Empty = only on /report.
 # schedule = "weekdays 07:00"
 
+[mail]
+# The office's mail account. Agents send with `shiioo mail send`, which
+# goes through the rules (the default asks you first); the account never
+# reaches the agent.
+# smtp_host = "smtp.fastmail.com"
+# smtp_port = 587
+# security = "starttls"            # or tls (465), none
+# from = "Shiioo <office@example.com>"
+# user = "office@example.com"
+# password = "secret:smtp-password"   # shiioo secret set smtp-password
+
 # Roles: reusable agent configurations. `/run @reviewer <repo> <task>`.
 # [[roles]]
 # name = "reviewer"
@@ -963,7 +1434,14 @@ mode = "allowlist"
 # schedule = "daily 02:00"
 # repo = "myproject"
 # role = "tester"            # or employee = "codex"
+# machine = "spark"          # an enrolled node (or a label like gpu=true); default: here
 # task = "Run the full test suite; fix any flaky test you find and open a PR."
+
+# Machines: other computers working for this office run `shiioo node`.
+# /enroll <name> (or `shiioo machines token`) gives a one-time token; on the
+# machine: `shiioo node enroll --server https://<this mac>.<tailnet>.ts.net
+# --token … --name <name>`, then `shiioo node`. A node resolves repositories
+# by label from its own config.toml.
 "#;
 
 impl Config {
@@ -1043,7 +1521,12 @@ fn status_line(view: &shiioo_api::RunView) -> String {
         RunStatus::Cancelled { .. } => ("🛑", String::new()),
     };
     let task: String = view.task.chars().take(70).collect();
-    format!("{mark} {} {task}{detail}", short(view.id))
+    let place = match (&view.machine, &view.worker) {
+        (Some(m), _) => format!(" on {m}"),
+        (None, Some(w)) if w.starts_with("node-") => format!(" on {}", &w[5..]),
+        _ => String::new(),
+    };
+    format!("{mark} {} {task}{detail}{place}", short(view.id))
 }
 
 impl shiioo_telegram::Office for TelegramOffice {
@@ -1051,10 +1534,64 @@ impl shiioo_telegram::Office for TelegramOffice {
         self.state.repos()
     }
 
+    fn machines(&self) -> shiioo_telegram::BoxFuture<'_, String> {
+        Box::pin(async move { self.state.machines_text() })
+    }
+
+    fn files(&self, run: String) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            let run = self.state.resolve_run(&run).await.map_err(|e| e.to_string())?;
+            self.state
+                .artifacts_text(run)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn get_file(
+        &self,
+        run: String,
+        path: String,
+    ) -> shiioo_telegram::BoxFuture<'_, Result<(String, Vec<u8>), String>> {
+        Box::pin(async move {
+            let run = self.state.resolve_run(&run).await.map_err(|e| e.to_string())?;
+            let (bytes, _) = self
+                .state
+                .artifact_bytes(run, &path)
+                .await
+                .map_err(|e| e.to_string())?;
+            let name = path.rsplit('/').next().unwrap_or("file").to_owned();
+            Ok((name, bytes))
+        })
+    }
+
+    fn enroll(
+        &self,
+        name: String,
+        labels: Vec<String>,
+    ) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            let labels = parse_labels(&labels).map_err(|e| e.to_string())?;
+            let label_args: String = labels
+                .iter()
+                .map(|(k, v)| format!(" --label {k}={v}"))
+                .collect();
+            let token = self.state.enrollment_token(labels);
+            Ok(format!(
+                "Enrollment token for {name} (one use, one hour):\n{token}\n\nOn that machine:\n\
+                 shiioo --workspace ~/shiioo-node node enroll --server <this office's URL over \
+                 Tailscale> --token {token} --name {name}{label_args}\nthen `shiioo --workspace \
+                 ~/shiioo-node node`. Put its repositories in its config.toml under [repos] with \
+                 the same labels as here."
+            ))
+        })
+    }
+
     fn start_run(
         &self,
         repo: Option<String>,
         role: Option<String>,
+        machine: Option<String>,
         task: String,
     ) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
         Box::pin(async move {
@@ -1089,10 +1626,15 @@ impl shiioo_telegram::Office for TelegramOffice {
                 }
                 _ => employee,
             };
+            let employee = match &machine {
+                Some(m) => format!("{employee} on {m}"),
+                None => employee,
+            };
             let spec = RunSpec {
                 task: task.clone(),
                 agent,
                 runtime,
+                machine,
             };
             let run = self
                 .state
@@ -1254,6 +1796,9 @@ struct TelegramNotifications {
     /// approval id → (message id, text) of the question we sent, so the
     /// message can be marked when the request expires.
     asked: Mutex<HashMap<String, (i64, String)>>,
+    /// The office, for reading a finished run's files. Set once the state
+    /// exists (it holds these notifications, so not at construction).
+    state: OnceLock<Weak<ApiState<RedbStore>>>,
 }
 
 impl TelegramNotifications {
@@ -1262,7 +1807,12 @@ impl TelegramNotifications {
             notifier: shiioo_telegram::Notifier::new(bot, owner),
             dashboard_url,
             asked: Mutex::new(HashMap::new()),
+            state: OnceLock::new(),
         }
+    }
+
+    fn attach(&self, state: &Arc<ApiState<RedbStore>>) {
+        self.state.set(Arc::downgrade(state)).ok();
     }
 
     /// A link to the run in the dashboard, when the owner configured one.
@@ -1329,6 +1879,7 @@ impl Notifications for TelegramNotifications {
         run: RunId,
         task: String,
         status: RunStatus,
+        media: Vec<Artifact>,
     ) -> shiioo_api::BoxFuture<'_, ()> {
         Box::pin(async move {
             let task: String = task.chars().take(120).collect();
@@ -1352,6 +1903,25 @@ impl Notifications for TelegramNotifications {
                 .notify(&format!("{text}{}", self.link(run)))
                 .await
                 .ok();
+            // What the run produced that is worth looking at, as files.
+            let Some(state) = self.state.get().and_then(Weak::upgrade) else {
+                return;
+            };
+            for artifact in media {
+                match state.artifact_bytes(run, &artifact.path).await {
+                    Ok((bytes, _)) => {
+                        let name = artifact.path.rsplit('/').next().unwrap_or("file").to_owned();
+                        if let Err(e) = self
+                            .notifier
+                            .send_file(&name, bytes, &format!("{} · {}", short(run), artifact.path))
+                            .await
+                        {
+                            eprintln!("telegram: could not send {}: {e}", artifact.path);
+                        }
+                    }
+                    Err(e) => eprintln!("telegram: could not read {}: {e}", artifact.path),
+                }
+            }
         })
     }
 }
@@ -1387,6 +1957,7 @@ impl shiioo_intake::IntakeSink for IssueSink {
                     task,
                     agent,
                     runtime,
+                    machine: None,
                 })
                 .await
                 .map_err(|e| e.to_string())?;

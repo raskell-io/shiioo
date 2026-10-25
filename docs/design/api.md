@@ -33,7 +33,10 @@ One office means no `{org}` or `{project}` segment in the built routes: `/v1/run
 | Permissions | `POST /v1/runs/{run}/permissions` *(built)*: a harness hook asks before a tool call; the rules answer, or the request waits for `POST /v1/approvals/{id}` *(built)* with `{"decision":"allow"\|"deny","note"}` |
 | Run verification | `GET /v1/runs/{run}/verify` *(planned; `shiioo log` verifies the chain locally today)* |
 | Approvals | `POST /v1/approvals/{id}` *(built, above)*; `GET /v1/approvals?state=pending`, `GET /v1/approvals/{id}` *(planned; the pending one is in the run's status today)* |
-| Machines | `GET /v1/machines`, `POST /v1/machines/enrollments`, `DELETE /v1/machines/{machine}` *(planned with remote nodes)* |
+| Machines | `GET /v1/machines` *(built)*; `POST /v1/machines/enrollments` *(built)*: a one-time token; `POST /v1/machines/enroll` *(built, unauthenticated: the token is the credential)*; `DELETE /v1/machines/{name}` *(built)*; `POST /v1/machines/{name}/heartbeat`, `GET /v1/machines/{name}/work?wait=` *(built, for nodes)* |
+| Node store | `POST /v1/runs/{run}/lease`, `POST /v1/runs/{run}/lease/renew`, `POST /v1/runs/{run}/events` *(built)*: the store trait over HTTP for node workers; store errors as `{"store": {"kind": …}}` ([ADR-0012](../adr/0012-nodes-are-workers-over-the-offices-api.md)) |
+| Deliverables | `GET /v1/runs/{run}/artifacts` *(built)*: files the branch changed plus untracked files in the worktree, with kind and size; `GET /v1/runs/{run}/artifacts/{path}` *(built)*: the file |
+| Mail | `POST /v1/mail/send` `{run?, to, cc?, subject, body}` *(built)*: with a run, judged as the tool `mail.send` by the rules (default: ask) and recorded as `MailSent`; without, the owner's own request |
 | Secrets | `GET/POST /v1/secrets` (names and metadata only; values are write-only), `PUT/DELETE /v1/secrets/{secret}` *(planned)* |
 | Rules | `GET/PUT /v1/rules`, `POST /v1/rules/test` *(planned; `rules.toml` is edited on the machine today)* |
 | Budgets | `GET/PUT /v1/budgets`, `GET /v1/usage` *(planned)* |

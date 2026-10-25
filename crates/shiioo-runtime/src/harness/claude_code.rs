@@ -365,6 +365,7 @@ mod tests {
         let spec = HarnessSpec {
             harness: crate::spec::HarnessKind::ClaudeCode,
             repo: None,
+            repo_label: None,
             permission_mode: "acceptEdits".into(),
             setting_sources: "project".into(),
             max_budget_usd: Some(2.5),

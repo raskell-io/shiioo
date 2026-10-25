@@ -13,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git jq ripgrep less procps unzip \
         python3 make g++ pkg-config \
+        ffmpeg imagemagick sox \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \

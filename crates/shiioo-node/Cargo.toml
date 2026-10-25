@@ -1,0 +1,27 @@
+[package]
+name = "shiioo-node"
+description = "Shiioo's node: a worker on another machine that drives the office's runs over HTTP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shiioo-core.workspace = true
+shiioo-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+
+[dev-dependencies]
+shiioo-api.workspace = true
+shiioo-store = { workspace = true, features = ["redb"] }
+axum.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

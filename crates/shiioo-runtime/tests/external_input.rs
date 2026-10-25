@@ -57,6 +57,7 @@ impl Fixture {
                     max_turns: 5,
                 },
                 runtime: Runtime::Native,
+                machine: None,
             })
             .await
             .unwrap_or_else(|e| panic!("{e}"))

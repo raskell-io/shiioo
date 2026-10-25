@@ -27,9 +27,27 @@ pub trait Office: Send + Sync {
         &self,
         repo: Option<String>,
         role: Option<String>,
+        machine: Option<String>,
         task: String,
     ) -> BoxFuture<'_, Result<String, String>>;
     fn status(&self) -> BoxFuture<'_, String>;
+    /// The files a run produced, one line each.
+    fn files(&self, run: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { Err(format!("no files for {run}")) })
+    }
+    /// One produced file: its name and bytes, for `sendDocument`.
+    fn get_file(&self, run: String, path: String) -> BoxFuture<'_, Result<(String, Vec<u8>), String>> {
+        Box::pin(async move { Err(format!("no file {path} for {run}")) })
+    }
+    /// The enrolled machines and whether they are online.
+    fn machines(&self) -> BoxFuture<'_, String> {
+        Box::pin(async { "No machines.".to_owned() })
+    }
+    /// A one-time enrollment token for a new node, and the command to run
+    /// on it.
+    fn enroll(&self, name: String, labels: Vec<String>) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move { Err(format!("enrollment is not available ({name}, {labels:?})")) })
+    }
     /// The configured roles, one line each.
     fn roles(&self) -> BoxFuture<'_, String> {
         Box::pin(async { "No roles configured.".to_owned() })
@@ -70,7 +88,8 @@ pub trait Office: Send + Sync {
 pub fn help_text() -> &'static str {
     "Shiioo, your virtual company.\n\n\
      Send a task as plain text to start a run, or:\n\
-     /run [@role] [<repo>] <task> – run a task, as a role, on a repo\n\
+     /run [@role] [on:machine] [<repo>] <task> – run a task, as a role, on a machine\n\
+     /machines – enrolled machines; /enroll <name> [label=value] – add one\n\
      /plan [<repo>] <goal> – the chief of staff breaks a goal into issues\n\
      /plan approve <id> – create the issues; /plan show <id>, /plans\n\
      /status – what everyone is doing\n\
@@ -79,6 +98,7 @@ pub fn help_text() -> &'static str {
      /roles – roles you can name with @\n\
      /capacity – how much of this week's subscription windows is left\n\
      /log <run> – a run's steps (id or prefix)\n\
+     /files <run> – files the run produced; /get <run> <path> sends one\n\
      /cancel <run> – stop a run\n\
      /repos – repos you can name in /run\n\
      /approve <id>, /deny <id> – answer a request without the buttons\n\
@@ -132,7 +152,19 @@ async fn handle(
                 }
                 return;
             }
-            let reply = reply_to(office, parse_command(&text, &office.repos())).await;
+            let command = parse_command(&text, &office.repos());
+            if let Command::Get { run, path } = command {
+                let reply = match office.get_file(run, path.clone()).await {
+                    Ok((name, bytes)) => match bot.send_document(owner, &name, bytes, Some(&path)).await {
+                        Ok(_) => return,
+                        Err(e) => format!("Couldn't send {path}: {e}"),
+                    },
+                    Err(e) => format!("Couldn't get that: {e}"),
+                };
+                bot.send_message(owner, &reply, None).await.ok();
+                return;
+            }
+            let reply = reply_to(office, command).await;
             for chunk in chunks(&reply, MESSAGE_LIMIT) {
                 if let Err(e) = bot.send_message(owner, &chunk, None).await {
                     eprintln!("telegram: sending reply failed: {e}");
@@ -188,9 +220,25 @@ async fn handle(
 
 async fn reply_to(office: &dyn Office, command: Command) -> String {
     match command {
-        Command::Run { repo, role, task } => match office.start_run(repo, role, task).await {
+        Command::Run {
+            repo,
+            role,
+            machine,
+            task,
+        } => match office.start_run(repo, role, machine, task).await {
             Ok(reply) => reply,
             Err(e) => format!("Couldn't start that: {e}"),
+        },
+        Command::Machines => office.machines().await,
+        Command::Files { run } => match office.files(run).await {
+            Ok(reply) => reply,
+            Err(e) => format!("Couldn't list files: {e}"),
+        },
+        // Handled before reply_to: it sends a document, not text.
+        Command::Get { path, .. } => format!("Couldn't send {path}."),
+        Command::Enroll { name, labels } => match office.enroll(name, labels).await {
+            Ok(reply) => reply,
+            Err(e) => format!("Couldn't enroll: {e}"),
         },
         Command::Status => office.status().await,
         Command::Roles => office.roles().await,
@@ -289,6 +337,19 @@ impl Notifier {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Sends a file to the owner with a caption.
+    pub async fn send_file(
+        &self,
+        filename: &str,
+        bytes: Vec<u8>,
+        caption: &str,
+    ) -> Result<(), TelegramError> {
+        self.bot
+            .send_document(self.owner_chat_id, filename, bytes, Some(caption))
+            .await
+            .map(drop)
     }
 
     /// Asks the owner to allow or deny something. Returns the message id,

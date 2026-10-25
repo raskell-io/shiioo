@@ -164,6 +164,13 @@ pub enum Payload {
         name: String,
         count: u32,
     },
+    /// The office sent a mail on the run's behalf, after the rules or the
+    /// owner allowed it. Written by the server, without the lease.
+    MailSent {
+        to: Vec<String>,
+        subject: String,
+        message_id: String,
+    },
     RunCompleted {
         output: Value,
     },
@@ -195,6 +202,7 @@ impl Payload {
                 | Payload::ApprovalRequested { .. }
                 | Payload::ApprovalDecided { .. }
                 | Payload::CancelRequested { .. }
+                | Payload::MailSent { .. }
         )
     }
 }

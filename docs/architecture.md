@@ -148,7 +148,8 @@ The product roadmap lives in [positioning.md](positioning.md#roadmap). In kernel
 2. **Rules, approvals, Telegram** *(built)*: allow / ask / deny per tool, repo and action; harness permission requests routed through a Claude Code hook to the server, answered by the rules or by the owner's phone; cancellation; notifications.
 3. **Capacity** *(built)*: the capacity tracker (`GET /v1/capacity`, `/capacity`, the dashboard header), the employee broker (`[[employees]]` tried in order, skipped above their window limits; `employee: "auto"` on run creation), Codex as a second harness with the same rules-and-approvals hook, local models through `shiioo-providers` (`ollama/…`, `lmstudio/…`), GitHub-issue intake (`[intake]`), and a per-run time budget (`max_minutes`). Codex's own rate-limit windows are not in its `exec` stream (they need its app-server), so the broker treats Codex as available until that is wired.
 4. **Isolation levels** *(built: `container`, egress allow lists, secret store and redaction; `openshell` experimental; [ADR-0011](adr/0011-containers-through-the-owners-engine.md))*.
-5. **Planner, routines, roles** *(built: `/plan` with approval into issues, `[[routines]]` with a typed schedule, the morning report, `[[roles]]`)*; then remote nodes, asset and mail machines; then replay and forks.
+5. **Planner, routines, roles** *(built: `/plan` with approval into issues, `[[routines]]` with a typed schedule, the morning report, `[[roles]]`)*.
+6. **Beyond code** *(built: remote nodes as workers over the office's API, [ADR-0012](adr/0012-nodes-are-workers-over-the-offices-api.md); deliverables listed, downloadable and sent to the phone; mail with send-approval)*; then replay and forks.
 
 ## Document index
 

@@ -171,6 +171,79 @@ binary is not inside the container. Waits like `permissions` does.
 "<run id>", "approval_id": "…", "decision": "allow"}`. An id that matches no
 open approval → `404`.
 
+## Deliverables
+
+### `GET /v1/runs/{id}/artifacts` → `200`, `[Artifact]`
+
+The files the run produced, for a run the office drove on a repository:
+the branch's changes against the repository's HEAD (`added`, `modified`,
+`deleted`) plus `untracked` files in the worktree, each with `size`, `kind`
+(`image`, `audio`, `video`, `pdf`, `archive`, `text`, `other`) and
+`content_type`. A run addressed to a machine answers `409`: its files are on
+the node.
+
+### `GET /v1/runs/{id}/artifacts/{path}` → `200`, the file
+
+From the worktree while it exists, else from the branch. `Content-Type` by
+extension, `Content-Disposition: attachment`. Paths with `..` are refused;
+files over 50 MB answer `409`.
+
+## Mail
+
+### `POST /v1/mail/send` → `200`, `MailOutcome`
+
+```json
+{ "run": "<run id>" | null, "to": ["a@example.com"], "cc": [], "subject": "…", "body": "…" }
+```
+
+With `run`, the request is judged like a tool call named `mail.send` (input
+`{to, cc, subject, description}`): the rules answer, or the owner is asked
+and the request waits; a deny is `403` with the reason. Allowed, the office
+sends through its account and appends `MailSent { to, subject, message_id }`
+to the run. Without `run` the owner's request is sent as is. `409` when the
+office has no mail account.
+
+## Machines
+
+### `POST /v1/machines/enrollments` → `201`
+
+`{"labels": {"gpu": "true"}}` (optional) → `{"token": "…", "expires_in_secs": 3600}`.
+A single-use token for `shiioo node enroll`; only its hash is kept.
+
+### `POST /v1/machines/enroll` → `201` (no bearer token)
+
+`{"token", "name", "labels", "capabilities", "version"}` →
+`{"name", "machine_token"}`. The enrollment token is the credential. `400`
+for an unknown or spent token or a bad name.
+
+### `GET /v1/machines` → `200`
+
+`{"machines": [{name, labels, capabilities, version, online, last_seen,
+in_flight, created_at}], "text": "<the /machines text>"}`.
+
+### `DELETE /v1/machines/{name}` → `204`
+
+Forgets the machine; its token stops working.
+
+### `POST /v1/machines/{name}/heartbeat` → `200`
+
+`{"version", "capabilities", "in_flight": ["<run id>"]}`, from the node.
+
+### `GET /v1/machines/{name}/work?wait=<secs>` → `200`
+
+`{"runs": ["<run id>"]}`: open runs addressed to the machine by name or by
+one of its labels. Waits up to `wait` seconds (at most 50) for one to appear.
+
+### Node store: `POST /v1/runs/{id}/lease`, `POST /v1/runs/{id}/lease/renew`, `POST /v1/runs/{id}/events`
+
+The store trait for node workers: `{"worker", "ttl_ms"}` → `Lease`;
+`{"lease", "ttl_ms"}` → `Lease`; `{"lease", "expected_next", "payloads"}` →
+`[Event]`. A store error answers `409` (or `404` for an unknown run) with
+`{"type": "https://shiioo.dev/problems/store", "store": {"kind": "fenced" |
+"lease_expired" | "lease_held" | "seq_conflict" | "run_closed" | …}}`, which
+`StoreError::from_json` turns back into the error. A terminal event in an
+append ends the run for the office: plans are read out, the owner is told.
+
 ## The company: report, roles, routines, plans
 
 ### `GET /v1/report` → `200`, `text/plain`

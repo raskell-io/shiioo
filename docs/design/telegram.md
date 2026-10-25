@@ -33,6 +33,9 @@ Status: *(built)*. The client, commands, long-poll loop and notifier are in `cra
 | `/plan approve <id>`, `/plan show <id>`, `/plans` | Creates one labelled issue per item (the intake works them), shows a plan with every item's details, lists plans. *(built)* |
 | `/routines`, `/routine <name>` | The scheduled routines and the report with their next firing; fire one now. *(built)* |
 | `/report` | The morning report, now. *(built)* |
+| `/run on:<machine> …`, `@role on:gpu=true …` | The same, addressed to an enrolled node by name or label; the node takes it. *(built)* |
+| `/machines`, `/enroll <name> [label=value…]` | The enrolled nodes (online, labels, runs in flight); a one-time enrollment token with the command to paste on the new machine. *(built)* |
+| `/files <run>`, `/get <run> <path>` | The files a run produced (branch changes plus untracked files), and one of them sent as a document. *(built; office runs only, a node's files stay on the node)* |
 | `/approve <id>`, `/deny <id>` | Answer an approval without the buttons (for example from a client that doesn't show them). *(built)* |
 | `/help`, `/start` | The command list. *(built)* |
 
@@ -80,6 +83,8 @@ The server speaks first in these cases (`Notifier::notify`), each as one short m
 | morning report | `[report] schedule` (for example `weekdays 07:00`): what finished, failed or needs you since the last report, approvals waiting, branches awaiting review, capacity, next routines *(built)* |
 | routine started | `⏰ routine <name> started run <id> (<employee>): <task>` *(built)* |
 | plan ready | `📋 plan <id> for <repo>: <goal>`, the items, and the `/plan approve` line; a plan that could not be read says so *(built)* |
+| deliverables | after `✅ finished`, up to five images, audio or video files or PDFs the run produced (50 MB each at most), as documents with the run id and path as caption *(built)* |
+| mail asked | a `mail.send` request from a run arrives as an approval: `🔐 <run> wants to run` `mail.send: to <recipients>: <subject>` with Allow / Deny *(built)* |
 
 The task is cut to 120 characters, the summary to 600; the branch or PR link is in the summary if the agent put it there *(a dedicated link is planned)*. Notifications are recorded text, nothing else; the office's secrets and its API token are redacted before recording ([security.md §3.2](security.md#32-secrets-never-reach-the-record-built-never-reach-the-model-holds-for-the-native-loop-planned)), so a leaked token shows as `[secret:<name>]` on the phone too. Anything else the agent printed arrives as is.
 

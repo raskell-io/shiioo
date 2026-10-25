@@ -23,6 +23,11 @@ Known rough edges and small debts, found while reviewing or documenting the code
 - **Egress for `container` runs allows TLS on 443 and plain HTTP only.** `git` over SSH, other ports and UDP do not leave the sandbox; remotes are rewritten to HTTPS inside. A per-run port list could follow if a toolchain needs one.
 - **Claude Code's and Codex's own telemetry and update checks** fail quietly behind the allow list; nothing is lost, but their stderr may mention it.
 - **Secrets in a `worktree` or `container` run are visible to the agent** (they are in its environment). Redaction protects the record; injection at the tool boundary exists only in the design of the native loop.
+- **A node's deliverables stay on the node.** `/files` and the files sent after `✅` work for runs the office drove; a run on a node answers "its files are there". A node-side artifact endpoint, or an upload at the end of a run, is the fix.
+- **A node has no login service yet**: `shiioo node` runs in a terminal or under the owner's own supervisor; `shiioo install` installs the office only.
+- **Machine tokens are office-wide** (ADR-0012): a node can read every run and answer approvals. Fine for one owner; scopes per machine with multi-owner use.
+- **Mail is outgoing only.** Reading a mailbox (IMAP) is not built; agents cannot see replies.
+- **The dashboard has no views for machines, files or plans**; the phone and the API do.
 - **Codex ignores `max_turns` and `max_budget_usd`**: neither has a `codex exec` equivalent that is passed today; `max_minutes` is the budget that applies to both harnesses.
 - **Codex's hook matcher is `^(Bash|shell)$`**, so its file edits and MCP calls are recorded but not gated by the rules (the rules know `Edit`/`Write`, not `apply_patch`).
 - **The intake's branch placeholder** is filled with the literal `$(git branch --show-current)`, which only expands when the agent runs the command in a shell. Letting the caller choose the run id would allow the real branch name.

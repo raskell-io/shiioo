@@ -76,18 +76,29 @@ Shiioo is an MCP client. Custom tools are MCP servers; Shiioo has no separate pl
 - OAuth for remote MCP servers is done once by the owner; the token is stored as a Secret.
 - Tool lists are fetched when a run starts and pinned in the run's first turn (as part of the context recorded in the log), so a server changing its tools mid-run can't change what a replay sees.
 
-## 2. Machines *(local machine built; remote nodes planned)*
+## 2. Machines *(local machine and remote nodes built; the tool-level node protocol of the first draft superseded)*
 
-A **Machine** is where a run's tools and harness execute. Today it is the in-process `LocalMachine` of the office itself (`shiioo-runtime::machine`): the server and the machine are one process (`shiioo up`). *(planned)* A remote `shiioo node` on any other host (an inference box, a laptop, a CI runner, a sandbox) implements the same contract over the wire. Each run is bound to at most one machine.
+A **Machine** is where a run's tools and harness execute. The office's own is the in-process `LocalMachine` (`shiioo-runtime::machine`): the server and the machine are one process (`shiioo up`). Any other host runs `shiioo node`: it enrolls with a one-time token, then **dials out** to the office and takes the runs addressed to it ([ADR-0012](../adr/0012-nodes-are-workers-over-the-offices-api.md)). Each run is bound to at most one machine.
 
-### 2.1 Enrollment
+What is built (`shiioo-node`, `shiioo-api::machines`):
+
+- **A node is a worker.** `shiioo node` runs the same `Worker` as the office against a `RemoteStore`, which implements the store trait over the office's API: `POST /v1/runs/{id}/lease`, `…/lease/renew`, `…/events` (append under the lease), `GET …/events`, `GET /v1/runs`. Store errors cross the wire in a JSON form that keeps their kind (`StoreError::to_json`/`from_json`), so fencing, expiry and sequence conflicts mean the same thing on a node as in the office. The node keeps its own journal, worktrees, sandboxes and secrets; nothing about runs.
+- **Addressing.** A run's spec carries `machine: "<name>"` or `"<label>=<value>"` (from `/run on:spark …`, the API's `machine`, a routine's `machine`). The office refuses a selector no enrolled machine matches, does not drive such a run itself, and wakes the long-polling nodes; the matching node takes the lease. `RunView.machine` and `RunView.worker` (`node-<name>`) show where a run went.
+- **Enrollment and credentials.** `/enroll <name> [label=value…]`, `shiioo machines token`, or `POST /v1/machines/enrollments` make a single-use token good for an hour; `shiioo node enroll --server … --token … --name … [--label k=v]` exchanges it (`POST /v1/machines/enroll`, the token being the credential) for a machine token kept in `.shiioo/node-token` (0600) with `.shiioo/node.toml`. The office keeps names, labels, capabilities, last heartbeat and token *hashes* in `.shiioo/machines.json`; `DELETE /v1/machines/{name}` (`shiioo machines revoke`) forgets a machine and its token stops working. A machine token is accepted wherever the office's is.
+- **Heartbeat and work.** `POST /v1/machines/{name}/heartbeat` every poll (version, capabilities such as `harness.codex`, `isolation.container`, runs in flight); `GET /v1/machines/{name}/work?wait=25` long-polls for open runs addressed to the machine by name or label. A machine is online if it called in within a minute (`/machines`, `GET /v1/machines`).
+- **Repositories by label.** The spec carries the office's repository path *and* its `[repos]` label; the node resolves the label through its own `[repos]` (`Worker::with_repos`) and fails the run with the label's name if it has no such clone. Isolation follows the run's spec, with the node's engine.
+- **Hooks and secrets.** The node's `shiioo hook pre-tool-use` posts to the office with the machine token; rules and approvals apply unchanged. `secret:<name>` references resolve in the node's own store; values never travel.
+
+Not built: a node-side deliverables endpoint (a run's files stay on the node that produced them), per-machine token scopes (ADR-0008: one owner), and the tool-invocation protocol below, which the first draft designed for the native loop's tools on a remote machine and which [ADR-0012](../adr/0012-nodes-are-workers-over-the-offices-api.md) sets aside until that loop runs anywhere but the office.
+
+### 2.1 Enrollment *(first draft; superseded by the built flow above)*
 
 1. The owner creates an enrollment token (`POST /v1/machines/enrollments`). It is single-use and short-lived (default 1 hour).
 2. On the machine: `shiioo node enroll --server https://… --token …`. The node generates a key pair locally; the private key never leaves the machine.
 3. The server exchanges the token for a long-lived **machine credential**: an mTLS client certificate signed by the office's CA, or, where TLS termination makes client certs impractical, a signed bearer token bound to the node's public key (each connection proves possession with a signed challenge). *(deferred, ADR-0008)* Biscuit tokens as in [ADR-0005](../adr/0005-cedar-policies-and-biscuit-credentials.md).
 4. The credential carries machine id and labels (`os=linux`, `gpu=true`, `pool=ci`). Revoking the machine revokes the credential.
 
-### 2.2 Connection: the node dials out
+### 2.2 Connection: the node dials out *(first draft: WebSocket and protobuf; built: HTTP long-poll, ADR-0012)*
 
 The node opens a WebSocket over TLS to the server (`wss://…/v1/node`), over Tailscale in practice, and keeps it open ([ADR-0006](../adr/0006-daemon-dials-out-over-websocket.md)). No inbound ports, works through NAT and HTTP proxies. QUIC is a possible later transport behind the same protocol.
 
@@ -136,7 +147,7 @@ message ToolInvocation {
 - **Reconnect with resume.** After any drop the node reconnects with backoff and lists in `Hello.in_flight` every call it is still running or has finished without an acknowledged `ToolCompletion`. The server re-attaches those calls to whichever worker now holds the run, so a network blip never turns into an unknown outcome.
 - **Stale workers.** `ToolInvocation.epoch` lets the node drop invocations from a worker that has been fenced: the node records the highest epoch it has seen per run and refuses older ones. *(built in `LocalMachine`: `Invocation.epoch`, `MachineError::Fenced`.)*
 
-### 2.3 Routing
+### 2.3 Routing *(first draft)*
 
 - **One server:** the server holds every node connection in process; a map from machine id to connection is enough. This is the product ([ADR-0010](../adr/0010-single-binary-server-and-nodes.md)).
 - *(deferred, ADR-0010)* Several server instances would need a `machine_sessions` table recording which instance holds each connection.

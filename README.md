@@ -41,6 +41,8 @@ It is built for one owner with an always-on machine (a Mac Studio, say), not for
 | `container` isolation (Docker/Podman, read-only root, worktree mounted), egress allow list through a proxy, encrypted secret store with redaction | built; container runs verified live with the real harness image |
 | `openshell` isolation | experimental adapter, not run against a gateway |
 | The company: `/plan` (a chief-of-staff run whose approval creates issues for the intake), `[[routines]]` on a typed schedule, the morning report, `[[roles]]` | built; planner verified live, the rest end to end over HTTP |
+| Remote nodes: `shiioo node` on another machine takes runs addressed to it (`/run on:spark …`) and works against the office's log over HTTP | built; verified live with a node process and a Codex run |
+| Deliverables (`/files`, `/get`, files sent to the phone) and mail with send-approval (`shiioo mail send`) | built, end to end over HTTP |
 | Planner, routines, morning report; remote nodes; asset and mail work | planned |
 | Fork, rewind, diff, replay as evals | planned |
 
