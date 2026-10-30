@@ -422,6 +422,7 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 role.apply(&mut runtime, &mut agent);
             }
             let spec = RunSpec {
+                origin: None,
                 park_on_answer: false,
                 task,
                 agent,
@@ -1633,6 +1634,7 @@ impl shiioo_telegram::Office for TelegramOffice {
                 None => employee,
             };
             let spec = RunSpec {
+                origin: None,
                 park_on_answer: false,
                 task: task.clone(),
                 agent,
@@ -1960,6 +1962,7 @@ impl shiioo_intake::IntakeSink for IssueSink {
             let run = self
                 .state
                 .start_run(RunSpec {
+                    origin: None,
                     park_on_answer: false,
                     task,
                     agent,

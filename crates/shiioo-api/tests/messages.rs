@@ -85,6 +85,7 @@ impl Office {
             "creator",
         )
         .create(&RunSpec {
+            origin: None,
             task: "Talk to me.".into(),
             agent: AgentSpec {
                 model: "scripted".into(),

@@ -140,6 +140,9 @@ this is the loop around them.
    on branch `shiioo/<first 8 chars of run id>`. A machine without a
    worktrees root fails the run with `this machine has no worktree directory
    for repo runs`. Without a repo the harness runs in `machine.workspace()`.
+   A follow-up (`RunSpec.origin`) uses `spec.workspace_run(run_id)`, the
+   first run of its chain, for the worktree, the branch and the sandbox's
+   per-run state, so it continues where that run left off.
 2. **Start budget.** `unfinished_starts` = `HarnessSessionStarted` events
    since the last `HarnessResult` (resumes after a crash, not deliveries of
    messages). At `MAX_HARNESS_STARTS` (5) the run fails with `harness
@@ -154,7 +157,9 @@ this is the loop around them.
    the workspace, then continue the task to completion."), followed by
    "While you were stopped, the owner wrote:" and the messages, if any.
    Every later start passes the last recorded session id, so the harness
-   resumes its own conversation.
+   resumes its own conversation. A follow-up's first start resumes
+   `origin.session` instead, with its task as the prompt (it is a first
+   start for this run).
 4. **Command.** `driver_for(spec, agent, cwd)` picks the adapter (Codex also
    gets its `--version` probed) and `driver.command(spec, agent, cwd, prompt,
    resume, hooks)` builds the `tokio::process::Command`. `hooks` is the

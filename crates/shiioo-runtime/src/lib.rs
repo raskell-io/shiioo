@@ -36,7 +36,7 @@ pub use scripted::ScriptedProvider;
 pub use secrets::{NoSecrets, SecretSource};
 pub use spec::{
     AgentSpec, ContainerSpec, Egress, HarnessBilling, HarnessKind, HarnessSpec, Isolation, Mount,
-    OpenshellSpec, RunSpec, Runtime,
+    OpenshellSpec, Origin, RunSpec, Runtime,
 };
 pub use status::{RunStatus, open_approval, parked, run_status, wake_reason};
 pub use tools::{Tool, ToolOutput, Toolbox};

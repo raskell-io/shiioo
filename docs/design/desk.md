@@ -213,8 +213,8 @@ One line each, in build order within a phase. "Needs" names what must land first
 | T12 *(built)* | `POST /v1/runs/{run}/messages` appending `UserMessage { author: "owner" }` with `Idempotency-Key`; a parked run is driven again | `shiioo-api/src/lib.rs`, `docs/http.md` | T11 | A message to a parked run wakes it once, also when retried |
 | T13 *(built)* | Harness delivery at the turn boundary: when the harness process exits with unread messages, resume the session with them as the prompt; otherwise park instead of completing (D2) | `shiioo-runtime/src/harness/mod.rs`, `worker.rs` | T11 | Scripted-harness test: a message sent mid-turn is the next resume prompt |
 | T14 | **Now** delivery: stop the harness process, resume with the interrupted-turn flag and the message | `harness/mod.rs` | T13 | Real-binary check with Claude Code and Codex: context survives the interrupt |
-| T15 | Follow-up on a finished run: `POST /v1/runs/{run}/follow-up` creates a continuation run (same repo, worktree, branch, session; `origin: { run, seq }`) (D3) | `shiioo-api`, `shiioo-runtime/src/spec.rs`, `workspace.rs` | T12 | The new run's harness remembers the earlier session; its spec names the original |
-| T16 *(part built: Send at next turn; Now with T14, Follow up with T15)* | Message box in the run view (Send at next turn / Now) and Follow up on finished runs | `ui/` | T4, T12–T15 | Both work from the desk and the phone |
+| T15 *(built)* | Follow-up on a finished run: `POST /v1/runs/{run}/follow-up` creates a continuation run (same repo, worktree, branch, session; `origin: { run, seq }`) (D3) | `shiioo-api`, `shiioo-runtime/src/spec.rs`, `workspace.rs` | T12 | The new run's harness remembers the earlier session; its spec names the original |
+| T16 *(part built: Send at next turn, Follow up; Now with T14)* | Message box in the run view (Send at next turn / Now) and Follow up on finished runs | `ui/` | T4, T12–T15 | Both work from the desk and the phone |
 
 ### 8d. Taking over, on the office machine
 

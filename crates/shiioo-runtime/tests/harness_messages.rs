@@ -1,10 +1,11 @@
 //! The owner's messages to a harness run: one that arrives while Claude
 //! Code works is delivered by resuming its session when it finishes, and
-//! a harness run that parks is woken by the next one.
+//! a harness run that parks is woken by the next one, and a follow-up on
+//! a finished run resumes its session in its worktree.
 
 use shiioo_core::{EventStore, ManualClock, Payload, RunId, Seq, verify_chain};
 use shiioo_runtime::{
-    AgentSpec, HarnessSpec, LocalMachine, RunOutcome, RunSpec, Runtime, Toolbox,
+    AgentSpec, HarnessSpec, LocalMachine, Origin, RunOutcome, RunSpec, Runtime, Toolbox,
     UnconfiguredProvider, Worker,
 };
 use shiioo_store::MemoryStore;
@@ -19,7 +20,8 @@ const FIXTURE: &str = concat!(
 const SESSION: &str = "a11a080d-e85c-457e-9b31-578ebfba0c1c";
 const ANSWER: &str = "first line of readme";
 
-/// A `claude` that records each invocation's arguments, replays the
+/// A `claude` that records each invocation's arguments and working
+/// directory (the last line), replays the
 /// recorded session (holding back its result line until a `go` file
 /// exists), and replays a short completion when resumed.
 struct Fake {
@@ -43,7 +45,7 @@ impl Fake {
         let d = dir.path().display();
         let script = format!(
             "#!/bin/sh\n\
-             {{ printf '%s\\n' \"$@\"; echo ----; }} >> '{d}/args.txt'\n\
+             {{ printf '%s\\n' \"$@\"; pwd; echo ----; }} >> '{d}/args.txt'\n\
              case \" $* \" in *' --resume '*) cat '{d}/resume.jsonl'; exit 0;; esac\n\
              cat '{d}/work.jsonl'\n\
              n=0; while [ ! -e '{d}/go' ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done\n\
@@ -84,18 +86,19 @@ fn prompt(args: &[String]) -> &str {
 struct Fixture {
     store: Arc<MemoryStore<ManualClock>>,
     machine: Arc<LocalMachine>,
-    _data: tempfile::TempDir,
+    data: tempfile::TempDir,
 }
 
 impl Fixture {
     fn new() -> Self {
         let data = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         std::fs::create_dir_all(data.path().join("workspace")).unwrap_or_else(|e| panic!("{e}"));
-        let machine = LocalMachine::in_memory(data.path().join("workspace"), Toolbox::default());
+        let machine = LocalMachine::in_memory(data.path().join("workspace"), Toolbox::default())
+            .with_worktrees(data.path().join("worktrees"));
         Self {
             store: Arc::new(MemoryStore::new(ManualClock::at(1_700_000_000_000))),
             machine: Arc::new(machine),
-            _data: data,
+            data,
         }
     }
 
@@ -109,13 +112,33 @@ impl Fixture {
     }
 
     async fn start(&self, fake: &Fake, park_on_answer: bool) -> RunId {
+        self.create(
+            fake,
+            None,
+            "Read README.md and report its first line.",
+            park_on_answer,
+            None,
+        )
+        .await
+    }
+
+    async fn create(
+        &self,
+        fake: &Fake,
+        repo: Option<PathBuf>,
+        task: &str,
+        park_on_answer: bool,
+        origin: Option<Origin>,
+    ) -> RunId {
         let mut harness = HarnessSpec::claude_code();
         harness.binary = Some(PathBuf::from("/bin/sh"));
         harness.binary_args = vec![fake.path().join("claude").to_string_lossy().into_owned()];
+        harness.repo = repo;
         self.worker("creator")
             .create(&RunSpec {
+                origin,
                 park_on_answer,
-                task: "Read README.md and report its first line.".into(),
+                task: task.into(),
                 agent: AgentSpec {
                     model: String::new(),
                     system: String::new(),
@@ -243,5 +266,108 @@ async fn a_parked_harness_run_is_resumed_with_the_message_that_wakes_it() {
     assert_eq!(
         count(&log, |p| matches!(p, Payload::RunCompleted { .. })),
         0
+    );
+}
+
+#[tokio::test]
+async fn a_follow_up_resumes_the_finished_runs_session_in_its_worktree() {
+    let fake = Fake::new();
+    fake.go();
+    let fx = Fixture::new();
+    let repo = fx.data.path().join("repo");
+    git_init_with_commit(&repo).await;
+
+    let first = fx
+        .create(
+            &fake,
+            Some(repo.clone()),
+            "Read README.md and report its first line.",
+            false,
+            None,
+        )
+        .await;
+    let outcome = fx
+        .worker("w1")
+        .drive(first)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(outcome, RunOutcome::Completed(ANSWER.into()));
+
+    let end = fx.log(first).await.len() as u64 - 1;
+    let follow = fx
+        .create(
+            &fake,
+            Some(repo),
+            "Now count its lines.",
+            false,
+            Some(Origin {
+                run: first,
+                seq: Seq(end),
+                workspace: first,
+                session: Some(SESSION.into()),
+            }),
+        )
+        .await;
+    let outcome = fx
+        .worker("w2")
+        .drive(follow)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(outcome, RunOutcome::Completed(ANSWER.into()));
+
+    let calls = fake.invocations();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(!calls[0].iter().any(|a| a == "--resume"), "{:?}", calls[0]);
+    assert!(calls[1].iter().any(|a| a == SESSION), "{:?}", calls[1]);
+    assert_eq!(prompt(&calls[1]), "Now count its lines.");
+
+    // Both processes ran in the first run's worktree; the follow-up has
+    // none of its own.
+    let worktrees = fx.data.path().join("worktrees");
+    let cwd = |c: &Vec<String>| {
+        c.last()
+            .and_then(|p| std::fs::canonicalize(p).ok())
+            .unwrap_or_default()
+    };
+    let expected = std::fs::canonicalize(worktrees.join(first.to_string())).ok();
+    assert_eq!(Some(cwd(&calls[0])), expected);
+    assert_eq!(Some(cwd(&calls[1])), expected);
+    assert!(!worktrees.join(follow.to_string()).exists());
+}
+
+async fn git_init_with_commit(repo: &Path) {
+    std::fs::create_dir_all(repo).unwrap_or_else(|e| panic!("{e}"));
+    git(repo, &["init", "-q", "-b", "main"]).await;
+    std::fs::write(repo.join("README.md"), "first line of readme\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    git(repo, &["add", "."]).await;
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+    )
+    .await;
+}
+
+async fn git(repo: &Path, args: &[&str]) {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

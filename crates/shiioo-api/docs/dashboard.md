@@ -79,6 +79,9 @@ url` from `config.toml` (or the listen address).
   step (read from the run's spec in the first log event), or "it is waiting
   for your reply" for a parked run. The message appears in the log through
   the live stream, not optimistically.
+- On a finished Claude Code or Codex run the same box is **Follow up**: it
+  posts to `/v1/runs/{id}/follow-up` and opens the new run. A follow-up's
+  header links back to the run it continues ("follows up 4ac51799").
 
 ## Live log
 

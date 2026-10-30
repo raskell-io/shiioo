@@ -425,6 +425,7 @@ impl<S: EventStore + 'static> Sim<S> {
 
     async fn run(mut self) -> Result<Report, Violation> {
         let spec = RunSpec {
+            origin: None,
             park_on_answer: self.scenario.conversation,
             task: format!("scenario {}", self.scenario.seed),
             agent: AgentSpec {

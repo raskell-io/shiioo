@@ -449,19 +449,27 @@ impl<S: EventStore + 'static> Session<'_, S> {
             repo: repo.clone(),
             ..spec.clone()
         };
+        // A follow-up works in the worktree, branch and sandbox state of
+        // the run it continues.
+        let workspace_run = self.spec.workspace_run(self.run_id);
         let cwd = match &repo {
             Some(repo) => {
                 let root = self.worker.machine.worktrees_root().ok_or_else(|| {
                     WorkerError::Spec("this machine has no worktree directory for repo runs".into())
                 })?;
-                workspace::ensure(root, repo, self.run_id).await?.path
+                workspace::ensure(root, repo, workspace_run).await?.path
             }
             None => self.worker.machine.workspace().to_path_buf(),
         };
-        let session = self.log.iter().rev().find_map(|e| match &*e.payload {
+        let own_session = self.log.iter().rev().find_map(|e| match &*e.payload {
             Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
             _ => None,
         });
+        // A follow-up's first process resumes the session it continues,
+        // with the follow-up's task as the prompt.
+        let resumed = own_session.is_some();
+        let session =
+            own_session.or_else(|| self.spec.origin.as_ref().and_then(|o| o.session.clone()));
         // Starts since the session last finished cleanly: resumes after a
         // crash, not deliveries of the owner's messages.
         let unfinished = unfinished_starts(&self.log);
@@ -480,7 +488,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
             Err(reason) => return self.fail(reason).await.map(Some),
         };
         let ctx = SandboxContext {
-            run_id: self.run_id,
+            run_id: workspace_run,
             harness: spec.harness,
             cwd: &cwd,
             repo: spec.repo.as_deref(),
@@ -503,7 +511,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
         // event also marks what the process is told: messages before it
         // go into its prompt, messages after it are unread.
         self.append(vec![sandbox.started()]).await?;
-        let prompt = harness_prompt(&self.log, &self.spec.task, session.is_some());
+        let prompt = harness_prompt(&self.log, &self.spec.task, resumed);
         let mut driver = harness::driver_for(spec, &self.spec.agent, &cwd).await;
         let run_id = self.run_id.to_string();
         let hooks = sandbox.hooks();

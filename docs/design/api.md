@@ -25,7 +25,7 @@ One office means no `{org}` or `{project}` segment in the built routes: `/v1/run
 | Agents | `GET/POST /v1/projects/{project}/agents`, `GET/PATCH /v1/agents/{agent}`, `GET /v1/agents/{agent}/versions` *(planned; today the agent is inline in the run body or an `[[employees]]` entry)* |
 | Runs | `POST /v1/runs` *(built)*, `GET /v1/runs` *(built; most recently updated first)*, `GET /v1/runs/{run}` *(built)* |
 | Run events | `GET /v1/runs/{run}/events?from={seq}` *(built; `limit` planned)*, `GET /v1/runs/{run}/events/stream` *(built)* |
-| Run commands | `POST /v1/runs/{run}/messages` *(built)*, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` *(planned)* |
+| Run commands | `POST /v1/runs/{run}/messages` *(built)*, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/follow-up` *(built)*, `POST /v1/runs/{run}/fork` *(planned)* |
 | Dashboard | `GET /` (and `/ui`, `/ui/app.js`, `/ui/app.css`) *(built)*: the mobile web dashboard, static, no auth on the page itself; it stores the token from `#token=…` locally and sends it on every API call |
 | Capacity | `GET /v1/capacity` *(built)*: the latest rate-limit windows per provider (`five_hour`, `seven_day`: utilization, reset time), folded from `CapacityObserved` events; the broker and the phone read it |
 | Diff | `GET /v1/runs/{run}/diff` *(built)*: `git diff HEAD...shiioo/<run>` of a repo run, text/plain |

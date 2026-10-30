@@ -74,7 +74,7 @@ use shiioo_core::{Event, EventStore, Lease, Payload, RunId, Seq, StoreError, Tim
 use shiioo_rules::{Decision, PermissionRequest, RuleSet};
 use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
 use shiioo_runtime::{
-    AgentSpec, HarnessSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
+    AgentSpec, HarnessSpec, Origin, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
     open_approval, run_status, wake_reason,
 };
 use shiioo_store::Notifying;
@@ -328,6 +328,9 @@ pub struct ApiState<S> {
     /// the append, so a retry racing the first attempt waits for it
     /// instead of appending twice. In memory, like `idempotency`.
     message_keys: tokio::sync::Mutex<HashMap<(RunId, String), MessageAck>>,
+    /// Follow-ups by `(run, Idempotency-Key)`: a retried follow-up gets
+    /// the run the first one started.
+    follow_up_keys: tokio::sync::Mutex<HashMap<(RunId, String), RunId>>,
     /// Runs this process is driving, so a resume doesn't start a second
     /// worker in the same process (the lease would refuse it anyway).
     active: Mutex<HashSet<RunId>>,
@@ -363,6 +366,9 @@ pub struct RunView {
     /// The machine the run is addressed to, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// For a follow-up, the run it continues.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RunId>,
 }
 
 /// What a harness asks before a tool call (Claude Code `PreToolUse` input).
@@ -480,6 +486,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             options,
             idempotency: Mutex::new(HashMap::new()),
             message_keys: tokio::sync::Mutex::new(HashMap::new()),
+            follow_up_keys: tokio::sync::Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             plans: Mutex::new(plans),
@@ -714,6 +721,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             agent.tools = plans::planner_tools();
         }
         let spec = RunSpec {
+            origin: None,
             park_on_answer: false,
             task: plans::planner_task(repo_label, goal),
             agent,
@@ -933,6 +941,7 @@ impl<S: EventStore + 'static> ApiState<S> {
         };
         let run_id = self
             .start_run(RunSpec {
+                origin: None,
                 park_on_answer: false,
                 task: routine.task.clone(),
                 agent,
@@ -1325,13 +1334,16 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// 200 KiB.
     pub async fn diff(&self, run_id: RunId) -> Result<String, ApiError> {
         let log = self.store.read(run_id, Seq(0)).await?;
-        let repo = run_spec(&log)
+        let spec = run_spec(&log);
+        let workspace = spec.as_ref().map_or(run_id, |s| s.workspace_run(run_id));
+        let repo = spec
             .and_then(|spec| match spec.runtime {
                 Runtime::Harness(h) => h.repo,
                 Runtime::Native => None,
             })
             .ok_or_else(|| ApiError::NotFound("this run has no repository".into()))?;
-        let range = format!("HEAD...{}", branch_for(run_id));
+        // A follow-up's branch is the one it continues.
+        let range = format!("HEAD...{}", branch_for(workspace));
         let out = tokio::process::Command::new("git")
             .arg("-C")
             .arg(&repo)
@@ -1410,6 +1422,86 @@ impl<S: EventStore + 'static> ApiState<S> {
             self.work_notify.notify_waiters();
         }
         Ok((ack, true))
+    }
+
+    /// Follows up on a finished harness run: starts a run that continues
+    /// it on the same worktree and branch, resuming its harness session
+    /// with `text` as the prompt (`docs/design/desk.md` R9). The finished
+    /// run stays closed. With `key`, a repeat returns the run the first
+    /// one started (`Ok((run, false))`).
+    pub async fn follow_up(
+        self: &Arc<Self>,
+        run_id: RunId,
+        text: &str,
+        key: Option<String>,
+    ) -> Result<(RunId, bool), ApiError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(ApiError::BadRequest("the message is empty".into()));
+        }
+        let mut keys = self.follow_up_keys.lock().await;
+        if let Some(run) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
+            return Ok((*run, false));
+        }
+        let log = self.store.read(run_id, Seq(0)).await?;
+        if !log.last().is_some_and(|e| e.payload.is_terminal()) {
+            return Err(ApiError::Conflict(
+                "the run is still open; send it a message instead".into(),
+            ));
+        }
+        let original = run_spec(&log)
+            .ok_or_else(|| ApiError::Internal("the run has no spec".into()))?;
+        if matches!(original.runtime, Runtime::Native) {
+            return Err(ApiError::Conflict(
+                "only Claude Code and Codex runs can be followed up; start a new task instead"
+                    .into(),
+            ));
+        }
+        let workspace = original.workspace_run(run_id);
+        // Two runs in one worktree would edit the same files.
+        if let Some(busy) = self.open_run_in(workspace).await? {
+            return Err(ApiError::Conflict(format!(
+                "run {} is still working on this branch; wait for it or send it a message",
+                &busy.to_string()[..8]
+            )));
+        }
+        let session = log
+            .iter()
+            .rev()
+            .find_map(|e| match &*e.payload {
+                Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .or_else(|| original.origin.as_ref().and_then(|o| o.session.clone()));
+        let spec = RunSpec {
+            task: text.to_owned(),
+            origin: Some(Origin {
+                run: run_id,
+                seq: Seq(log.len().saturating_sub(1) as u64),
+                workspace,
+                session,
+            }),
+            ..original
+        };
+        let run = self.start_run(spec).await?;
+        if let Some(k) = key {
+            keys.insert((run_id, k), run);
+        }
+        Ok((run, true))
+    }
+
+    /// An unfinished run working in `workspace`'s worktree, if any.
+    async fn open_run_in(&self, workspace: RunId) -> Result<Option<RunId>, ApiError> {
+        for run in self.store.list_runs().await? {
+            let log = self.store.read(run, Seq(0)).await?;
+            if log.last().is_some_and(|e| e.payload.is_terminal()) {
+                continue;
+            }
+            if run_spec(&log).is_some_and(|s| s.workspace_run(run) == workspace) {
+                return Ok(Some(run));
+            }
+        }
+        Ok(None)
     }
 
     pub async fn cancel(&self, run_id: RunId, by: &str, reason: &str) -> Result<(), ApiError> {
@@ -1718,6 +1810,7 @@ fn view_of(run_id: RunId, log: &[Event]) -> RunView {
         updated_at: log.last().map_or(0, |e| e.recorded_at.0),
         worker,
         machine,
+        origin: run_spec(log).and_then(|s| s.origin).map(|o| o.run),
     }
 }
 
@@ -1838,6 +1931,7 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/runs/{id}/resume", post(resume_run::<S>))
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
         .route("/v1/runs/{id}/messages", post(post_message::<S>))
+        .route("/v1/runs/{id}/follow-up", post(post_follow_up::<S>))
         .route("/v1/runs/{id}/lease", post(acquire_lease::<S>))
         .route("/v1/runs/{id}/lease/renew", post(renew_lease::<S>))
         .route("/v1/machines", get(machines_list::<S>))
@@ -1999,6 +2093,7 @@ async fn create_run<S: EventStore + 'static>(
                 .transpose()?;
             let (runtime, agent, _) = state.assign_role(role, repo, body.isolation.as_deref())?;
             RunSpec {
+                origin: None,
                 park_on_answer: false,
                 task: body.task,
                 agent,
@@ -2015,6 +2110,7 @@ async fn create_run<S: EventStore + 'static>(
             let (runtime, agent, _) =
                 state.assign_with(employee, repo, body.isolation.as_deref())?;
             RunSpec {
+                origin: None,
                 park_on_answer: false,
                 task: body.task,
                 agent,
@@ -2033,6 +2129,7 @@ async fn create_run<S: EventStore + 'static>(
                     .map_err(ApiError::BadRequest)?;
             }
             RunSpec {
+                origin: None,
                 park_on_answer: false,
                 task: body.task,
                 agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
@@ -2427,6 +2524,25 @@ async fn post_message<S: EventStore + 'static>(
         StatusCode::OK
     };
     Ok((code, Json(ack)))
+}
+
+async fn post_follow_up<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<MessageBody>,
+) -> Result<(StatusCode, Json<RunView>), ApiError> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let (run, new) = state.follow_up(parse_run(&id)?, &body.text, key).await?;
+    let code = if new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((code, Json(state.run_view(run).await?)))
 }
 
 async fn cancel_run<S: EventStore + 'static>(

@@ -116,6 +116,7 @@ impl Office {
             ..ContainerSpec::default()
         });
         let spec = RunSpec {
+            origin: None,
             park_on_answer: false,
             task: "Read README.md and report its first line.".into(),
             agent: AgentSpec {

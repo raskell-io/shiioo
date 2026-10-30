@@ -175,6 +175,24 @@ where it landed.
 - When a drive ends, the office re-reads the run: a message that arrived
   while the drive was ending (and so did not start another) wakes it then.
 
+### `POST /v1/runs/{id}/follow-up` → `201 Created`, the new run's `RunView`
+
+Continues a finished Claude Code or Codex run (`ApiState::follow_up`): a
+new run whose spec is the original's with `task` set to `{"text": "…"}`
+and `origin: { run, seq, workspace, session }`. It works in the worktree
+and branch of `workspace` (the first run of the chain, so a follow-up of a
+follow-up stays on one branch) and its harness resumes `session` (the last
+one the chain recorded) with the text as the prompt. The original stays
+closed; the new run's view carries `origin` (the run it continues).
+
+- With `Idempotency-Key`, a repeat for the same run returns the run the
+  first one started with `200`. The keys are kept in memory.
+- `400` for an empty text; `404` for an unknown run; `409` while the run is
+  open (send it a message instead), for a native run (it has no session to
+  resume), and while another run still works on the same branch.
+- `diff` and the artifact routes of a follow-up read the shared branch and
+  worktree.
+
 ### `GET /v1/runs/{id}/diff` → `200`, `text/plain`
 
 `git -C <repo> diff --stat -p HEAD...shiioo/<run>` for a harness run with a

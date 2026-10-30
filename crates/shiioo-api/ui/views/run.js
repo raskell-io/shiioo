@@ -1,4 +1,5 @@
-// One run: header, approval card, actions, diff, and the live log.
+// One run: header, approval card, actions, diff, the live log, and the
+// box for writing to it or following it up.
 
 import { api, app, el, esc, GLYPH, onLeave, short, showError, stateLabel } from "../core.js";
 import { describe } from "../describe.js";
@@ -20,8 +21,11 @@ export async function renderRun(id) {
     try { current = await api(`/v1/runs/${id}`); } catch (e) { showError(e); return; }
     const st = current.status.state;
     composer.update(st, harness);
+    const origin = current.origin
+      ? `<span class="muted"> · follows up <a href="#run=${esc(current.origin)}">${esc(short(current.origin))}</a></span>`
+      : "";
     head.innerHTML = `<span class="status-${esc(st)}">${GLYPH[st] || "•"} ${esc(stateLabel(st))}</span>
-      <span class="muted"> · ${esc(short(id))}</span><div class="task">${esc(current.task || "")}</div>`;
+      <span class="muted"> · ${esc(short(id))}</span>${origin}<div class="task">${esc(current.task || "")}</div>`;
     approval.innerHTML = "";
     if (st === "waiting_approval") {
       const card = el(`<div class="card approval"><strong>Approval needed</strong>
@@ -74,7 +78,10 @@ export async function renderRun(id) {
   let lastId = -1;
   let debounce = null;
   const onEvent = (ev) => {
-    if (ev.payload.type === "run_created") harness = ev.payload.spec?.runtime?.harness || null;
+    if (ev.payload.type === "run_created") {
+      harness = ev.payload.spec?.runtime?.harness || null;
+      if (current) composer.update(current.status.state, harness);
+    }
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     log.appendChild(el(`<div class="line kind-${esc(ev.payload.type)}"><span class="seq">#${ev.seq}</span><span>${esc(describe(ev))}</span></div>`));
     if (atBottom) log.scrollTop = log.scrollHeight;
@@ -91,8 +98,9 @@ export async function renderRun(id) {
 
 // Writing to the run. A message goes in at the run's next turn: a native
 // run reads it before its next model call, a harness when its current
-// process finishes, a parked run wakes for it. Shown while the run can
-// still read it.
+// process finishes, a parked run wakes for it. Once a Claude Code or Codex
+// run has finished, the box follows it up instead: a new run on the same
+// branch and session, which the view then opens.
 function messageBox(id) {
   const form = el(`<form class="composer" hidden>
     <label class="hint muted" for="message"></label>
@@ -105,6 +113,7 @@ function messageBox(id) {
   const send = form.querySelector("button");
   const hint = form.querySelector(".hint");
   let base = "";
+  let followUp = false;
   // One key per message, kept until it is accepted, so a retry after a
   // dropped connection can't deliver it twice.
   let key = null;
@@ -120,14 +129,15 @@ function messageBox(id) {
     if (!body || send.disabled) return;
     key = key || newKey();
     send.disabled = true;
-    hint.textContent = "Sending…";
+    hint.textContent = followUp ? "Starting…" : "Sending…";
     try {
-      await api(`/v1/runs/${id}/messages`, {
+      const reply = await api(`/v1/runs/${id}/${followUp ? "follow-up" : "messages"}`, {
         method: "POST",
         headers: { "Idempotency-Key": key },
         body: JSON.stringify({ text: body }),
       });
       key = null;
+      if (followUp) { location.hash = `run=${reply.id}`; return; }
       text.value = "";
       grow();
       hint.textContent = "Sent. It shows in the log.";
@@ -144,14 +154,20 @@ function messageBox(id) {
     form,
     update(state, harness) {
       const accepts = ["open", "waiting_approval", "needs_attention", "parked"].includes(state);
-      form.hidden = !accepts;
       const who = harness === "codex" ? "Codex" : harness === "claude-code" ? "Claude Code" : null;
-      base = state === "parked" ? "It is waiting for your reply."
+      const mode = !accepts && who !== null;
+      if (mode !== followUp) key = null;
+      followUp = mode;
+      form.hidden = !accepts && !followUp;
+      send.textContent = followUp ? "Follow up" : "Send";
+      send.setAttribute("aria-label", send.textContent);
+      base = followUp ? `Finished. A follow-up continues this ${who} session on the same branch, as a new run.`
+        : state === "parked" ? "It is waiting for your reply."
         : state === "needs_attention" ? "Read when the run continues."
         : who ? `${who} reads this when it finishes its current step.`
         : "Read at its next turn.";
-      if (hint.textContent !== "Sending…" && !hint.textContent.startsWith("Sent")) hint.textContent = base;
-      text.placeholder = state === "parked" ? "Reply" : "Message";
+      if (!send.disabled && !hint.textContent.startsWith("Sent")) hint.textContent = base;
+      text.placeholder = followUp ? "What next?" : state === "parked" ? "Reply" : "Message";
     },
   };
 }

@@ -91,6 +91,7 @@ impl Fixture {
     async fn start(&self, park_on_answer: bool) -> RunId {
         self.worker("w1")
             .create(&RunSpec {
+                origin: None,
                 park_on_answer,
                 task: "Talk to me.".into(),
                 agent: AgentSpec {
