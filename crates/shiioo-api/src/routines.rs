@@ -88,9 +88,7 @@ pub fn due(schedule: &Schedule, anchor_ms: u64, now: DateTime<Local>) -> Option<
 }
 
 pub fn ms_to_local(ms: u64) -> Option<DateTime<Local>> {
-    Local
-        .timestamp_millis_opt(i64::try_from(ms).ok()?)
-        .single()
+    Local.timestamp_millis_opt(i64::try_from(ms).ok()?).single()
 }
 
 pub fn now_ms() -> u64 {
@@ -113,7 +111,10 @@ mod tests {
         state.last_fired.insert("nightly".into(), 1_700_000_000_000);
         state.last_report = Some(1_700_000_100_000);
         state.save(&path).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(RoutineState::load(&path).unwrap_or_else(|e| panic!("{e}")), state);
+        assert_eq!(
+            RoutineState::load(&path).unwrap_or_else(|e| panic!("{e}")),
+            state
+        );
     }
 
     #[test]
@@ -143,6 +144,9 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(r.enabled);
         assert_eq!(r.employee, "auto");
-        assert_eq!(r.parsed().map(|s| s.to_string()), Ok("daily 02:00".to_owned()));
+        assert_eq!(
+            r.parsed().map(|s| s.to_string()),
+            Ok("daily 02:00".to_owned())
+        );
     }
 }

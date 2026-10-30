@@ -129,7 +129,11 @@ pub fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
@@ -185,7 +189,10 @@ mod tests {
             url_encode("p@ss w0rd!")
         );
         let out = r.redact_str(&s, &mut counts);
-        assert_eq!(out, "token=[secret:gh] b64=[secret:gh] url=[secret:pw] plain");
+        assert_eq!(
+            out,
+            "token=[secret:gh] b64=[secret:gh] url=[secret:pw] plain"
+        );
         assert_eq!(counts.get("gh"), Some(&2));
         assert_eq!(counts.get("pw"), Some(&1));
     }
@@ -223,7 +230,9 @@ mod tests {
         // The redaction events come before the terminal event.
         assert!(matches!(&out[1], Payload::SecretRedacted { name, count: 1 } if name == "gh"));
         assert!(matches!(&out[2], Payload::SecretRedacted { name, count: 1 } if name == "pw"));
-        assert!(matches!(&out[3], Payload::RunFailed { reason } if reason == "nothing secret here"));
+        assert!(
+            matches!(&out[3], Payload::RunFailed { reason } if reason == "nothing secret here")
+        );
     }
 
     #[test]
@@ -234,16 +243,16 @@ mod tests {
         }]);
         assert_eq!(out.len(), 2);
         assert!(matches!(&out[0], Payload::SecretRedacted { name, count: 1 } if name == "gh"));
-        assert!(matches!(&out[1], Payload::RunCompleted { output } if output == "done, token [secret:gh]"));
+        assert!(
+            matches!(&out[1], Payload::RunCompleted { output } if output == "done, token [secret:gh]")
+        );
     }
 
     #[test]
     fn empty_redactor_is_a_no_op() {
         let r = Redactor::new(Vec::<(String, String)>::new());
         assert!(r.is_empty());
-        let payloads = vec![Payload::RunFailed {
-            reason: "x".into(),
-        }];
+        let payloads = vec![Payload::RunFailed { reason: "x".into() }];
         assert_eq!(r.redact_payloads(payloads.clone()), payloads);
     }
 

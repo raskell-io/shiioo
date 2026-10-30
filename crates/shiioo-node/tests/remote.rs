@@ -24,9 +24,14 @@ struct Office {
 async fn serve() -> Office {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let store = Arc::new(Notifying::new(MemoryStore::new(SystemClock)));
-    let machine = Arc::new(LocalMachine::in_memory(dir.path().join("ws"), Toolbox::builtin()));
+    let machine = Arc::new(LocalMachine::in_memory(
+        dir.path().join("ws"),
+        Toolbox::builtin(),
+    ));
     let provider: Arc<dyn ModelProvider> =
-        Arc::new(ScriptedProvider::new(vec![ScriptedProvider::answer("done by the office")]));
+        Arc::new(ScriptedProvider::new(vec![ScriptedProvider::answer(
+            "done by the office",
+        )]));
     let factory_store = Arc::clone(&store);
     let state = ApiState::with_options(
         store,
@@ -71,7 +76,13 @@ async fn serve() -> Office {
     }
 }
 
-async fn api(http: &reqwest::Client, method: reqwest::Method, url: String, token: &str, body: Option<Value>) -> (u16, Value) {
+async fn api(
+    http: &reqwest::Client,
+    method: reqwest::Method,
+    url: String,
+    token: &str,
+    body: Option<Value>,
+) -> (u16, Value) {
     let mut req = http.request(method, url).bearer_auth(token);
     if let Some(b) = body {
         req = req.json(&b);
@@ -118,7 +129,18 @@ async fn a_node_enrolls_takes_its_runs_and_drives_them_over_http() {
     )
     .await
     .unwrap_or_else(|e| panic!("{e}"));
-    assert!(enroll(&office.base, &enrollment, "again", &BTreeMap::new(), &[], "x").await.is_err());
+    assert!(
+        enroll(
+            &office.base,
+            &enrollment,
+            "again",
+            &BTreeMap::new(),
+            &[],
+            "x"
+        )
+        .await
+        .is_err()
+    );
 
     // The machine token works on the API; the office lists the machine.
     let (status, listed) = api(
@@ -154,10 +176,21 @@ async fn a_node_enrolls_takes_its_runs_and_drives_them_over_http() {
     )
     .await;
     assert_eq!(status, 201, "{created}");
-    let run: RunId = serde_json::from_value(created["id"].clone()).unwrap_or_else(|e| panic!("{e}"));
+    let run: RunId =
+        serde_json::from_value(created["id"].clone()).unwrap_or_else(|e| panic!("{e}"));
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let (_, view) = api(&http, reqwest::Method::GET, format!("{}/v1/runs/{run}", office.base), TOKEN, None).await;
-    assert_eq!(view["status"]["state"], "open", "the office must not drive it: {view}");
+    let (_, view) = api(
+        &http,
+        reqwest::Method::GET,
+        format!("{}/v1/runs/{run}", office.base),
+        TOKEN,
+        None,
+    )
+    .await;
+    assert_eq!(
+        view["status"]["state"], "open",
+        "the office must not drive it: {view}"
+    );
     assert_eq!(view["machine"], "gpu=true");
 
     // The work poll names it (matching by label).
@@ -175,9 +208,14 @@ async fn a_node_enrolls_takes_its_runs_and_drives_them_over_http() {
     // The node drives it through the remote store.
     let store = Arc::new(RemoteStore::new(&office.base, &machine_token));
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let machine = Arc::new(LocalMachine::in_memory(dir.path().join("ws"), Toolbox::builtin()));
+    let machine = Arc::new(LocalMachine::in_memory(
+        dir.path().join("ws"),
+        Toolbox::builtin(),
+    ));
     let provider: Arc<dyn ModelProvider> =
-        Arc::new(ScriptedProvider::new(vec![ScriptedProvider::answer("hello from spark")]));
+        Arc::new(ScriptedProvider::new(vec![ScriptedProvider::answer(
+            "hello from spark",
+        )]));
     let worker_store = Arc::clone(&store);
     let workers: Arc<dyn Fn() -> Worker<RemoteStore> + Send + Sync> = Arc::new(move || {
         Worker::new(
@@ -193,7 +231,15 @@ async fn a_node_enrolls_takes_its_runs_and_drives_them_over_http() {
 
     let mut view = Value::Null;
     for _ in 0..100 {
-        view = api(&http, reqwest::Method::GET, format!("{}/v1/runs/{run}", office.base), TOKEN, None).await.1;
+        view = api(
+            &http,
+            reqwest::Method::GET,
+            format!("{}/v1/runs/{run}", office.base),
+            TOKEN,
+            None,
+        )
+        .await
+        .1;
         if view["status"]["state"] == "completed" {
             break;
         }
@@ -205,9 +251,14 @@ async fn a_node_enrolls_takes_its_runs_and_drives_them_over_http() {
     node.abort();
 
     // The log as the node reads it is the office's log, chain intact.
-    let log = store.read(run, Seq(0)).await.unwrap_or_else(|e| panic!("{e}"));
+    let log = store
+        .read(run, Seq(0))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(shiioo_core::verify_chain(&log), Ok(()));
-    assert!(matches!(&*log[1].payload, Payload::LeaseAcquired { worker, .. } if worker.0 == "node-spark"));
+    assert!(
+        matches!(&*log[1].payload, Payload::LeaseAcquired { worker, .. } if worker.0 == "node-spark")
+    );
 
     // Nothing is left to do, and the heartbeat recorded the node.
     let (_, work) = api(
@@ -219,13 +270,34 @@ async fn a_node_enrolls_takes_its_runs_and_drives_them_over_http() {
     )
     .await;
     assert_eq!(work["runs"].as_array().map(Vec::len), Some(0));
-    let (_, listed) = api(&http, reqwest::Method::GET, format!("{}/v1/machines", office.base), TOKEN, None).await;
+    let (_, listed) = api(
+        &http,
+        reqwest::Method::GET,
+        format!("{}/v1/machines", office.base),
+        TOKEN,
+        None,
+    )
+    .await;
     assert_eq!(listed["machines"][0]["version"], "0.0.1");
 
     // Revoking the machine stops its token.
-    let (status, _) = api(&http, reqwest::Method::DELETE, format!("{}/v1/machines/spark", office.base), TOKEN, None).await;
+    let (status, _) = api(
+        &http,
+        reqwest::Method::DELETE,
+        format!("{}/v1/machines/spark", office.base),
+        TOKEN,
+        None,
+    )
+    .await;
     assert_eq!(status, 204);
-    let (status, _) = api(&http, reqwest::Method::GET, format!("{}/v1/machines", office.base), &machine_token, None).await;
+    let (status, _) = api(
+        &http,
+        reqwest::Method::GET,
+        format!("{}/v1/machines", office.base),
+        &machine_token,
+        None,
+    )
+    .await;
     assert_eq!(status, 401);
 }
 
@@ -241,9 +313,16 @@ async fn fencing_errors_cross_the_wire() {
         None,
     )
     .await;
-    let machine_token = enroll(&office.base, created["token"].as_str().unwrap_or_default(), "n1", &BTreeMap::new(), &[], "t")
-        .await
-        .unwrap_or_else(|e| panic!("{e}"));
+    let machine_token = enroll(
+        &office.base,
+        created["token"].as_str().unwrap_or_default(),
+        "n1",
+        &BTreeMap::new(),
+        &[],
+        "t",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
     let (_, created) = api(
         &http,
         reqwest::Method::POST,
@@ -252,7 +331,8 @@ async fn fencing_errors_cross_the_wire() {
         Some(json!({ "task": "fence me", "employee": "scripted", "machine": "n1" })),
     )
     .await;
-    let run: RunId = serde_json::from_value(created["id"].clone()).unwrap_or_else(|e| panic!("{e}"));
+    let run: RunId =
+        serde_json::from_value(created["id"].clone()).unwrap_or_else(|e| panic!("{e}"));
     let store = RemoteStore::new(&office.base, &machine_token);
 
     let lease = store
@@ -265,7 +345,14 @@ async fn fencing_errors_cross_the_wire() {
         other => panic!("{other:?}"),
     }
     // A wrong expected_next is a SeqConflict with the real position.
-    match store.append(&lease, Seq(99), vec![Payload::RunFailed { reason: "x".into() }]).await {
+    match store
+        .append(
+            &lease,
+            Seq(99),
+            vec![Payload::RunFailed { reason: "x".into() }],
+        )
+        .await
+    {
         Err(StoreError::SeqConflict { expected, actual }) => {
             assert_eq!(expected, Seq(99));
             assert_eq!(actual, Seq(2));
@@ -277,7 +364,14 @@ async fn fencing_errors_cross_the_wire() {
         epoch: shiioo_core::Epoch(0),
         ..lease.clone()
     };
-    match store.append(&stale, Seq(2), vec![Payload::RunFailed { reason: "x".into() }]).await {
+    match store
+        .append(
+            &stale,
+            Seq(2),
+            vec![Payload::RunFailed { reason: "x".into() }],
+        )
+        .await
+    {
         Err(StoreError::Fenced { presented, current }) => {
             assert_eq!(presented, shiioo_core::Epoch(0));
             assert_eq!(current, lease.epoch);
@@ -285,14 +379,32 @@ async fn fencing_errors_cross_the_wire() {
         other => panic!("{other:?}"),
     }
     // A good append lands, renews work, and a terminal event closes the run.
-    let renewed = store.renew_lease(&lease, 30_000).await.unwrap_or_else(|e| panic!("{e}"));
+    let renewed = store
+        .renew_lease(&lease, 30_000)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(renewed.epoch, lease.epoch);
     let events = store
-        .append(&renewed, Seq(2), vec![Payload::RunFailed { reason: "fenced test".into() }])
+        .append(
+            &renewed,
+            Seq(2),
+            vec![Payload::RunFailed {
+                reason: "fenced test".into(),
+            }],
+        )
         .await
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(events.len(), 1);
-    match store.append(&renewed, Seq(3), vec![Payload::RunFailed { reason: "again".into() }]).await {
+    match store
+        .append(
+            &renewed,
+            Seq(3),
+            vec![Payload::RunFailed {
+                reason: "again".into(),
+            }],
+        )
+        .await
+    {
         Err(StoreError::RunClosed(id)) => assert_eq!(id, run),
         other => panic!("{other:?}"),
     }

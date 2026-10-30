@@ -1,7 +1,7 @@
 //! The dashboard files and the diff endpoint.
 
 use serde_json::{Value, json};
-use shiioo_api::{ApiState, router};
+use shiioo_api::{ApiState, UI_FILES, router};
 use shiioo_core::SystemClock;
 use shiioo_runtime::{AgentSpec, LocalMachine, ScriptedProvider, Toolbox, Worker, branch_for};
 use shiioo_store::{MemoryStore, Notifying};
@@ -102,6 +102,79 @@ async fn serves_the_dashboard_files_without_a_token() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(css.status(), 200);
+
+    for (name, body) in UI_FILES {
+        let resp = http
+            .get(format!("{base}/ui/{name}"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resp.status(), 200, "{name}");
+        assert_eq!(resp.text().await.unwrap_or_default(), *body, "{name}");
+    }
+    let missing = http
+        .get(format!("{base}/ui/nope.js"))
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(missing.status(), 404);
+}
+
+/// Every file under `ui/` (but the page itself) is in `UI_FILES`, and every
+/// relative module import resolves to one of them.
+#[test]
+fn ui_files_match_the_directory_and_imports_resolve() {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{e}")) {
+            let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+    let mut on_disk = Vec::new();
+    walk(&root, &root, &mut on_disk);
+    on_disk.retain(|f| f != "index.html");
+    on_disk.sort();
+    let mut listed: Vec<String> = UI_FILES.iter().map(|(n, _)| (*n).to_owned()).collect();
+    listed.sort();
+    assert_eq!(listed, on_disk, "UI_FILES and ui/ disagree");
+
+    for (name, body) in UI_FILES {
+        let dir = Path::new(name).parent().unwrap_or(Path::new(""));
+        for line in body.lines() {
+            let line = line.trim();
+            if !line.starts_with("import ") {
+                continue;
+            }
+            let Some(spec) = line.split('"').nth(1) else {
+                continue;
+            };
+            let mut parts: Vec<&str> = dir
+                .to_str()
+                .unwrap_or("")
+                .split('/')
+                .filter(|p| !p.is_empty())
+                .collect();
+            for seg in spec.split('/') {
+                match seg {
+                    "." => {}
+                    ".." => {
+                        parts.pop();
+                    }
+                    s => parts.push(s),
+                }
+            }
+            let target = parts.join("/");
+            assert!(
+                UI_FILES.iter().any(|(n, _)| *n == target),
+                "{name} imports {spec}, which is not served"
+            );
+        }
+    }
 }
 
 #[tokio::test]

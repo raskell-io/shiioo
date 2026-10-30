@@ -60,10 +60,7 @@ impl Sandbox {
 /// (stdin `tool_name`/`tool_input`/`tool_use_id`, stdout
 /// `hookSpecificOutput.permissionDecision`) is the same.
 pub fn hook_config(command: &HookCommand) -> String {
-    let command = command
-        .shell()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+    let command = command.shell().replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         "hooks.PreToolUse=[{{matcher=\"^(Bash|shell)$\",hooks=[{{type=\"command\",\
          command=\"{command}\",timeout={}}}]}}]",

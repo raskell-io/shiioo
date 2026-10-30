@@ -83,10 +83,14 @@ impl StoreError {
             },
             "invalid_payload" => StoreError::Backend(format!(
                 "invalid payload: {}",
-                get("detail").and_then(|d| d.as_str().map(str::to_owned)).unwrap_or_default()
+                get("detail")
+                    .and_then(|d| d.as_str().map(str::to_owned))
+                    .unwrap_or_default()
             )),
             "backend" => StoreError::Backend(
-                get("detail").and_then(|d| d.as_str().map(str::to_owned)).unwrap_or_default(),
+                get("detail")
+                    .and_then(|d| d.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
             ),
             _ => return None,
         })
@@ -176,6 +180,9 @@ mod tests {
             StoreError::from_json(&StoreError::InvalidPayload("bad").to_json()),
             Some(StoreError::Backend("invalid payload: bad".into()))
         );
-        assert_eq!(StoreError::from_json(&serde_json::json!({ "kind": "?" })), None);
+        assert_eq!(
+            StoreError::from_json(&serde_json::json!({ "kind": "?" })),
+            None
+        );
     }
 }

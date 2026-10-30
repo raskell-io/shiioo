@@ -71,8 +71,8 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// The repository and worktree of a run on this machine, if it has one.
     async fn run_paths(&self, run_id: RunId) -> Result<(PathBuf, Option<PathBuf>), ApiError> {
         let log = self.store.read(run_id, Seq(0)).await?;
-        let spec = crate::run_spec(&log)
-            .ok_or_else(|| ApiError::NotFound("run has no spec".into()))?;
+        let spec =
+            crate::run_spec(&log).ok_or_else(|| ApiError::NotFound("run has no spec".into()))?;
         if let Some(machine) = spec.machine {
             return Err(ApiError::Conflict(format!(
                 "this run worked on {machine}; its files are there, not in the office"
@@ -98,7 +98,11 @@ impl<S: EventStore + 'static> ApiState<S> {
         let (repo, worktree) = self.run_paths(run_id).await?;
         let branch = branch_for(run_id);
         let mut out = Vec::new();
-        let diff = git(&repo, &["diff", "--name-status", &format!("HEAD...{branch}")]).await?;
+        let diff = git(
+            &repo,
+            &["diff", "--name-status", &format!("HEAD...{branch}")],
+        )
+        .await?;
         for line in diff.lines() {
             let mut parts = line.split('\t');
             let (Some(code), Some(path)) = (parts.next(), parts.next_back()) else {
@@ -112,7 +116,9 @@ impl<S: EventStore + 'static> ApiState<S> {
                 _ => "modified",
             };
             let size = match &worktree {
-                Some(wt) => std::fs::metadata(wt.join(path)).map(|m| m.len()).unwrap_or(0),
+                Some(wt) => std::fs::metadata(wt.join(path))
+                    .map(|m| m.len())
+                    .unwrap_or(0),
                 None => git_size(&repo, &branch, path).await,
             };
             let (kind, content_type) = classify(path);
@@ -130,7 +136,9 @@ impl<S: EventStore + 'static> ApiState<S> {
                 if out.iter().any(|a| a.path == path) {
                     continue;
                 }
-                let size = std::fs::metadata(wt.join(path)).map(|m| m.len()).unwrap_or(0);
+                let size = std::fs::metadata(wt.join(path))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
                 let (kind, content_type) = classify(path);
                 out.push(Artifact {
                     path: path.to_owned(),
@@ -152,7 +160,9 @@ impl<S: EventStore + 'static> ApiState<S> {
         path: &str,
     ) -> Result<(Vec<u8>, String), ApiError> {
         if path.split('/').any(|p| p == "..") || path.starts_with('/') {
-            return Err(ApiError::BadRequest("path must be inside the repository".into()));
+            return Err(ApiError::BadRequest(
+                "path must be inside the repository".into(),
+            ));
         }
         let (repo, worktree) = self.run_paths(run_id).await?;
         let (_, content_type) = classify(path);
@@ -177,7 +187,9 @@ impl<S: EventStore + 'static> ApiState<S> {
             .await
             .map_err(|e| ApiError::Failed(format!("running git: {e}")))?;
         if !out.status.success() {
-            return Err(ApiError::NotFound(format!("{path} is not in the run's branch")));
+            return Err(ApiError::NotFound(format!(
+                "{path} is not in the run's branch"
+            )));
         }
         Ok((out.stdout, content_type.to_owned()))
     }
@@ -273,7 +285,19 @@ mod tests {
             content_type: "image/png".into(),
         };
         assert!(a.is_media());
-        assert!(!Artifact { status: "deleted".into(), ..a.clone() }.is_media());
-        assert!(!Artifact { kind: "text".into(), ..a }.is_media());
+        assert!(
+            !Artifact {
+                status: "deleted".into(),
+                ..a.clone()
+            }
+            .is_media()
+        );
+        assert!(
+            !Artifact {
+                kind: "text".into(),
+                ..a
+            }
+            .is_media()
+        );
     }
 }

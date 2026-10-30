@@ -23,7 +23,11 @@ pub struct IsolationPolicy {
 impl IsolationPolicy {
     /// The level for a run on `repo` (a configured label), or the one
     /// `requested` by name.
-    pub fn resolve(&self, repo: Option<&str>, requested: Option<&str>) -> Result<Isolation, String> {
+    pub fn resolve(
+        &self,
+        repo: Option<&str>,
+        requested: Option<&str>,
+    ) -> Result<Isolation, String> {
         let level = requested
             .or_else(|| repo.and_then(|r| self.repos.get(r).map(String::as_str)))
             .unwrap_or(if self.default.is_empty() {
@@ -58,12 +62,18 @@ mod tests {
             policy.resolve(None, None),
             Ok(Isolation::Container(policy.container.clone()))
         );
-        assert_eq!(policy.resolve(Some("trusted"), None), Ok(Isolation::Worktree));
+        assert_eq!(
+            policy.resolve(Some("trusted"), None),
+            Ok(Isolation::Worktree)
+        );
         assert!(matches!(
             policy.resolve(Some("trusted"), Some("openshell")),
             Ok(Isolation::Openshell(_))
         ));
         assert!(policy.resolve(None, Some("vm")).is_err());
-        assert_eq!(IsolationPolicy::default().resolve(None, None), Ok(Isolation::Worktree));
+        assert_eq!(
+            IsolationPolicy::default().resolve(None, None),
+            Ok(Isolation::Worktree)
+        );
     }
 }

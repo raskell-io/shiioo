@@ -1,7 +1,11 @@
 use shiioo_core::{Event, EventStore, Lease, Payload, RunId, Seq, StoreError, WorkerId};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
+
+/// How many run ids the office-wide channel buffers before a slow
+/// subscriber lags.
+const OFFICE_CHANNEL: usize = 1024;
 
 /// Wraps a store and announces every successful write to a run, for live
 /// streams in the same process.
@@ -13,6 +17,7 @@ use tokio::sync::watch;
 pub struct Notifying<S> {
     inner: S,
     heads: Mutex<HashMap<RunId, watch::Sender<u64>>>,
+    all: broadcast::Sender<RunId>,
 }
 
 impl<S> Notifying<S> {
@@ -20,6 +25,7 @@ impl<S> Notifying<S> {
         Self {
             inner,
             heads: Mutex::new(HashMap::new()),
+            all: broadcast::channel(OFFICE_CHANNEL).0,
         }
     }
 
@@ -38,7 +44,16 @@ impl<S> Notifying<S> {
             .subscribe()
     }
 
+    /// The id of every run that gets new events (or is created), across
+    /// the office. A receiver that falls behind gets `Lagged` and should
+    /// rescan; only writes through this process are seen.
+    pub fn subscribe_all(&self) -> broadcast::Receiver<RunId> {
+        self.all.subscribe()
+    }
+
     fn publish(&self, run_id: RunId, finished: bool) {
+        // Nobody listening is not an error.
+        let _ = self.all.send(run_id);
         let mut heads = self.heads.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(tx) = heads.get(&run_id) {
             tx.send_modify(|writes| *writes += 1);
@@ -52,7 +67,9 @@ impl<S> Notifying<S> {
 
 impl<S: EventStore> EventStore for Notifying<S> {
     async fn create_run(&self, spec: serde_json::Value) -> Result<RunId, StoreError> {
-        self.inner.create_run(spec).await
+        let run_id = self.inner.create_run(spec).await?;
+        self.publish(run_id, false);
+        Ok(run_id)
     }
 
     async fn acquire_lease(

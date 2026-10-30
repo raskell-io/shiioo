@@ -154,9 +154,10 @@ impl ContainerSandbox {
     /// 0600 env file in the run's sandbox directory, not the command line.
     pub fn wrap(&self, cmd: Command) -> Command {
         let std_cmd = cmd.as_std();
-        let program = self.program.clone().unwrap_or_else(|| {
-            std_cmd.get_program().to_string_lossy().into_owned()
-        });
+        let program = self
+            .program
+            .clone()
+            .unwrap_or_else(|| std_cmd.get_program().to_string_lossy().into_owned());
         let mut env: Vec<(String, String)> = std_cmd
             .get_envs()
             .filter_map(|(k, v)| {
@@ -301,7 +302,9 @@ fn credentials(
     env: &mut Vec<(String, String)>,
     binds: &mut Vec<Bind>,
 ) -> Result<(), SandboxError> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     match ctx.harness {
         HarnessKind::Codex => {
             let auth = std::env::var_os("CODEX_HOME")
@@ -458,7 +461,17 @@ pub async fn check_mountable(engine: &str, image: &str, path: &Path) -> Result<(
     );
     match output(
         engine,
-        &["run", "--rm", "--entrypoint", "/bin/sh", "--mount", &mount, image, "-c", "true"],
+        &[
+            "run",
+            "--rm",
+            "--entrypoint",
+            "/bin/sh",
+            "--mount",
+            &mount,
+            image,
+            "-c",
+            "true",
+        ],
     )
     .await
     {
@@ -560,12 +573,20 @@ mod tests {
         let image_at = args.iter().position(|a| a == "shiioo-harness:test");
         assert_eq!(
             image_at.map(|i| &args[i + 1..]),
-            Some(&["claude".to_owned(), "--print".to_owned(), "do it".to_owned()][..])
+            Some(
+                &[
+                    "claude".to_owned(),
+                    "--print".to_owned(),
+                    "do it".to_owned()
+                ][..]
+            )
         );
         // The environment went into the env file, not the arguments.
         assert!(!s.contains("ghp_x"));
         let env_at = args.iter().position(|a| a == "--env-file");
-        let file = env_at.and_then(|i| args.get(i + 1)).unwrap_or_else(|| panic!("no env file"));
+        let file = env_at
+            .and_then(|i| args.get(i + 1))
+            .unwrap_or_else(|| panic!("no env file"));
         let body = std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{e}"));
         for line in [
             "SHIIOO_RUN_ID=r1",
@@ -597,7 +618,10 @@ mod tests {
         let docker = sb.wrap(host);
         let s = args_of(&docker).join(" ");
         assert!(!s.contains("--network"), "{s}");
-        assert!(s.ends_with("shiioo-harness:test /bin/sh /tmp/fake-claude"), "{s}");
+        assert!(
+            s.ends_with("shiioo-harness:test /bin/sh /tmp/fake-claude"),
+            "{s}"
+        );
         let detail = sb.detail();
         assert_eq!(detail["egress"]["mode"], "open");
         assert_eq!(detail["container"], "shiioo-abcd1234");

@@ -111,6 +111,34 @@ data: {"seq":7,"epoch":1,"payload":{"type":"tool_intent",…},…}
 - The stream ends after a terminal event (`run_completed`, `run_failed`,
   `run_cancelled`).
 
+### `GET /v1/events/stream` → `text/event-stream`
+
+The office-wide stream, for the dashboard's run list and any client that
+shows every run.
+
+```
+event: run
+id: 1793350706007
+data: {"id":"3bc1…","task":"…","next_seq":2,"status":{"state":"open"},"updated_at":1793350706007,…}
+
+event: ready
+data: {}
+
+```
+
+- First a pass over every run (oldest change first), closed by one `ready`
+  frame; then a `run` frame whenever a run is created or its log grows.
+  Each `run` frame carries the run's whole `RunView`, so a client keeps the
+  latest per `id`; plans, routines and intake runs are runs and appear here.
+- The frame id is the view's `updated_at`. With `Last-Event-ID` the first
+  pass only sends runs updated at or after it: a reconnect can repeat a run,
+  never miss one. A non-numeric id is a `400`.
+- Writes are announced by `Notifying::subscribe_all` (a broadcast of run
+  ids); bursts are gathered for 100 ms so a streaming harness turn sends a
+  run once, not once per event. A subscriber that lags rescans every run,
+  and a 10 s rescan covers writes from other processes.
+- Keep-alive comments while idle; the stream does not end on its own.
+
 ### `POST /v1/runs/{id}/resume` → `202 Accepted`
 
 Starts a worker for an open run (status `open` or `waiting_approval`). Any
@@ -312,8 +340,9 @@ Sorted by provider. Empty until a harness has reported a rate-limit event.
 ## Health and static files
 
 - `GET /v1/health` → `{"status":"ok"}`.
-- `GET /` and `GET /ui` → `index.html` (`text/html`); `GET /ui/app.js`
-  (`text/javascript`); `GET /ui/app.css` (`text/css`).
+- `GET /` and `GET /ui` → `index.html` (`text/html`); `GET /ui/{path}` →
+  one of the files in `UI_FILES` (`text/javascript` for `.js`, `text/css`
+  for `.css`), `404` for anything else.
 
 ## Event descriptions
 

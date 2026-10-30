@@ -92,7 +92,7 @@ POST /v1/runs/run_01J9…/fork
 
 `at_seq` must be a turn boundary. Returns the new run. Semantics in [fork-and-replay.md](fork-and-replay.md).
 
-## 3. Streaming *(run stream built in `shiioo-api`; deltas and the office stream planned, fan-out deferred)*
+## 3. Streaming *(run and office streams built in `shiioo-api`; deltas planned, fan-out deferred)*
 
 ### 3.1 Run stream
 
@@ -122,9 +122,9 @@ data: {"kind":"tool_output","call_id":"c_12","stream":"stdout","chunk":"Compilin
 
 **The approval loop** *(built)*: the worker starts Claude Code with a `PreToolUse` hook (`shiioo hook pre-tool-use`, see [runtimes-and-providers.md](runtimes-and-providers.md)). Before every tool call the hook `POST`s the call to `/v1/runs/{run}/permissions`. The server evaluates the owner's rules ([governance.md](governance.md)) and records a `PolicyDecision`; `allow`/`deny` answer at once. `ask` records an `ApprovalRequested`, notifies the owner (Telegram), and holds the HTTP request open until `POST /v1/approvals/{id}` records an `ApprovalDecided`, or the request expires (just under the hook's six-hour timeout) and is denied as `by: timeout`. The hook prints Claude Code's `permissionDecision` and the call proceeds or is refused. If the server is unreachable the hook denies, so a dead office never means an unguarded agent.
 
-### 3.2 Office stream *(planned)*
+### 3.2 Office stream *(built for runs; machines planned)*
 
-`GET /v1/events/stream` carries summary notifications (`run_started`, `run_finished`, `approval_requested`, `machine_offline`) for dashboards. It is resumable by an office-level cursor, not by run `seq`. Today the dashboard polls `GET /v1/runs` and opens a run stream for the run it shows.
+`GET /v1/events/stream` tells a client about every run without polling. Rather than summary notifications (`run_started`, `approval_requested`, …), each frame is the run's whole view (`event: run`, the `RunView` JSON), so the stream is idempotent: a client keeps the latest view per run, and a repeat is harmless. Approvals are visible as `status.state = waiting_approval` with the summary and approval id; plans and routine runs are runs. A first pass over every run ends with an `event: ready` frame, so a client knows when its list is complete. The cursor is the view's `updated_at` (`id:`), and `Last-Event-ID` restricts the first pass to runs updated at or after it, so a reconnect may repeat a run but never misses one. Details and the wake-up mechanism: [`shiioo-api/docs/http.md`](../../crates/shiioo-api/docs/http.md). *(planned)* `event: machine` frames for nodes going online and offline; the desk ([desk.md](desk.md)) needs them for the Machines group.
 
 ### 3.3 Fan-out *(deferred, ADR-0010)*
 

@@ -1,7 +1,9 @@
 //! Files a run produced, and mail with send-approval, over HTTP.
 
 use serde_json::{Value, json};
-use shiioo_api::{ApiOptions, ApiState, Artifact, BoxFuture, MailRequest, MailSender, Notifications, router};
+use shiioo_api::{
+    ApiOptions, ApiState, Artifact, BoxFuture, MailRequest, MailSender, Notifications, router,
+};
 use shiioo_core::{RunId, SystemClock};
 use shiioo_runtime::{AgentSpec, LocalMachine, RunStatus, Toolbox, UnconfiguredProvider, Worker};
 use shiioo_store::{MemoryStore, Notifying};
@@ -38,7 +40,13 @@ impl Notifications for Recorder {
     fn approval_resolved(&self, _: String, _: String) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
-    fn run_ended(&self, run: RunId, _: String, _: RunStatus, media: Vec<Artifact>) -> BoxFuture<'_, ()> {
+    fn run_ended(
+        &self,
+        run: RunId,
+        _: String,
+        _: RunStatus,
+        media: Vec<Artifact>,
+    ) -> BoxFuture<'_, ()> {
         lock(&self.ended).push((run, media));
         Box::pin(async {})
     }
@@ -144,7 +152,12 @@ fn fake_harness(dir: &Path, body: &str) -> PathBuf {
     script
 }
 
-async fn start_harness_run(http: &reqwest::Client, base: &str, repo: &Path, script: &Path) -> String {
+async fn start_harness_run(
+    http: &reqwest::Client,
+    base: &str,
+    repo: &Path,
+    script: &Path,
+) -> String {
     let created: Value = http
         .post(format!("{base}/v1/runs"))
         .bearer_auth(TOKEN)
@@ -203,7 +216,13 @@ async fn a_runs_files_are_listed_downloadable_and_sent_along() {
         .json()
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-    let by_path = |p: &str| artifacts.iter().find(|a| a["path"] == p).cloned().unwrap_or(Value::Null);
+    let by_path = |p: &str| {
+        artifacts
+            .iter()
+            .find(|a| a["path"] == p)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
     assert_eq!(by_path("cover.png")["status"], "added", "{artifacts:?}");
     assert_eq!(by_path("cover.png")["kind"], "image");
     assert_eq!(by_path("cover.png")["size"], 3);
@@ -218,12 +237,17 @@ async fn a_runs_files_are_listed_downloadable_and_sent_along() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(resp.status(), 200);
     assert_eq!(
-        resp.headers().get("content-type").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
         Some("image/png")
     );
     assert_eq!(resp.bytes().await.unwrap_or_default().as_ref(), b"PNG");
     let resp = http
-        .get(format!("{}/v1/runs/{run}/artifacts/notes/todo.txt", office.base))
+        .get(format!(
+            "{}/v1/runs/{run}/artifacts/notes/todo.txt",
+            office.base
+        ))
         .bearer_auth(TOKEN)
         .send()
         .await
@@ -283,8 +307,14 @@ async fn mail_goes_through_the_rules_and_the_owner() {
     });
     let view = wait_state(&http, &office.base, &run, "waiting_approval").await;
     let summary = view["status"]["summary"].as_str().unwrap_or_default();
-    assert!(summary.starts_with("mail.send: to ceo@example.com: Report"), "{summary}");
-    let approval = view["status"]["approval_id"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        summary.starts_with("mail.send: to ceo@example.com: Report"),
+        "{summary}"
+    );
+    let approval = view["status"]["approval_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     // Deny first: nothing is sent.
     http.post(format!("{}/v1/approvals/{approval}", office.base))
         .bearer_auth(TOKEN)
@@ -309,7 +339,10 @@ async fn mail_goes_through_the_rules_and_the_owner() {
             .unwrap_or_else(|e| panic!("{e}"))
     });
     let view = wait_state(&http, &office.base, &run, "waiting_approval").await;
-    let approval = view["status"]["approval_id"].as_str().unwrap_or_default().to_owned();
+    let approval = view["status"]["approval_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     http.post(format!("{}/v1/approvals/{approval}", office.base))
         .bearer_auth(TOKEN)
         .json(&json!({ "decision": "allow" }))

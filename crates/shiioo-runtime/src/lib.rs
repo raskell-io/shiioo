@@ -30,9 +30,9 @@ pub use model::{
     BoxFuture, ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
     ToolResultBlock, ToolSpec, Transcript, Turn, Usage,
 };
-pub use scripted::ScriptedProvider;
 pub use redact::Redactor;
 pub use sandbox::{Sandbox, SandboxError};
+pub use scripted::ScriptedProvider;
 pub use secrets::{NoSecrets, SecretSource};
 pub use spec::{
     AgentSpec, ContainerSpec, Egress, HarnessBilling, HarnessKind, HarnessSpec, Isolation, Mount,

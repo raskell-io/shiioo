@@ -70,21 +70,18 @@ pub enum Mailer {
         from: Mailbox,
     },
     /// Writes `<message id>.eml` into a directory instead of sending.
-    File {
-        dir: PathBuf,
-        from: Mailbox,
-    },
+    File { dir: PathBuf, from: Mailbox },
 }
 
 impl Mailer {
     pub fn smtp(config: &SmtpConfig) -> Result<Self, MailError> {
         let from = mailbox(&config.from)?;
         let builder = match config.security {
-            Security::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)?,
-            Security::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)?,
-            Security::None => {
-                AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
+            Security::StartTls => {
+                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)?
             }
+            Security::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)?,
+            Security::None => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host),
         }
         .port(config.port);
         let builder = if config.user.is_empty() && config.password.is_empty() {
@@ -220,8 +217,28 @@ mod tests {
             assert!(text.contains(needle), "missing {needle:?} in {text}");
         }
         assert_eq!(mailer.from_address(), "office@example.com");
-        assert!(mailer.send(&Mail { to: vec![], cc: vec![], subject: "x".into(), body: String::new() }).await.is_err());
-        assert!(mailer.send(&Mail { to: vec!["not an address".into()], cc: vec![], subject: "x".into(), body: String::new() }).await.is_err());
+        assert!(
+            mailer
+                .send(&Mail {
+                    to: vec![],
+                    cc: vec![],
+                    subject: "x".into(),
+                    body: String::new()
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            mailer
+                .send(&Mail {
+                    to: vec!["not an address".into()],
+                    cc: vec![],
+                    subject: "x".into(),
+                    body: String::new()
+                })
+                .await
+                .is_err()
+        );
     }
 
     #[test]

@@ -1,16 +1,21 @@
 # The dashboard
 
-A phone-sized web UI with no build step: three files under `ui/`, embedded
-into the binary and served by the API at `/`, `/ui`, `/ui/app.js` and
-`/ui/app.css`. It speaks only to the HTTP API described in
+A phone-sized web UI with no build step: plain files under `ui/`, the
+scripts as native ES modules, embedded into the binary and served by the
+API at `/`, `/ui` and `/ui/{path}`. It speaks only to the HTTP API described in
 [http.md](http.md), so anything it shows can also be fetched with `curl`.
 
 ## Files
 
 | File | Lines | Role |
 | --- | --- | --- |
-| `ui/index.html` | ~25 | Shell: viewport and iOS web-app meta tags, theme colour `#2f7d73`, header with brand link, **New task** and refresh buttons, `<main id="app">`. |
-| `ui/app.js` | ~315 | Everything else: token handling, hash routing, the two views, the SSE client. Vanilla JS, no dependencies. |
+| `ui/index.html` | ~25 | Shell: viewport and iOS web-app meta tags, theme colour `#2f7d73`, header with brand link, **New task** and refresh buttons, `<main id="app">`, `<script type="module" src="/ui/app.js">`. |
+| `ui/app.js` | ~25 | Entry module: hash routing between the views. |
+| `ui/core.js` | ~100 | Token handling, `api()`, DOM helpers, `showError`, the token form, the current view's teardown (`onLeave` / `leave`). |
+| `ui/stream.js` | ~70 | The SSE client (`streamEvents`, `parseFrame`). |
+| `ui/describe.js` | ~40 | One line per event, mirroring the server's `describe()`. |
+| `ui/views/runs.js` | ~70 | The run list and the new-task form. |
+| `ui/views/run.js` | ~95 | One run: header, approval card, actions, diff, live log. |
 | `ui/app.css` | ~100 | Colour tokens on `:root` with a `prefers-color-scheme: dark` override, buttons, status colours, the approval card, the log. |
 
 ## Token
@@ -93,8 +98,10 @@ sized for a phone; there is no desktop-specific layout.
 
 Edit the files under `ui/` and rebuild; they are included with
 `include_str!`, so the binary always ships the version it was built with.
-`tests/dashboard.rs` checks the files are served without a token and that
-the diff endpoint behaves; there is no browser test.
+A new file goes into `UI_FILES` in `src/lib.rs`: `tests/dashboard.rs`
+fails when that list and the directory disagree, or when a module imports
+a file that is not served. It also checks the files are served without a
+token and that the diff endpoint behaves; there is no browser test.
 
 See also: [telegram design](../../../docs/design/telegram.md) for the other
 phone surface, [deployment design](../../../docs/design/deployment.md) for

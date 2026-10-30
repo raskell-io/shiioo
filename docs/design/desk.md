@@ -48,7 +48,7 @@ Principles that carry over unchanged: the log is the only state; the rules gate 
 - **R4. Several runs at once.** Runs open as tabs; two or more can be split side by side, each with its own live log over SSE. The run view adds a side panel for the diff and the approval card, so a request to push can be read against the change it would push.
 - **R5. The rest of the office.** Pages for plans (read, approve, reject), routines (list, next fire time, run now, pause), capacity per employee and window, deliverables per run (preview images, PDFs, audio and video inline; download), the report, and the conversation thread with a text box (phase 7's R12).
 - **R6. Keyboard first on the desk.** A command palette (new task, jump to run, approve or deny the focused request, cancel), and shortcuts for moving between tabs and "next thing that needs me". Touch-sized targets stay on the phone layout.
-- **R7. Live without polling where it matters.** Run logs stream as today. **D1:** how the sidebar learns of new runs and state changes. Proposed: an office-wide SSE stream (`GET /v1/events`) of run lifecycle and approval events, resumable like the per-run stream, replacing the 10 s refresh.
+- **R7. Live without polling where it matters.** Run logs stream as today. **D1:** how the sidebar learns of new runs and state changes. Proposed: an office-wide SSE stream (`GET /v1/events/stream`) of run lifecycle and approval events, resumable like the per-run stream, replacing the 10 s refresh.
 
 ### Instructing an employee
 
@@ -144,7 +144,7 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 
 | | Question | Proposed |
 |---|---|---|
-| D1 | How the sidebar stays live | Office-wide resumable SSE, `GET /v1/events` |
+| D1 | How the sidebar stays live | *Settled, built:* office-wide resumable SSE, `GET /v1/events/stream`, one `RunView` snapshot per change ([api.md §3.2](api.md#32-office-stream-built-for-runs-machines-planned)) |
 | D2 | When a message reaches a busy harness run | Next turn boundary by default; **Now** interrupts |
 | D3 | Follow-up on a finished run | A continuation run on the same branch and session, linked by `origin` |
 | D4 | Keep the raw terminal stream as well as the imported transcript | Yes, capped and redacted, as a blob |
@@ -176,8 +176,8 @@ One line each, in build order within a phase. "Needs" names what must land first
 
 | | Task | Where | Needs | Done when |
 |---|---|---|---|---|
-| T1 | Split `app.js` into native ES modules (core: token, `api()`, routing, SSE client; one module per view) and serve each embedded file under `/ui/` | `shiioo-api/ui/`, `lib.rs` UI routes, `tests/dashboard.rs` | | Phone dashboard unchanged; every module served without a token; D10 settled |
-| T2 | Office-wide event stream `GET /v1/events`: run created, status changed, approval requested and decided, plan proposed; resumable with `Last-Event-ID` | `shiioo-api` (store notifications), `docs/http.md`, `docs/design/api.md` | | A test opens the stream, creates a run and an approval, reconnects mid-way and sees each event once; D1 settled |
+| T1 *(built)* | Split `app.js` into native ES modules (core: token, `api()`, routing, SSE client; one module per view) and serve each embedded file under `/ui/` | `shiioo-api/ui/`, `lib.rs` UI routes, `tests/dashboard.rs` | | Phone dashboard unchanged; every module served without a token; D10 settled |
+| T2 *(built; machine frames planned)* | Office-wide event stream `GET /v1/events/stream`: a `RunView` per run created or changed (approvals and plans included, as run states), a `ready` frame after the first pass; resumable with `Last-Event-ID` | `shiioo-api` (store notifications), `docs/http.md`, `docs/design/api.md` | | `tests/events.rs`: snapshot, a live run arriving without polling, resume from the last id skipping unchanged runs; D1 settled |
 | T3 | Desk layout: breakpoint, sidebar (Needs you, repos, machines), unread marks kept in `localStorage`, attention rules of U1 | `ui/` | T1, T2, T28 | Wide screen shows grouped runs; a new approval appears under Needs you without reload |
 | T4 | Tabs and split panes, one live log per pane; the diff and approval card in a side panel | `ui/` | T3 | Two runs stream side by side; Allow in the side panel answers the hook |
 | T5 | Command palette and shortcuts (new task, jump to run, next "needs me", allow / deny focused, cancel) | `ui/` | T4 | Every action reachable without the mouse |
