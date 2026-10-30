@@ -1,6 +1,6 @@
 # The desk: the web UI, and working with an employee directly
 
-Status: **requirements draft, for the owner's review** (phase 8 candidate). Nothing here is built. Decisions marked **D1**…**D11** are open; the rest follows from the picture.
+Status: **requirements draft, for the owner's review** (phase 8 candidate). Nothing here is built. Decisions marked **D1**…**D13** are open; the rest follows from the picture.
 
 Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the phone dashboard today), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
 
@@ -62,6 +62,25 @@ Principles that carry over unchanged: the log is the only state; the rules gate 
 - **R13. Hand back.** **Hand back** ends the interactive process, records `TakeoverEnded`, and either leaves the run parked for the next instruction or resumes it headless with an optional note ("carry on from here"). Closing the browser tab does not end the takeover; the session waits (D6) and can be re-attached from any client.
 - **R14. Isolation and machines.** In a `container` run the terminal attaches inside the run's container (`exec` with a TTY), with the same mounts and egress as the headless run. On a remote node the terminal runs on the node. **D7:** remote-node takeover needs a streaming path the long-poll protocol ([ADR-0012](../adr/0012-nodes-are-workers-over-the-offices-api.md)) does not have. Proposed: takeover on the office machine first; nodes after the transport (D8) exists.
 
+### The bar for polish
+
+The desk is held to the standard of a good native tool (Herdr is the reference the owner named), not of an admin page. "Works" is not done; these are requirements with the same weight as the rest.
+
+- **U1. Quiet until it needs you.** Herdr's best idea: agents report working, done or waiting, the one that needs you shows in the sidebar and on its tab, and everything else stays quiet so the owner can stop checking. The desk follows it: one attention colour, used only for "needs you" (approval, plan, needs attention); working runs get a calm activity mark, finished runs fade; no badges, counters or toasts for routine progress.
+- **U2. A visual system, not ad-hoc CSS.** Design tokens for colour, spacing (4 px scale), radius, elevation and motion; a type scale with Inter for the interface and Bricolage Grotesque for the brand only (both already in `assets/brand/fonts`, served by the binary, no third-party font hosts); one monospace face for logs, diffs and the terminal. Light, dark and follow-the-system, each designed, not inverted. The brand teal stays the accent.
+- **U3. The log reads like a story, not a dump.** Events are grouped into turns; a tool call and its result are one collapsible row with the command, its exit status and duration; long output folds to its last lines; edits show as small inline diffs; model text is rendered markdown; timestamps are relative with the exact time on hover. The log follows the tail while the owner is at the bottom and stops following when they scroll up, with a "jump to latest" pill.
+- **U4. Diffs worth reviewing.** Per-file sections with a file list, unified or split view, syntax highlighting for the common languages, word-level changes, collapsed unchanged context.
+- **U5. Fast, and feels fast.** Tab switches are instant (panes stay mounted); Allow / Deny, cancel and send update the screen at once and reconcile with the server, rolling back with a clear message if the server refuses; a 10 000-event log scrolls at 60 fps (virtualised); no layout shift while events stream in; first paint under 1 s.
+- **U6. Motion with restraint.** Transitions of 120–180 ms for panes, the palette and cards appearing; none on streaming text; everything off under `prefers-reduced-motion`.
+- **U7. The keyboard is complete and discoverable.** Every action has a shortcut; the palette lists actions with their keys and fuzzy-matches runs, repos and pages; `?` shows the cheat sheet; focus is always visible and never lost after an action.
+- **U8. Every state is designed.** Empty states that teach the next step (no runs yet: how to start one, with the `/run` and `POST /v1/runs` equivalents); skeletons while loading; errors that say what happened and what to do; a reconnecting indicator when a stream drops, which clears itself when it catches up.
+- **U9. It tells you, even in another window.** Optional browser notifications and a soft sound for "needs you" only; the tab title and favicon carry the count of things waiting; clicking a notification opens the right run with the card focused.
+- **U10. Installable.** The desk is a PWA (manifest, icons from `assets/brand`, standalone window), so on a Mac it opens in its own window from the Dock, which is most of the native feel before the native app exists.
+- **U11. A terminal that feels like a terminal.** xterm.js with its WebGL renderer, the desk's monospace font and theme colours, correct resize, copy and paste, clickable links, scrollback; the "at the keyboard" banner is part of the frame, not a pop-up.
+- **U12. Personal, safely.** Herdr makes every pixel a file the agent may change; Shiioo keeps the chrome built in (the approval card must not be something an agent can restyle), but the owner's **themes** and **key bindings** are files under `.shiioo/desk/` (`theme.toml`, `keys.toml`), read by the desk through the API. The default rules deny agent writes under `.shiioo/`.
+- **U13. Accessible.** WCAG AA contrast in every theme, labels for screen readers, full operation without a pointer, hit targets of at least 24 px on the desk and 44 px on the phone.
+- **U14. Reviewed like code.** Each sub-phase ends with a UX review: screenshots of every view in light and dark at phone and desk widths, a short papercut list, and the papercuts fixed or consciously kept before the phase is called built.
+
 ### Trust and non-functional
 
 - **R15. Token scope.** A takeover gives interactive control of an agent, which is more than reading logs. **D9:** whether it needs more than the office token. Proposed: the same token, plus a short-lived, single-use attach ticket per terminal (`POST /v1/runs/{run}/takeover` returns it), so the WebSocket URL can't be replayed from a log or history; tailnet-only as for everything else.
@@ -100,6 +119,7 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 
 ## 6. Phasing
 
+0. **Design first:** mockups the owner signs off, then the token and component kit. The polish bar (U1–U14) applies to every phase below and each one ends with a UX review.
 1. **8a. The desk layout** over the existing API: sidebar, tabs, split panes, the diff side panel, the command palette. The office-wide stream (R7).
 2. **8b. The office pages:** plans, routines, capacity, deliverables, the report, machines.
 3. **8c. Instructing:** parked runs and `UserMessage` (shared with 7a), `POST /v1/runs/{run}/messages`, turn-boundary and **Now** delivery, follow-up continuation runs.
@@ -116,6 +136,7 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 - During a takeover, a tool call that `rules.toml` says `ask` produces an approval card in the desk and a Telegram message; a `deny` is denied in the terminal. After hand back, `shiioo log <run>` verifies and shows the takeover's messages and tool calls between `TakeoverStarted` and `TakeoverEnded`.
 - Killing the office during a takeover leaves the run parked with `TakeoverEnded { reason: office_restarted }` after restart, and no headless worker picks it up on its own.
 - A terminal WebSocket URL with a used or expired ticket is refused.
+- **Polish gates (U1–U14):** with ten runs open and one waiting, the only attention colour on screen is on the waiting one; a 10 000-event log scrolls without dropped frames on the Mac Studio; every view has a designed empty, loading and error state; every action in the palette works from the keyboard; light and dark pass WCAG AA; the desk installs as a standalone window; each sub-phase's UX review is in the repository with its screenshots and papercut list.
 
 ## 8. Decisions needed
 
@@ -132,10 +153,19 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 | D9 | Auth for a takeover | Office token plus a single-use attach ticket |
 | D10 | A build step for the UI | No; native ES modules, embedded per file |
 | D11 | Order with phase 7 (conversation) | Build the shared parked-run kernel once, in whichever phase comes first; 8a and 8b do not depend on it |
+| D12 | The monospace face for logs, diffs and the terminal | Bundle one OFL face (JetBrains Mono or Iosevka) next to Inter, so every machine renders the same |
+| D13 | Syntax highlighting without a build step | A small vendored highlighter (Prism core plus a handful of languages) or a server-side highlighter in the diff endpoint |
 
 ## 9. Tasks
 
 One line each, in build order within a phase. "Needs" names what must land first; a task with no "needs" can start now. Each task ends with tests in the crate it touches and the docs it changes (the design doc's *(planned)* marks become *(built)*, the crate's `docs/` describe the code).
+
+### Design first (before 8a)
+
+| | Task | Where | Needs | Done when |
+|---|---|---|---|---|
+| T27 | Interactive mockups of the desk and phone layouts, light and dark: sidebar, run view with log, diff and approval card, palette, empty states, takeover frame; reviewed by the owner before T3 | an artifact or `docs/design/desk-mockups/` | | Owner signs off; open questions folded into this doc |
+| T28 | Design tokens and base components in CSS: colour (three themes), type scale, spacing, radius, elevation, motion; buttons, cards, rows, pills, the attention mark; bundled fonts (D12) | `ui/tokens.css`, `ui/components.css`, `assets/brand/fonts` | T1, T27 | A reference page `/ui/#kit` renders every component in every theme; AA contrast checked |
 
 ### 8a. The desk layout
 
@@ -143,10 +173,23 @@ One line each, in build order within a phase. "Needs" names what must land first
 |---|---|---|---|---|
 | T1 | Split `app.js` into native ES modules (core: token, `api()`, routing, SSE client; one module per view) and serve each embedded file under `/ui/` | `shiioo-api/ui/`, `lib.rs` UI routes, `tests/dashboard.rs` | | Phone dashboard unchanged; every module served without a token; D10 settled |
 | T2 | Office-wide event stream `GET /v1/events`: run created, status changed, approval requested and decided, plan proposed; resumable with `Last-Event-ID` | `shiioo-api` (store notifications), `docs/http.md`, `docs/design/api.md` | | A test opens the stream, creates a run and an approval, reconnects mid-way and sees each event once; D1 settled |
-| T3 | Desk layout: breakpoint, sidebar (Needs you, repos, machines), unread marks kept in `localStorage` | `ui/` | T1, T2 | Wide screen shows grouped runs; a new approval appears under Needs you without reload |
+| T3 | Desk layout: breakpoint, sidebar (Needs you, repos, machines), unread marks kept in `localStorage`, attention rules of U1 | `ui/` | T1, T2, T28 | Wide screen shows grouped runs; a new approval appears under Needs you without reload |
 | T4 | Tabs and split panes, one live log per pane; the diff and approval card in a side panel | `ui/` | T3 | Two runs stream side by side; Allow in the side panel answers the hook |
 | T5 | Command palette and shortcuts (new task, jump to run, next "needs me", allow / deny focused, cancel) | `ui/` | T4 | Every action reachable without the mouse |
 | T6 | API-parity test: drive the flows the desk uses (create, stream, approve, cancel, diff) through `/v1` only | `shiioo-api/tests/` | T2 | Test passes; R3 holds by construction |
+
+### Polish (alongside 8a–8d)
+
+| | Task | Where | Needs | Done when |
+|---|---|---|---|---|
+| T29 | The structured log: turns, collapsible tool-call rows with status and duration, folded output, inline edit diffs, rendered markdown, relative times, tail-follow with "jump to latest", virtualised list (U3, U5) | `ui/log.js` | T4, T28 | 10 000 events scroll at 60 fps; a test fixture log renders without layout shift while streaming |
+| T30 | The diff viewer: file list, unified and split, word-level changes, collapsed context, highlighting (U4, D13) | `ui/diff.js`, possibly `shiioo-api` diff endpoint | T4, T28 | A real multi-file PR diff reads comfortably at desk width and on the phone |
+| T31 | Optimistic actions with reconciliation, reconnecting indicator, designed empty / loading / error states for every view (U5, U8) | `ui/` | T3 | Each view checked with the server stopped, slow and empty |
+| T32 | Notifications, sound, tab title and favicon count for "needs you"; click opens the run with the card focused (U9) | `ui/` | T2, T3 | A pending approval in a background window notifies once, and the click lands on the card |
+| T33 | PWA: manifest, icons, standalone window, service worker for the shell only (never caching API responses) (U10) | `ui/`, `lib.rs` routes, `assets/brand/build.py` | T3 | Installs from Safari and Chrome on macOS; opens in its own window |
+| T34 | Owner themes and key bindings from `.shiioo/desk/theme.toml` and `keys.toml` via `GET /v1/desk/settings`; default rules deny agent writes under `.shiioo/` (U12) | `shiioo-api`, `shiioo-rules` defaults, `ui/` | T5, T28 | Changing `theme.toml` restyles the desk on reload; an agent's write there is denied |
+| T35 | Accessibility pass: labels, focus order, keyboard-only walkthrough, contrast in all themes (U13) | `ui/` | T5, T28 | Keyboard-only walkthrough of every flow passes; automated contrast check in `tests/dashboard.rs` or a script |
+| T36 | UX review at the end of each sub-phase: screenshots of every view (light, dark, phone, desk) driven by a browser script, papercut list, fixes (U14) | `docs/design/desk-reviews/`, `scripts/` | each sub-phase | Review committed; papercuts fixed or listed in the backlog |
 
 ### 8b. The office pages
 
@@ -178,7 +221,7 @@ One line each, in build order within a phase. "Needs" names what must land first
 | T20 | `POST /v1/runs/{run}/takeover` returning a single-use, short-lived attach ticket; `GET /v1/runs/{run}/terminal?ticket=…` WebSocket with binary PTY frames and a resize control frame (D9) | `shiioo-api` | T17, T19 | Used or expired ticket refused; detach and re-attach keeps the session |
 | T21 | Transcript import at the end: read the harness session file (Claude Code JSONL, Codex rollout) into the log as messages and tool calls; raw stream as a capped, redacted blob (D4) | `shiioo-runtime/src/harness/`, `redact.rs` | T19 | `shiioo log <run>` reads through a takeover; secrets in the stream are redacted |
 | T22 | Hand back (park, or resume headless with a note), detached-takeover timeout (D6), and restart recovery (`TakeoverEnded { reason: office_restarted }`, run left parked) | `shiioo-runtime/src/worker.rs`, `shiioo-api` | T20, T21 | Kill the office mid-takeover: after restart the run is parked and nothing drives it |
-| T23 | Terminal view in the desk: vendored xterm.js with its licence, Take over / Hand back, the "rules active" banner, approvals in the side panel (D5) | `ui/`, `ui/vendor/` | T4, T20 | Live check with Claude Code: an `ask` command shows a card in the desk and a Telegram message; first answer wins |
+| T23 | Terminal view in the desk (U11): vendored xterm.js with its WebGL renderer and licence, the desk font and theme, Take over / Hand back, the "rules active" banner, approvals in the side panel (D5) | `ui/`, `ui/vendor/` | T4, T20 | Live check with Claude Code: an `ask` command shows a card in the desk and a Telegram message; first answer wins |
 | T24 | Live verification with both real harnesses and the security note: the shell escape bypasses the hook and is recorded | `docs/design/security.md`, `README.md` status table | T22, T23 | Status table row "built, verified live" |
 
 ### 8e. Takeover in containers and on nodes
