@@ -1,95 +1,218 @@
-// One run: header, approval card, actions, diff, the live log, and the
-// box for writing to it or following it up.
+// One run: the header (task, state, where it works), the structured log,
+// the box for writing to it, and a side panel with the approval it waits
+// on and the diff of its branch.
 
-import { api, app, el, esc, GLYPH, onLeave, short, showError, stateLabel } from "../core.js";
+import { api, app, el, esc, isOpen, kind, mark, MOD, narrow, onLeave, short, showError, span, stateLabel, toast, who } from "../core.js";
 import { describe } from "../describe.js";
+import { getRun, upsert, watch } from "../office.js";
 import { streamEvents } from "../stream.js";
+import { renderDiff } from "./diff.js";
+import { createLog } from "./log.js";
 
 export async function renderRun(id) {
-  app.innerHTML = `<div class="run-head"><span class="muted">${esc(short(id))}</span><div class="task">…</div></div>`;
-  const head = app.querySelector(".run-head");
-  const approval = el(`<div></div>`);
-  const actions = el(`<div class="btn-row"></div>`);
-  const diffPanel = el(`<div></div>`);
-  const log = el(`<div class="log"></div>`);
+  app.innerHTML = "";
+  const run = el(`<div class="run">
+    <div class="pane">
+      <header class="run-head">
+        <a class="back" href="#">‹ Runs</a>
+        <div class="run-title"><h1></h1><span class="pill"></span></div>
+        <div class="crumbs"></div>
+        <div class="actions"></div>
+      </header>
+      <div class="log-wrap"><div class="log" tabindex="0" aria-label="Log"></div><button class="jump" type="button">Jump to latest ↓</button></div>
+    </div>
+    <aside class="aside" hidden aria-label="Approval and diff">
+      <div class="aside-h"><h2>Approval &amp; diff</h2>
+        <span class="seg" role="group" aria-label="Long lines"><button type="button" data-wrap="0" aria-pressed="true">Scroll</button><button type="button" data-wrap="1" aria-pressed="false">Wrap</button></span>
+        <button class="icon-btn" type="button" data-close aria-label="Close">✕</button></div>
+      <div class="aside-scroll"><div class="ask-slot"></div><div class="diff-slot"><div class="sk" style="width:60%"></div></div></div>
+    </aside>
+  </div>`);
+  app.appendChild(run);
+  const $ = (s) => run.querySelector(s);
+  const logBox = $(".log");
+  const jump = $(".jump");
+  const aside = $(".aside");
   const composer = messageBox(id);
-  app.append(approval, actions, diffPanel, el(`<h2>Log</h2>`), log, composer.form);
+  $(".pane").appendChild(composer.form);
 
-  let current = null;
-  let harness = null; // "claude-code" or "codex", from the run's spec
-  const refresh = async () => {
-    try { current = await api(`/v1/runs/${id}`); } catch (e) { showError(e); return; }
-    const st = current.status.state;
-    composer.update(st, harness);
-    const origin = current.origin
-      ? `<span class="muted"> · follows up <a href="#run=${esc(current.origin)}">${esc(short(current.origin))}</a></span>`
-      : "";
-    head.innerHTML = `<span class="status-${esc(st)}">${GLYPH[st] || "•"} ${esc(stateLabel(st))}</span>
-      <span class="muted"> · ${esc(short(id))}</span>${origin}<div class="task">${esc(current.task || "")}</div>`;
-    approval.innerHTML = "";
-    if (st === "waiting_approval") {
-      const card = el(`<div class="card approval"><strong>Approval needed</strong>
-        <div class="summary">${esc(current.status.summary)}</div>
-        <div class="btn-row"><button class="btn allow">Allow</button><button class="btn deny">Deny</button></div></div>`);
-      for (const decision of ["allow", "deny"]) {
-        card.querySelector(`.${decision}`).addEventListener("click", async (e) => {
-          e.target.disabled = true;
-          try { await api(`/v1/approvals/${current.status.approval_id}`, { method: "POST", body: JSON.stringify({ decision }) }); }
-          catch (err) { showError(err); }
-          refresh();
-        });
-      }
-      approval.appendChild(card);
+  let view = getRun(id) || null;
+  let harness = null;   // "claude-code" | "codex" | null, from the spec
+  let isolation = null; // from the first sandbox marker
+  let raw = false;
+  let wrap = false;
+  let lastId = -1;
+  const events = [];
+
+  // ---- log ------------------------------------------------------------
+  const decide = async (approvalId, decision) => {
+    try {
+      await api(`/v1/approvals/${approvalId}`, { method: "POST", body: JSON.stringify({ decision }) });
+      toast(decision === "allow" ? "Allowed" : "Denied");
+    } catch (err) { showError(err); }
+  };
+  let log = createLog(logBox, { onDecide: decide });
+  const atBottom = () => logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 60;
+  let follow = true;
+  logBox.addEventListener("scroll", () => { follow = atBottom(); if (follow) jump.classList.remove("show"); });
+  jump.addEventListener("click", () => { logBox.scrollTo({ top: logBox.scrollHeight, behavior: "smooth" }); });
+  const toBottom = () => { if (follow) logBox.scrollTop = logBox.scrollHeight; else jump.classList.add("show"); };
+
+  const rawLine = (ev) => el(`<div><span class="seq">#${ev.seq}</span><span>${esc(describe(ev))}</span></div>`);
+  const rebuild = () => {
+    logBox.innerHTML = "";
+    if (raw) {
+      const box = el(`<div class="raw"></div>`);
+      for (const ev of events) box.appendChild(rawLine(ev));
+      logBox.appendChild(box);
+    } else {
+      log = createLog(logBox, { onDecide: decide });
+      for (const ev of events) log.add(ev);
+      if (view) log.setStatus(view.status);
     }
+    logBox.scrollTop = logBox.scrollHeight;
+  };
+
+  const onEvent = (ev) => {
+    events.push(ev);
+    const p = ev.payload;
+    if (p.type === "run_created") { harness = p.spec?.runtime?.kind === "harness" ? p.spec.runtime.harness : null; paint(); }
+    if (p.type === "sandbox_started" && !isolation) { isolation = p.level; paint(); }
+    if (raw) logBox.querySelector(".raw")?.appendChild(rawLine(ev)); else log.add(ev);
+    toBottom();
+    // The office stream keeps the view current; this covers a dropped one.
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refresh, 400);
+    if (p.type === "approval_requested" || p.type === "tool_result") diffStale = true;
+  };
+  let refreshTimer = null;
+  const refresh = async () => {
+    try { const v = await api(`/v1/runs/${id}`); upsert(v); } catch (e) { showError(e); }
+  };
+
+  // ---- header, actions, panel ----------------------------------------
+  let asideOpen = false;
+  let asideTouched = false;
+  let diffStale = true;
+  const setAside = (open) => {
+    asideOpen = open;
+    aside.hidden = !open;
+    $("[data-aside-toggle]")?.setAttribute("aria-pressed", String(open));
+    if (open) loadDiff();
+  };
+  aside.querySelector("[data-close]").addEventListener("click", () => { asideTouched = true; setAside(false); });
+  for (const b of aside.querySelectorAll("[data-wrap]")) {
+    b.addEventListener("click", () => {
+      wrap = b.dataset.wrap === "1";
+      for (const x of aside.querySelectorAll("[data-wrap]")) x.setAttribute("aria-pressed", String(x === b));
+      diffStale = true; loadDiff();
+    });
+  }
+  let diffText = null;
+  const loadDiff = async () => {
+    const slot = $(".diff-slot");
+    if (!view?.repo) { slot.innerHTML = `<div class="aside-empty">This run has no repository, so there is no diff.</div>`; return; }
+    if (!diffStale && diffText !== null) return;
+    diffStale = false;
+    try {
+      diffText = await api(`/v1/runs/${id}/diff`);
+      renderDiff(slot, diffText, { wrap });
+    } catch (err) { slot.innerHTML = `<div class="aside-empty">${esc(err.message)}</div>`; }
+  };
+
+  const renderAsk = () => {
+    const slot = $(".ask-slot");
+    const st = view?.status;
+    if (st?.state !== "waiting_approval") { slot.innerHTML = ""; return; }
+    if (slot.dataset.id === st.approval_id) return;
+    slot.dataset.id = st.approval_id;
+    slot.innerHTML = "";
+    const card = el(`<div class="card ask">
+      <div class="eyebrow">Needs you</div>
+      <h3>${esc(who(view.runtime))} wants to go ahead</h3>
+      <div class="cmd">${esc(st.summary)}</div>
+      <div class="row"><button class="btn" type="button" data-d="deny">Deny</button><button class="btn allow" type="button" data-d="allow">Allow</button></div>
+      <div class="foot">Also on your phone. The first answer wins.</div></div>`);
+    for (const b of card.querySelectorAll("[data-d]")) b.addEventListener("click", () => { for (const x of card.querySelectorAll("button")) x.disabled = true; decide(st.approval_id, b.dataset.d); });
+    slot.appendChild(card);
+  };
+
+  const paint = () => {
+    if (!view) return;
+    const st = view.status.state;
+    $(".run-title h1").textContent = view.task || "(no task)";
+    const pill = $(".pill");
+    pill.className = `pill ${kind(st)}`;
+    pill.innerHTML = `${mark(st)}${esc(stateLabel(st))}`;
+    const end = isOpen(st) ? Date.now() : view.updated_at;
+    const crumbs = [
+      view.repo ? esc(view.repo) : null,
+      view.branch ? `<code>${esc(view.branch)}</code>` : null,
+      esc(who(harness || view.runtime)),
+      view.machine ? `on ${esc(view.machine)}` : null,
+      isolation && isolation !== "worktree" ? esc(isolation) : null,
+      view.created_at ? esc(span(Math.max(0, end - view.created_at))) : null,
+      `<span title="${esc(id)}">${esc(short(id))}</span>`,
+      view.origin ? `follows up <a href="#run=${esc(view.origin)}">${esc(short(view.origin))}</a>` : null,
+    ].filter(Boolean);
+    $(".crumbs").innerHTML = crumbs.join(`<span class="sep">·</span>`);
+    renderActions(st);
+    composer.update(st, harness);
+    if (!raw) log.setStatus(view.status);
+    renderAsk();
+    // An approval opens the panel on a wide screen, unless you closed it.
+    if (st === "waiting_approval" && !narrow() && matchMedia("(min-width: 1181px)").matches && !asideOpen && !asideTouched) setAside(true);
+    if (asideOpen && diffStale) loadDiff();
+  };
+
+  const renderActions = (st) => {
+    const actions = $(".actions");
+    const key = `${st}|${raw}|${asideOpen}|${Boolean(view?.repo)}`;
+    if (actions.dataset.key === key) return;
+    actions.dataset.key = key;
     actions.innerHTML = "";
-    const open = st === "open" || st === "waiting_approval" || st === "needs_attention" || st === "parked";
-    if (open) {
-      const cancel = el(`<button class="btn danger">Cancel</button>`);
+    if (isOpen(st)) {
+      const cancel = el(`<button class="btn" type="button">Cancel run</button>`);
       cancel.addEventListener("click", async () => {
-        if (cancel.dataset.armed !== "1") { cancel.dataset.armed = "1"; cancel.textContent = "Really cancel?"; setTimeout(() => { cancel.dataset.armed = ""; cancel.textContent = "Cancel"; }, 4000); return; }
+        if (cancel.dataset.armed !== "1") {
+          cancel.dataset.armed = "1"; cancel.classList.add("armed"); cancel.textContent = "Really cancel?";
+          setTimeout(() => { cancel.dataset.armed = ""; cancel.classList.remove("armed"); cancel.textContent = "Cancel run"; }, 4000);
+          return;
+        }
         cancel.disabled = true;
-        try { await api(`/v1/runs/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason: "from dashboard" }) }); }
+        try { await api(`/v1/runs/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason: "from the desk" }) }); toast("Cancelling…"); }
         catch (err) { showError(err); }
       });
       actions.appendChild(cancel);
-      if (st === "open") {
-        const resume = el(`<button class="btn">Resume</button>`);
-        resume.addEventListener("click", async () => {
-          resume.disabled = true;
-          try { await api(`/v1/runs/${id}/resume`, { method: "POST" }); } catch (err) { showError(err); }
-        });
-        actions.appendChild(resume);
-      }
     }
-    const diff = el(`<button class="btn">Diff</button>`);
-    diff.addEventListener("click", async () => {
-      diff.disabled = true;
-      try {
-        const text = await api(`/v1/runs/${id}/diff`);
-        diffPanel.innerHTML = "";
-        diffPanel.appendChild(el(`<pre class="diff">${esc(text || "(no changes on the branch)")}</pre>`));
-      } catch (err) { showError(err); }
-      diff.disabled = false;
-    });
-    actions.appendChild(diff);
+    if (st === "open") {
+      const resume = el(`<button class="btn quiet" type="button" title="Start a worker on it if none is working">Resume</button>`);
+      resume.addEventListener("click", async () => {
+        resume.disabled = true;
+        try { await api(`/v1/runs/${id}/resume`, { method: "POST" }); toast("Resumed"); } catch (err) { showError(err); }
+      });
+      actions.appendChild(resume);
+    }
+    actions.appendChild(el(`<span class="grow"></span>`));
+    const rawBtn = el(`<button class="btn quiet" type="button" aria-pressed="${raw}" title="Every event, one line each">Raw</button>`);
+    rawBtn.addEventListener("click", () => { raw = !raw; rebuild(); renderActions(view.status.state); });
+    actions.appendChild(rawBtn);
+    const panel = el(`<button class="btn" type="button" data-aside-toggle aria-pressed="${asideOpen}">${view?.status.state === "waiting_approval" ? mark("waiting_approval") : ""}Approval &amp; diff <kbd>D</kbd></button>`);
+    panel.addEventListener("click", () => { asideTouched = true; setAside(!asideOpen); renderActions(view.status.state); });
+    actions.appendChild(panel);
   };
-  await refresh();
 
-  let lastId = -1;
-  let debounce = null;
-  const onEvent = (ev) => {
-    if (ev.payload.type === "run_created") {
-      harness = ev.payload.spec?.runtime?.harness || null;
-      if (current) composer.update(current.status.state, harness);
-    }
-    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-    log.appendChild(el(`<div class="line kind-${esc(ev.payload.type)}"><span class="seq">#${ev.seq}</span><span>${esc(describe(ev))}</span></div>`));
-    if (atBottom) log.scrollTop = log.scrollHeight;
-    clearTimeout(debounce);
-    debounce = setTimeout(refresh, 200);
-  };
+  // ---- wiring -----------------------------------------------------------
+  if (!view) await refresh();
+  view = getRun(id) || view;
+  const unwatch = watch(() => { const v = getRun(id); if (v) { view = v; paint(); } });
+  paint();
+
+  const escClose = (e) => { if (e.key === "Escape" && asideOpen && !document.querySelector(".scrim")) { asideTouched = true; setAside(false); renderActions(view.status.state); } };
+  document.addEventListener("keydown", escClose);
+  const ticker = setInterval(() => { log.tick?.(); if (view && isOpen(view.status.state)) paint(); }, 30000);
   const controller = new AbortController();
-  onLeave(() => { controller.abort(); clearTimeout(debounce); });
+  onLeave(() => { controller.abort(); clearTimeout(refreshTimer); clearInterval(ticker); unwatch(); document.removeEventListener("keydown", escClose); });
   streamEvents(`/v1/runs/${id}/events/stream`, controller.signal, (frame) => {
     if (frame.id !== undefined) lastId = frame.id;
     if (frame.data) { try { onEvent(JSON.parse(frame.data)); } catch (_) { /* skip a bad frame */ } }
@@ -103,14 +226,14 @@ export async function renderRun(id) {
 // branch and session, which the view then opens.
 function messageBox(id) {
   const form = el(`<form class="composer" hidden>
-    <label class="hint muted" for="message"></label>
-    <div class="composer-row">
-      <textarea id="message" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
-      <button class="btn primary" type="submit" aria-label="Send">Send</button>
-    </div>
+    <label class="hint" for="message"></label>
+    <textarea id="message" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
+    <div class="row"><span class="note">Your message goes into the run's log. The rules still apply to what the agent does next.</span>
+      <button class="btn primary" type="submit"><span class="label">Send</span> <kbd>${MOD}↵</kbd></button></div>
   </form>`);
   const text = form.querySelector("textarea");
   const send = form.querySelector("button");
+  const label = send.querySelector(".label");
   const hint = form.querySelector(".hint");
   let base = "";
   let followUp = false;
@@ -122,6 +245,7 @@ function messageBox(id) {
   text.addEventListener("input", () => { if (!text.value.trim()) key = null; grow(); });
   text.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); }
+    if (e.key === "Escape") text.blur();
   });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -129,7 +253,7 @@ function messageBox(id) {
     if (!body || send.disabled) return;
     key = key || newKey();
     send.disabled = true;
-    hint.textContent = followUp ? "Starting…" : "Sending…";
+    hint.textContent = followUp ? "Starting the follow-up…" : "Sending…";
     try {
       const reply = await api(`/v1/runs/${id}/${followUp ? "follow-up" : "messages"}`, {
         method: "POST",
@@ -137,15 +261,14 @@ function messageBox(id) {
         body: JSON.stringify({ text: body }),
       });
       key = null;
-      if (followUp) { location.hash = `run=${reply.id}`; return; }
+      if (followUp) { upsert(reply); location.hash = `run=${reply.id}`; return; }
       text.value = "";
       grow();
-      hint.textContent = "Sent. It shows in the log.";
-      setTimeout(() => { hint.textContent = base; }, 3000);
+      toast("Sent");
     } catch (err) {
-      hint.textContent = base;
       showError(err);
     }
+    hint.textContent = base;
     send.disabled = false;
     text.focus();
   });
@@ -154,20 +277,19 @@ function messageBox(id) {
     form,
     update(state, harness) {
       const accepts = ["open", "waiting_approval", "needs_attention", "parked"].includes(state);
-      const who = harness === "codex" ? "Codex" : harness === "claude-code" ? "Claude Code" : null;
-      const mode = !accepts && who !== null;
+      const name = harness === "codex" ? "Codex" : harness === "claude-code" ? "Claude Code" : null;
+      const mode = !accepts && name !== null;
       if (mode !== followUp) key = null;
       followUp = mode;
       form.hidden = !accepts && !followUp;
-      send.textContent = followUp ? "Follow up" : "Send";
-      send.setAttribute("aria-label", send.textContent);
-      base = followUp ? `Finished. A follow-up continues this ${who} session on the same branch, as a new run.`
+      label.textContent = followUp ? "Follow up" : state === "parked" ? "Reply" : name ? "Send at next turn" : "Send";
+      base = followUp ? `Finished. A follow-up continues this ${name} session on the same branch, as a new run.`
         : state === "parked" ? "It is waiting for your reply."
-        : state === "needs_attention" ? "Read when the run continues."
-        : who ? `${who} reads this when it finishes its current step.`
-        : "Read at its next turn.";
-      if (!send.disabled && !hint.textContent.startsWith("Sent")) hint.textContent = base;
-      text.placeholder = followUp ? "What next?" : state === "parked" ? "Reply" : "Message";
+        : state === "needs_attention" ? "It reads this when the run continues."
+        : name ? `Tell ${name} something. It reads it when it finishes its current step.`
+        : "Tell the agent something. It reads it at its next turn.";
+      if (!send.disabled) hint.textContent = base;
+      text.placeholder = followUp ? "What next?" : state === "parked" ? "Reply" : narrow() ? "Message" : "e.g. use the existing helper, don't add a dependency";
     },
   };
 }

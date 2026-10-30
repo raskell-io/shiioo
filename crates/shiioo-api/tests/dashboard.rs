@@ -1,7 +1,7 @@
 //! The dashboard files and the diff endpoint.
 
 use serde_json::{Value, json};
-use shiioo_api::{ApiState, UI_FILES, router};
+use shiioo_api::{ApiState, UI_FILES, UI_FONTS, router};
 use shiioo_core::SystemClock;
 use shiioo_runtime::{AgentSpec, LocalMachine, ScriptedProvider, Toolbox, Worker, branch_for};
 use shiioo_store::{MemoryStore, Notifying};
@@ -112,6 +112,19 @@ async fn serves_the_dashboard_files_without_a_token() {
         assert_eq!(resp.status(), 200, "{name}");
         assert_eq!(resp.text().await.unwrap_or_default(), *body, "{name}");
     }
+    for (name, body) in UI_FONTS {
+        let resp = http
+            .get(format!("{base}/ui/{name}"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resp.status(), 200, "{name}");
+        assert_eq!(
+            resp.headers().get("content-type").and_then(|v| v.to_str().ok()),
+            Some("font/woff2")
+        );
+        assert_eq!(&resp.bytes().await.unwrap_or_default()[..], *body, "{name}");
+    }
     let missing = http
         .get(format!("{base}/ui/nope.js"))
         .send()
@@ -120,7 +133,8 @@ async fn serves_the_dashboard_files_without_a_token() {
     assert_eq!(missing.status(), 404);
 }
 
-/// Every file under `ui/` (but the page itself) is in `UI_FILES`, and every
+/// Every file under `ui/` (but the page itself) is in `UI_FILES` or
+/// `UI_FONTS`, and every
 /// relative module import resolves to one of them.
 #[test]
 fn ui_files_match_the_directory_and_imports_resolve() {
@@ -139,7 +153,11 @@ fn ui_files_match_the_directory_and_imports_resolve() {
     walk(&root, &root, &mut on_disk);
     on_disk.retain(|f| f != "index.html");
     on_disk.sort();
-    let mut listed: Vec<String> = UI_FILES.iter().map(|(n, _)| (*n).to_owned()).collect();
+    let mut listed: Vec<String> = UI_FILES
+        .iter()
+        .map(|(n, _)| (*n).to_owned())
+        .chain(UI_FONTS.iter().map(|(n, _)| (*n).to_owned()))
+        .collect();
     listed.sort();
     assert_eq!(listed, on_disk, "UI_FILES and ui/ disagree");
 

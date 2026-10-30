@@ -77,14 +77,23 @@ All runs, most recently updated first.
   "task": "…",
   "next_seq": 14,
   "status": {"state": "waiting_approval", "approval_id": "…", "summary": "Bash: git push"},
-  "updated_at": 1761300000000
+  "updated_at": 1761300000000,
+  "created_at": 1761299000000,
+  "runtime": "claude-code",
+  "repo": "sango",
+  "branch": "shiioo/6f1d2a3b"
 }
 ```
 
 `status` is the runtime's `RunStatus`, tagged by `state`: `open`,
 `completed {output}`, `failed {reason}`, `needs_attention {reason}`,
-`waiting_approval {approval_id, summary}`, `cancelled {reason}`.
-`updated_at` is the last event's time in ms since the epoch.
+`waiting_approval {approval_id, summary}`, `parked {waiting_for}`,
+`cancelled {reason}`. `updated_at` and `created_at` are the last and first
+event's times in ms since the epoch. `runtime` is `claude-code`, `codex`
+or the native model; `repo` (a harness run's repository label, else its
+directory name) and `branch` (a follow-up's is the one it continues) are
+left out for runs without a repository. Also optional: `worker`, `machine`,
+and `origin` for a follow-up.
 
 ### `GET /v1/runs/{id}/events?from=<seq>` → `200`, `[Event]`
 

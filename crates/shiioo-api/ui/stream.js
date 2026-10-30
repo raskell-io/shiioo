@@ -8,9 +8,10 @@ const TERMINAL = new Set(["run_completed", "run_failed", "run_cancelled"]);
 /**
  * Reads the SSE stream at `path`, calling onFrame per frame; reconnects
  * with Last-Event-ID (from `lastId()`) until a terminal event arrives,
- * when `stopOnTerminal` is set, or `signal` aborts.
+ * when `stopOnTerminal` is set, or `signal` aborts. `onDrop` hears about
+ * each lost connection before the retry.
  */
-export async function streamEvents(path, signal, onFrame, lastId, { stopOnTerminal = true } = {}) {
+export async function streamEvents(path, signal, onFrame, lastId, { stopOnTerminal = true, onDrop = () => {} } = {}) {
   let backoff = 1000;
   while (!signal.aborted) {
     let finished = false;
@@ -41,6 +42,7 @@ export async function streamEvents(path, signal, onFrame, lastId, { stopOnTermin
     // A run's stream closes after its terminal event; a clean close
     // without one means a dropped connection.
     if (finished || signal.aborted) return;
+    onDrop();
     await new Promise((r) => setTimeout(r, backoff));
     backoff = Math.min(backoff * 2, 10000);
   }

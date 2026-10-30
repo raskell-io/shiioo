@@ -170,7 +170,7 @@ One line each, in build order within a phase. "Needs" names what must land first
 | | Task | Where | Needs | Done when |
 |---|---|---|---|---|
 | T27 | Interactive mockups of the desk and phone layouts, light and dark: sidebar, run view with log, diff and approval card, palette, empty states, takeover frame; reviewed by the owner before T3 | an artifact or `docs/design/desk-mockups/` | | Owner signs off; open questions folded into this doc |
-| T28 | Design tokens and base components in CSS: colour (three themes), type scale, spacing, radius, elevation, motion; buttons, cards, rows, pills, the attention mark; bundled fonts (D12) | `ui/tokens.css`, `ui/components.css`, `assets/brand/fonts` | T1, T27 | A reference page `/ui/#kit` renders every component in every theme; AA contrast checked |
+| T28 *(part built: tokens, components, fonts, light and dark; no `#kit` page yet)* | Design tokens and base components in CSS: colour (three themes), type scale, spacing, radius, elevation, motion; buttons, cards, rows, pills, the attention mark; bundled fonts (D12) | `ui/tokens.css`, `ui/components.css`, `assets/brand/fonts` | T1, T27 | A reference page `/ui/#kit` renders every component in every theme; AA contrast checked |
 
 ### 8a. The desk layout
 
@@ -178,7 +178,7 @@ One line each, in build order within a phase. "Needs" names what must land first
 |---|---|---|---|---|
 | T1 *(built)* | Split `app.js` into native ES modules (core: token, `api()`, routing, SSE client; one module per view) and serve each embedded file under `/ui/` | `shiioo-api/ui/`, `lib.rs` UI routes, `tests/dashboard.rs` | | Phone dashboard unchanged; every module served without a token; D10 settled |
 | T2 *(built; machine frames planned)* | Office-wide event stream `GET /v1/events/stream`: a `RunView` per run created or changed (approvals and plans included, as run states), a `ready` frame after the first pass; resumable with `Last-Event-ID` | `shiioo-api` (store notifications), `docs/http.md`, `docs/design/api.md` | | `tests/events.rs`: snapshot, a live run arriving without polling, resume from the last id skipping unchanged runs; D1 settled |
-| T3 | Desk layout: breakpoint, sidebar (Needs you, repos, machines), unread marks kept in `localStorage`, attention rules of U1 | `ui/` | T1, T2, T28 | Wide screen shows grouped runs; a new approval appears under Needs you without reload |
+| T3 *(part built: sidebar with Needs you, runs by repository, unread marks; no machines group)* | Desk layout: breakpoint, sidebar (Needs you, repos, machines), unread marks kept in `localStorage`, attention rules of U1 | `ui/` | T1, T2, T28 | Wide screen shows grouped runs; a new approval appears under Needs you without reload |
 | T4 | Tabs and split panes, one live log per pane; the diff and approval card in a side panel | `ui/` | T3 | Two runs stream side by side; Allow in the side panel answers the hook |
 | T5 | Command palette and shortcuts (new task, jump to run, next "needs me", allow / deny focused, cancel) | `ui/` | T4 | Every action reachable without the mouse |
 | T6 | API-parity test: drive the flows the desk uses (create, stream, approve, cancel, diff) through `/v1` only | `shiioo-api/tests/` | T2 | Test passes; R3 holds by construction |
@@ -187,8 +187,8 @@ One line each, in build order within a phase. "Needs" names what must land first
 
 | | Task | Where | Needs | Done when |
 |---|---|---|---|---|
-| T29 | The structured log: turns, collapsible tool-call rows with status and duration, folded output, inline edit diffs, rendered markdown, relative times, tail-follow with "jump to latest", virtualised list (U3, U5) | `ui/log.js` | T4, T28 | 10 000 events scroll at 60 fps; a test fixture log renders without layout shift while streaming |
-| T30 | The diff viewer: file list, unified and split, word-level changes, collapsed context, highlighting (U4, D13) | `ui/diff.js`, possibly `shiioo-api` diff endpoint | T4, T28 | A real multi-file PR diff reads comfortably at desk width and on the phone |
+| T29 *(part built: turns, tool-call rows, folded output, markdown, tail-follow; no virtualised list or inline edit diffs)* | The structured log: turns, collapsible tool-call rows with status and duration, folded output, inline edit diffs, rendered markdown, relative times, tail-follow with "jump to latest", virtualised list (U3, U5) | `ui/log.js` | T4, T28 | 10 000 events scroll at 60 fps; a test fixture log renders without layout shift while streaming |
+| T30 *(part built: file list and unified hunks in the side panel)* | The diff viewer: file list, unified and split, word-level changes, collapsed context, highlighting (U4, D13) | `ui/diff.js`, possibly `shiioo-api` diff endpoint | T4, T28 | A real multi-file PR diff reads comfortably at desk width and on the phone |
 | T31 | Optimistic actions with reconciliation, reconnecting indicator, designed empty / loading / error states for every view (U5, U8) | `ui/` | T3 | Each view checked with the server stopped, slow and empty |
 | T32 | Notifications, sound, tab title and favicon count for "needs you"; click opens the run with the card focused (U9) | `ui/` | T2, T3 | A pending approval in a background window notifies once, and the click lands on the card |
 | T33 | PWA: manifest, icons, standalone window, service worker for the shell only (never caching API responses) (U10) | `ui/`, `lib.rs` routes, `assets/brand/build.py` | T3 | Installs from Safari and Chrome on macOS; opens in its own window |

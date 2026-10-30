@@ -4,20 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#2f7d73">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f2ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1316" media="(prefers-color-scheme: dark)">
 <title>Shiioo</title>
+<link rel="preload" href="/ui/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ui/app.css">
+<script>
+  // Before the first paint, so a dark theme never flashes light.
+  try { const t = localStorage.getItem("shiioo_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) {}
+</script>
 </head>
 <body>
-<header class="top">
-  <a href="#" class="brand">shiioo</a>
-  <div class="top-actions">
-    <button id="new-task" class="btn small">New task</button>
-    <button id="refresh" class="btn small icon" aria-label="Refresh">↻</button>
-  </div>
-</header>
-<main id="app" aria-live="polite"></main>
+<div class="desk">
+  <nav id="side" class="side" aria-label="Runs"></nav>
+  <main id="app" class="main"></main>
+</div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
 <script type="module" src="/ui/app.js"></script>
 </body>
 </html>

@@ -369,6 +369,19 @@ pub struct RunView {
     /// For a follow-up, the run it continues.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<RunId>,
+    /// When the run was created, in ms since the epoch.
+    #[serde(default)]
+    pub created_at: u64,
+    /// Who works on it: `claude-code`, `codex`, or the native model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    /// The repository a harness run works on: its label, else the
+    /// directory name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// The branch a repository run works on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// What a harness asks before a tool call (Claude Code `PreToolUse` input).
@@ -1790,6 +1803,11 @@ fn repo_label(repos: &BTreeMap<String, PathBuf>, log: &[Event]) -> Option<String
 }
 
 fn view_of(run_id: RunId, log: &[Event]) -> RunView {
+    let spec = run_spec(log);
+    let harness = spec.as_ref().and_then(|s| match &s.runtime {
+        Runtime::Harness(h) => Some(h.clone()),
+        Runtime::Native => None,
+    });
     let task = match log.first().map(|e| &*e.payload) {
         Some(Payload::RunCreated { spec }) => spec["task"].as_str().unwrap_or_default().to_owned(),
         _ => String::new(),
@@ -1810,8 +1828,25 @@ fn view_of(run_id: RunId, log: &[Event]) -> RunView {
         updated_at: log.last().map_or(0, |e| e.recorded_at.0),
         worker,
         machine,
-        origin: run_spec(log).and_then(|s| s.origin).map(|o| o.run),
+        origin: spec.as_ref().and_then(|s| s.origin.as_ref()).map(|o| o.run),
+        created_at: log.first().map_or(0, |e| e.recorded_at.0),
+        runtime: spec.as_ref().map(|s| match &s.runtime {
+            Runtime::Harness(h) => h.harness.name().to_owned(),
+            Runtime::Native => s.agent.model.clone(),
+        }),
+        repo: harness
+            .as_ref()
+            .and_then(|h| h.repo_label.clone().or_else(|| dir_name(h.repo.as_deref()?))),
+        branch: harness
+            .as_ref()
+            .filter(|h| h.repo.is_some())
+            .and(spec.as_ref())
+            .map(|s| branch_for(s.workspace_run(run_id))),
     }
+}
+
+fn dir_name(path: &std::path::Path) -> Option<String> {
+    path.file_name().map(|n| n.to_string_lossy().into_owned())
 }
 
 /// One line describing an event, for logs and phone messages.
@@ -1996,12 +2031,37 @@ pub const UI_FILES: &[(&str, &str)] = &[
     ("app.js", include_str!("../ui/app.js")),
     ("core.js", include_str!("../ui/core.js")),
     ("describe.js", include_str!("../ui/describe.js")),
+    ("keys.js", include_str!("../ui/keys.js")),
+    ("office.js", include_str!("../ui/office.js")),
     ("stream.js", include_str!("../ui/stream.js")),
+    ("views/diff.js", include_str!("../ui/views/diff.js")),
+    ("views/log.js", include_str!("../ui/views/log.js")),
     ("views/run.js", include_str!("../ui/views/run.js")),
     ("views/runs.js", include_str!("../ui/views/runs.js")),
+    ("views/side.js", include_str!("../ui/views/side.js")),
+];
+
+/// The dashboard's fonts (`ui/fonts/`, Latin subsets of the brand fonts
+/// in `assets/brand/fonts`), served from the binary like the code.
+pub const UI_FONTS: &[(&str, &[u8])] = &[
+    ("fonts/inter.woff2", include_bytes!("../ui/fonts/inter.woff2")),
+    (
+        "fonts/bricolage.woff2",
+        include_bytes!("../ui/fonts/bricolage.woff2"),
+    ),
 ];
 
 async fn ui_file(Path(path): Path<String>) -> Response {
+    if let Some((_, body)) = UI_FONTS.iter().find(|(name, _)| *name == path) {
+        return (
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=604800"),
+            ],
+            *body,
+        )
+            .into_response();
+    }
     let Some((_, body)) = UI_FILES.iter().find(|(name, _)| *name == path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -2747,7 +2807,7 @@ async fn office_events<S: EventStore + 'static>(
 }
 
 enum OfficeFrame {
-    Run(RunView),
+    Run(Box<RunView>),
     Ready,
 }
 
@@ -2769,7 +2829,7 @@ impl<S: EventStore> OfficeFeed<S> {
         use tokio::sync::broadcast::error::RecvError;
         loop {
             if let Some(view) = self.pending.pop_front() {
-                return Some(OfficeFrame::Run(view));
+                return Some(OfficeFrame::Run(Box::new(view)));
             }
             if !self.scanned {
                 self.scanned = true;
