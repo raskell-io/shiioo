@@ -1,6 +1,6 @@
 # The desk: the web UI, and working with an employee directly
 
-Status: **requirements draft, for the owner's review** (phase 8 candidate). Nothing here is built. Decisions marked **D1**…**D13** are open; the rest follows from the picture.
+Status: **requirements draft, for the owner's review** (phase 8 candidate). Nothing here is built. Decisions marked **D1**…**D16** are open; the rest follows from the picture.
 
 Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the phone dashboard today), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
 
@@ -8,7 +8,7 @@ Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashb
 
 The phone is how the owner runs the company while away. The desk is how they run it while sitting at a big screen: every repository and machine in a sidebar, what needs them floated to the top, several runs open side by side, and the diff next to the request that asks to push it. Most of the time the owner still delegates. Sometimes the boss walks over to an employee's desk and says "no, do it like this", or sits down at the keyboard for ten minutes. Both are part of the job, and both stay on the record.
 
-Long term the desk is also a native app (in the spirit of Herdr: a sidebar of spaces and tabs, terminals for agents, a core that keeps working when the app closes). Shiioo already has that core: the office keeps the log, the leases and the workers, and survives restarts. So the web desk comes first, and it is built so that a native app is one more client of the same API, not a second product.
+Long term the desk is also a **Rust-native client app** (in the spirit of Herdr: a sidebar of spaces and tabs, terminals for agents, a core that keeps working when the app closes), drawn by a Rust UI toolkit rather than a web view. Shiioo already has that core: the office keeps the log, the leases and the workers, and survives restarts. So the web desk comes first (the phone needs it anyway), and both are built so that the native app is one more client of the same API, sharing Rust crates with the office instead of re-implementing it (section 10).
 
 | Today | With the desk |
 |---|---|
@@ -29,10 +29,11 @@ Principles that carry over unchanged: the log is the only state; the rules gate 
 - **Instructing an employee:** a message to a running or parked run, and a follow-up to a finished one.
 - **Taking over:** a live terminal in the desk attached to the run's own harness session, in the run's worktree (or container), with the rules hook installed; handing back to the employee afterwards.
 - API additions that any client can use, a native app included.
+- The groundwork the Rust-native client will stand on: typed wire types, a client crate, one source for design tokens (section 10).
 
 **Out (for this phase):**
 
-- The native app itself. What this phase owes it is an API with nothing the web desk alone can do (R3).
+- The native app itself (a phase 9 candidate, section 10). What this phase owes it is an API with nothing the web desk alone can do (R3), and the shared crates.
 - A general shell on the office machine. A takeover opens the harness, not a login shell (see R11 on harness shell escapes).
 - Several people at the desk. One owner.
 - Editing files in the browser. The worktree is a git branch; the owner edits it through the employee, through a takeover, or in their own editor.
@@ -125,7 +126,8 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 3. **8c. Instructing:** parked runs and `UserMessage` (shared with 7a), `POST /v1/runs/{run}/messages`, turn-boundary and **Now** delivery, follow-up continuation runs.
 4. **8d. Takeover on the office machine:** PTY driver mode for Claude Code and Codex, the terminal WebSocket and its ADR, attach tickets, transcript import, hand back, restart recovery.
 5. **8e. Takeover in containers and on nodes,** once the node transport can stream.
-6. **Later:** the native app, as a client of the same API.
+6. **Alongside 8a–8d:** the groundwork for the native client (T37–T41): wire types, `shiioo-client`, the CLI and node moved onto it, tokens from one source.
+7. **Phase 9 candidate:** the Rust-native client app (section 10).
 
 ## 7. Acceptance
 
@@ -155,6 +157,9 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 | D11 | Order with phase 7 (conversation) | Build the shared parked-run kernel once, in whichever phase comes first; 8a and 8b do not depend on it |
 | D12 | The monospace face for logs, diffs and the terminal | Bundle one OFL face (JetBrains Mono or Iosevka) next to Inter, so every machine renders the same |
 | D13 | Syntax highlighting without a build step | A small vendored highlighter (Prism core plus a handful of languages) or a server-side highlighter in the diff endpoint |
+| D14 | The native toolkit | Decide after a spike (T42). Lead candidate GPUI (GPU-drawn, Zed's toolkit, Zed already embeds `alacritty_terminal` in it); Iced as the more conventional alternative; a web view shell (Tauri) is the fallback, not the goal |
+| D15 | How web and native share the sidebar logic | The Rust office model in `shiioo-client` is the reference; the JS desk is tested against the same event fixtures and expected states (no WASM, so no build step) |
+| D16 | Shared design tokens | `ui/tokens.toml` as the source; `tokens.css` generated and checked in, with a test that fails when they drift; the native app reads the TOML |
 
 ## 9. Tasks
 
@@ -230,3 +235,28 @@ One line each, in build order within a phase. "Needs" names what must land first
 |---|---|---|---|---|
 | T25 | Takeover inside a `container` run: `exec` with a TTY into the run's container, same mounts and egress | `shiioo-runtime/src/sandbox/` | T22 | Egress allow list still holds during a takeover |
 | T26 | A streaming path between node and office for the terminal (D7), then takeover on remote nodes | `shiioo-node`, ADR-0012 follow-up | T22 | `/run on:spark …` can be taken over from the desk |
+
+### Groundwork for the Rust-native client (alongside 8a–8d)
+
+| | Task | Where | Needs | Done when |
+|---|---|---|---|---|
+| T37 | Wire types: request and response structs for every `/v1` endpoint and SSE payload, used by the handlers instead of ad-hoc `json!`; the OpenAPI document generated from them (api.md section 7, today deferred) | new `crates/shiioo-wire`, `shiioo-api` | | Handlers compile against the types; `/v1/openapi.json` served; a test fails on an unreviewed change |
+| T38 | `shiioo-client`: a typed async client over the wire types: REST with `Idempotency-Key`, the per-run and office-wide SSE streams with `Last-Event-ID` resume and backoff, the terminal WebSocket, and the office model (the fold from events to sidebar state, D15) | new `crates/shiioo-client` | T37, T2 | Tests against an in-process office: resume after a dropped stream sees every event once; the model matches the fixture states |
+| T39 | Move the CLI and the node onto `shiioo-client`, removing their hand-rolled `reqwest` calls | `crates/shiioo/src/main.rs`, `crates/shiioo-node` | T38 | No direct `reqwest` use outside `shiioo-client` and the providers; existing tests pass |
+| T40 | Design tokens from one source (D16) and owner theme / key files with a schema owned by a Rust type | `ui/tokens.toml`, `shiioo-wire`, `tests/dashboard.rs` | T28, T34 | Editing a token without regenerating fails a test; the schema rejects an unknown key |
+| T41 | Terminal frame protocol written down in ADR-0013 with a Rust reference client in `shiioo-client` and a test that attaches, types, resizes and detaches | `docs/adr/`, `shiioo-client` | T17, T20, T38 | The web desk and the Rust test speak the same frames |
+
+## 10. The Rust-native client *(phase 9 candidate, not designed in detail)*
+
+What the owner asked for: long term, a desktop app written in Rust and drawn natively, at least as polished as Herdr. This section records what it is and what the web desk must not get in the way of; it becomes its own design document when phase 9 starts.
+
+- **N1. A client, never a second office.** The app holds no state of its own beyond window layout and preferences. Everything comes from `/v1` through `shiioo-client`; closing it stops nothing.
+- **N2. Same crates as the office.** Wire types (`shiioo-wire`), the client and office model (`shiioo-client`), the theme and key file schemas. A change to the API breaks the app at compile time, not at run time.
+- **N3. Real terminals, natively.** Takeover sessions rendered with a Rust terminal emulator core (`alacritty_terminal`, as Zed does) fed by the same WebSocket frames as the web desk (T41).
+- **N4. The same polish bar.** U1–U14 apply unchanged, with native equivalents: system notifications, a menu-bar item with the "needs you" count, global shortcut to the palette, native window tabs and splits.
+- **N5. Several offices.** The app can hold more than one office connection (home studio, a second machine), each with its own token in the OS keychain.
+- **N6. Same personalisation.** It reads the owner's `.shiioo/desk/theme.toml` and `keys.toml` through the API, so the web and native desks look and behave alike.
+
+| | Task | Where | Needs | Done when |
+|---|---|---|---|---|
+| T42 | Toolkit spike (D14): a sidebar fed by the office-wide stream, one live log, and one terminal over the takeover WebSocket, in GPUI and in Iced; measure frame time, memory, text quality and terminal fidelity | `spikes/native-*` (not in the workspace) | T38, T41 | A written comparison and a recommendation in an ADR |
