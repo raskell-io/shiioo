@@ -9,7 +9,7 @@ use crate::redact::Redactor;
 use crate::sandbox::{Sandbox, SandboxContext};
 use crate::secrets::{self, NoSecrets, SecretSource};
 use crate::spec::{HarnessSpec, RunSpec, Runtime};
-use crate::status::{as_text, unresolved_unknown};
+use crate::status::{as_text, parked, unresolved_unknown, wake_reason};
 use crate::tools::ToolOutput;
 use crate::workspace::{self, WorktreeError};
 use serde_json::{Value, json};
@@ -52,6 +52,8 @@ pub enum RunOutcome {
     LostLease,
     /// The owner cancelled the run.
     Cancelled(String),
+    /// The run is parked, waiting for this (`input`), and holds no lease.
+    Parked(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -159,6 +161,14 @@ impl<S: EventStore + 'static> Worker<S> {
     /// Takes the run's lease and works on it until it finishes, needs
     /// attention, or the lease is lost.
     pub async fn drive(&self, run_id: RunId) -> Result<RunOutcome, WorkerError> {
+        // A parked run with nothing new is left alone, without taking (and
+        // then holding) its lease.
+        let before = self.store.read(run_id, Seq(0)).await?;
+        if let Some((_, waiting_for)) = parked(&before)
+            && wake_reason(&before).is_none()
+        {
+            return Ok(RunOutcome::Parked(waiting_for.to_owned()));
+        }
         let lease = match self
             .store
             .acquire_lease(run_id, self.id.clone(), self.ttl_ms)
@@ -263,6 +273,22 @@ impl<S: EventStore + 'static> Session<'_, S> {
         if let Some(outcome) = self.cancel_if_requested().await? {
             return Ok(outcome);
         }
+        if parked(&self.log).is_some() {
+            match wake_reason(&self.log) {
+                Some(reason) => {
+                    self.append(vec![Payload::RunWoken {
+                        reason: reason.into(),
+                    }])
+                    .await?;
+                }
+                // Parked again between the check in `drive` and the lease.
+                None => {
+                    return Ok(RunOutcome::Parked(
+                        parked(&self.log).map_or("input", |(_, w)| w).to_owned(),
+                    ));
+                }
+            }
+        }
         if let Runtime::Harness(spec) = self.spec.runtime.clone() {
             return self.run_harness(&spec).await;
         }
@@ -295,6 +321,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
             }
 
             let transcript = context::transcript(&self.spec, &self.log);
+            let context_seq = Seq(self.log.len() as u64);
             let tools = self.worker.machine.toolbox().specs(&self.spec.agent.tools);
             let response = self
                 .worker
@@ -310,6 +337,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
             self.append(vec![Payload::ModelResponseRecorded {
                 model: response.model.clone(),
                 response: recorded,
+                context_seq: Some(context_seq),
             }])
             .await?;
             self.crash(CrashPoint::AfterModelResponse)?;
@@ -344,11 +372,24 @@ impl<S: EventStore + 'static> Session<'_, S> {
         let calls = response.tool_calls();
         if calls.is_empty() {
             let text = response.text();
-            self.append(vec![Payload::RunCompleted {
-                output: json!(text),
-            }])
-            .await?;
-            return Ok(Some(RunOutcome::Completed(text)));
+            let (last, outcome) = if self.spec.park_on_answer {
+                (
+                    Payload::RunParked {
+                        waiting_for: "input".into(),
+                        wake_at: None,
+                    },
+                    RunOutcome::Parked("input".into()),
+                )
+            } else {
+                (
+                    Payload::RunCompleted {
+                        output: json!(text),
+                    },
+                    RunOutcome::Completed(text),
+                )
+            };
+            // A message that arrived during the turn is answered first.
+            return Ok(self.settle(last).await?.then_some(outcome));
         }
         for call in calls {
             if self.intent(&CallId(call.id.clone())).is_err() {
@@ -709,6 +750,38 @@ impl<S: EventStore + 'static> Session<'_, S> {
         ))
     }
 
+    /// Appends the run's last word for now (`RunCompleted` or `RunParked`)
+    /// unless the owner wrote since the latest model response: then
+    /// nothing is appended and `false` says the model must answer first.
+    /// The append names the seq it expects, so a message can't slip in
+    /// between the check and the write.
+    async fn settle(&mut self, last: Payload) -> Result<bool, WorkerError> {
+        let lease = self.current_lease()?;
+        for _ in 0..4 {
+            self.catch_up().await?;
+            if unread_input(&self.log) {
+                return Ok(false);
+            }
+            let next = Seq(self.log.len() as u64);
+            match self
+                .worker
+                .store
+                .append(&lease, next, vec![last.clone()])
+                .await
+            {
+                Ok(events) => {
+                    self.absorb(events);
+                    return Ok(true);
+                }
+                Err(StoreError::SeqConflict { actual, .. }) if actual > next => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(WorkerError::Spec(
+            "the log kept changing while finishing".into(),
+        ))
+    }
+
     /// Reads events appended by others since the last read.
     async fn catch_up(&mut self) -> Result<(), WorkerError> {
         let from = Seq(self.log.len() as u64);
@@ -766,6 +839,7 @@ fn redact_outcome(redactor: &Redactor, outcome: RunOutcome) -> RunOutcome {
         }
         RunOutcome::Cancelled(t) => RunOutcome::Cancelled(redactor.redact_str(&t, &mut counts)),
         RunOutcome::LostLease => RunOutcome::LostLease,
+        RunOutcome::Parked(w) => RunOutcome::Parked(w),
     }
 }
 
@@ -808,4 +882,23 @@ fn parse_spec(log: &[Event]) -> Result<RunSpec, WorkerError> {
             "log does not start with RunCreated".into(),
         )),
     }
+}
+
+/// A message from the owner that the latest model response did not see:
+/// after the part of the log its request was built from.
+fn unread_input(log: &[Event]) -> bool {
+    let seen = log
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, e)| match &*e.payload {
+            Payload::ModelResponseRecorded { context_seq, .. } => {
+                Some(context_seq.map_or(i, |s| s.0 as usize))
+            }
+            _ => None,
+        })
+        .unwrap_or(0);
+    log.iter()
+        .skip(seen)
+        .any(|e| matches!(*e.payload, Payload::UserMessage { .. }))
 }

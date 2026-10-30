@@ -698,6 +698,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             agent.tools = plans::planner_tools();
         }
         let spec = RunSpec {
+            park_on_answer: false,
             task: plans::planner_task(repo_label, goal),
             agent,
             runtime,
@@ -763,9 +764,11 @@ impl<S: EventStore + 'static> ApiState<S> {
             | RunStatus::NeedsAttention { reason } => PlanStatus::Failed {
                 reason: reason.clone(),
             },
-            RunStatus::Open | RunStatus::WaitingApproval { .. } => PlanStatus::Failed {
-                reason: "the planning run stopped without finishing".into(),
-            },
+            RunStatus::Open | RunStatus::WaitingApproval { .. } | RunStatus::Parked { .. } => {
+                PlanStatus::Failed {
+                    reason: "the planning run stopped without finishing".into(),
+                }
+            }
         };
         let text = plans::plan_text(plan);
         self.save_plans(&plans);
@@ -914,6 +917,7 @@ impl<S: EventStore + 'static> ApiState<S> {
         };
         let run_id = self
             .start_run(RunSpec {
+                park_on_answer: false,
                 task: routine.task.clone(),
                 agent,
                 runtime,
@@ -1645,7 +1649,9 @@ pub fn describe(ev: &Event) -> String {
         Payload::LeaseAcquired { worker, .. } => {
             format!("lease acquired by {} (epoch {})", worker.0, ev.epoch.0)
         }
-        Payload::ModelResponseRecorded { model, response } => {
+        Payload::ModelResponseRecorded {
+            model, response, ..
+        } => {
             let text: Vec<&str> = response["content"]
                 .as_array()
                 .into_iter()
@@ -1723,6 +1729,8 @@ pub fn describe(ev: &Event) -> String {
         Payload::MailSent { to, subject, .. } => {
             format!("mail sent to {}: {subject}", to.join(", "))
         }
+        Payload::RunParked { waiting_for, .. } => format!("parked, waiting for {waiting_for}"),
+        Payload::RunWoken { reason } => format!("woken by {reason}"),
         Payload::RunCompleted { output } => format!("completed: {}", one_line(output, 140)),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
         Payload::RunCancelled { reason } => format!("cancelled: {reason}"),
@@ -1911,6 +1919,7 @@ async fn create_run<S: EventStore + 'static>(
                 .transpose()?;
             let (runtime, agent, _) = state.assign_role(role, repo, body.isolation.as_deref())?;
             RunSpec {
+                park_on_answer: false,
                 task: body.task,
                 agent,
                 runtime,
@@ -1926,6 +1935,7 @@ async fn create_run<S: EventStore + 'static>(
             let (runtime, agent, _) =
                 state.assign_with(employee, repo, body.isolation.as_deref())?;
             RunSpec {
+                park_on_answer: false,
                 task: body.task,
                 agent,
                 runtime,
@@ -1943,6 +1953,7 @@ async fn create_run<S: EventStore + 'static>(
                     .map_err(ApiError::BadRequest)?;
             }
             RunSpec {
+                park_on_answer: false,
                 task: body.task,
                 agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
                 runtime,

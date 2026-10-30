@@ -69,6 +69,12 @@ pub enum Payload {
     ModelResponseRecorded {
         model: String,
         response: Value,
+        /// How many events of the log the request was built from: input
+        /// at or after this seq (a message sent while the model was busy)
+        /// was not seen by this response, even if it is recorded before
+        /// it. Absent for harness responses and older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_seq: Option<Seq>,
     },
     ToolIntent {
         call_id: CallId,
@@ -171,6 +177,19 @@ pub enum Payload {
         subject: String,
         message_id: String,
     },
+    /// The worker has nothing to do until something arrives: `input` (a
+    /// `UserMessage`) for now; `timer` with `wake_at` later. Appending it
+    /// ends the writer's lease, so a parked run holds no lease and any
+    /// worker can take it when it is woken.
+    RunParked {
+        waiting_for: String,
+        wake_at: Option<Timestamp>,
+    },
+    /// The first thing a worker writes after taking a parked run again,
+    /// with what woke it (`input`).
+    RunWoken {
+        reason: String,
+    },
     RunCompleted {
         output: Value,
     },
@@ -183,6 +202,11 @@ pub enum Payload {
 }
 
 impl Payload {
+    /// Ends the writer's lease: nothing may follow it in the same batch.
+    pub fn is_parking(&self) -> bool {
+        matches!(self, Payload::RunParked { .. })
+    }
+
     /// Nothing may be appended after a terminal event.
     pub fn is_terminal(&self) -> bool {
         matches!(

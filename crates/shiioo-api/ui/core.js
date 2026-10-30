@@ -38,7 +38,7 @@ export function ago(ms) {
   return `${Math.floor(d / 86400)} d ago`;
 }
 
-export const GLYPH = { open: "▶", waiting_approval: "🔐", needs_attention: "⚠️", completed: "✅", failed: "❌", cancelled: "🛑" };
+export const GLYPH = { open: "▶", waiting_approval: "🔐", needs_attention: "⚠️", completed: "✅", failed: "❌", cancelled: "🛑", parked: "💤" };
 
 // ---- API ---------------------------------------------------------------
 export class Unauthorized extends Error {}

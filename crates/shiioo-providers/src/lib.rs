@@ -208,6 +208,10 @@ fn messages(transcript: &Transcript) -> Vec<Value> {
                 "content": content,
             }));
         }
+        // The owner's messages after this turn, after its tool results.
+        if !turn.messages.is_empty() {
+            out.push(json!({ "role": "user", "content": turn.messages.join("\n\n") }));
+        }
     }
     out
 }
@@ -485,6 +489,7 @@ mod tests {
                     content: "a b".into(),
                     is_error: true,
                 }],
+                messages: vec!["Use ls -a.".into(), "Hidden ones too.".into()],
             }],
         };
         let m = messages(&transcript);
@@ -500,6 +505,12 @@ mod tests {
         assert_eq!(m[3]["role"], "tool");
         assert_eq!(m[3]["tool_call_id"], "call_1");
         assert_eq!(m[3]["content"], "Error: a b");
+        // The owner's messages follow the tool results as one user turn.
+        assert_eq!(
+            m[4],
+            json!({ "role": "user", "content": "Use ls -a.\n\nHidden ones too." })
+        );
+        assert_eq!(m.len(), 5);
     }
 
     #[test]

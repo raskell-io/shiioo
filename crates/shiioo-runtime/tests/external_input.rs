@@ -49,6 +49,7 @@ impl Fixture {
     async fn start(&self) -> RunId {
         self.worker()
             .create(&RunSpec {
+                park_on_answer: false,
                 task: "Write a note.".into(),
                 agent: AgentSpec {
                     model: "scripted".into(),

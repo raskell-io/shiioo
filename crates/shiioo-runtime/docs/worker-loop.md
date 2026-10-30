@@ -34,6 +34,11 @@ through `src/worker.rs` and names every outcome.
 cancel requested?  ──yes──►  append RunCancelled  ──►  Cancelled
         │no
         ▼
+parked?  ──yes──►  message since?  ──yes──►  append RunWoken { input }
+        │no              │no
+        │                ▼
+        │           Parked (nothing written)
+        ▼
 spec.runtime is Harness?  ──yes──►  run_harness (section 4)
         │no
         ▼
@@ -50,6 +55,13 @@ runs before any work and again at the top of every native turn, and the
 harness path checks it after every line the harness prints. Cancellation is
 therefore noticed at the run's next step, not instantly.
 
+**Parked runs.** `drive` reads the log before taking the lease: a run whose
+latest `RunParked` has no `RunWoken` after it and no `UserMessage` since
+(`status::parked`, `status::wake_reason`) returns `Parked` without taking a
+lease, so a spurious wake-up costs nothing. With a message, the worker takes
+the lease (the parker's ended when it parked, see `RunHead::append`) and
+writes `RunWoken { reason: "input" }` before anything else.
+
 ## 3. Native runtime
 
 The native loop is Shiioo's own agent loop: model provider plus Shiioo tools
@@ -61,15 +73,27 @@ on the machine. One iteration:
 3. `context::transcript(spec, log)` rebuilds the conversation: each
    `ModelResponseRecorded` becomes an assistant turn, each `ToolResult`
    attaches to its call (a later result for the same call replaces an
-   earlier one), and a `ToolOutcomeUnknown` becomes an error block telling
-   the model the machine stopped while that call was running.
+   earlier one), a `ToolOutcomeUnknown` becomes an error block telling
+   the model the machine stopped while that call was running, and each
+   `UserMessage` becomes text in the next user turn, after the tool
+   results (`Turn::messages`; before the first response it is added to the
+   task). A message recorded before a response whose request did not
+   include it (`context_seq` at or before it: sent while the model was
+   busy) is placed after that response, not before it.
 4. `provider.complete(ModelRequest { model, transcript, tools })`.
-5. Append `ModelResponseRecorded { model, response }`.
+5. Append `ModelResponseRecorded { model, response, context_seq }`, where
+   `context_seq` is the log length the transcript was built from.
    Crash point `AfterModelResponse`.
 6. `act_on(response)`:
    - `StopReason::Refusal` → `RunFailed("the model declined the request")`.
    - `StopReason::MaxTokens` → `RunFailed("the response hit max_tokens before finishing")`.
-   - No tool calls → `RunCompleted { output: response.text() }`.
+   - No tool calls → `settle`: `RunCompleted { output: response.text() }`,
+     or `RunParked { waiting_for: "input" }` when `spec.park_on_answer` (a
+     conversation). `settle` first catches up, and if a `UserMessage` came
+     after the latest response's `context_seq` it appends nothing and the
+     loop runs another turn, so the model answers the owner first. The
+     append names the seq it expects, so a message can't slip in between
+     the check and the write.
    - Otherwise `call_tool` for every `ToolCall` that has no `ToolIntent`
      yet.
 
@@ -171,6 +195,7 @@ its hook.
 | `Cancelled(reason)` | `RunCancelled` | a `CancelRequested` seen at the next step |
 | `NeedsAttention(reason)` | none (run stays open) | a side-effecting tool whose outcome the journal cannot settle |
 | `LostLease` | none | fence or expired lease; another worker owns the run |
+| `Parked(waiting_for)` | none (`RunParked`; the run stays open) | a `park_on_answer` run answered; or `drive` on a parked run with no new message |
 
 Crash injection (`Faults { crash_at: Some(CrashPoint) }`) exists only for
 tests; `tests/crash_recovery.rs` kills a worker at every point and checks the

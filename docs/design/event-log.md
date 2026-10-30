@@ -84,14 +84,16 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 |---|---|---|---|
 | `RunCreated` | `spec: Value` | store | Seq 0. The run's input: agent id, task, parent link, options. |
 | `LeaseAcquired` | `worker, expires_at` | store | A worker took the run; starts epoch `n`. |
-| `ModelResponseRecorded` | `model, response: Value` | worker | The complete model response, recorded before any tool in it runs. |
+| `ModelResponseRecorded` | `model, response: Value, context_seq?` | worker | The complete model response, recorded before any tool in it runs. `context_seq` (native loop) is the log length its request was built from: a message at or after it was not seen by this response, even if recorded before it. |
 | `ToolIntent` | `call_id, tool, class: ToolClass, input` | worker | About to dispatch a tool call. `class` is `Pure`, `Idempotent { key }` or `SideEffecting`. |
 | `ToolResult` | `call_id, output, is_error` | worker | The tool's outcome. |
 | `ToolOutcomeUnknown` | `call_id` | worker | A side-effecting call may or may not have happened. Blocks the run until reconciled. |
 | `HarnessSessionStarted` | `harness, version, session_id, cwd, model` | worker | A harness started or resumed a session; its steps follow as the events above ([runtimes-and-providers.md](runtimes-and-providers.md)). |
 | `HarnessResult` | `harness, session_id, subtype, is_error, cost_usd, usage, permission_denials` | worker | The harness's own summary, before the terminal event. |
 | `CapacityObserved` | `provider, windows` | worker | A provider's rate-limit windows, as seen by a harness. Input for capacity routing. |
-| `UserMessage` | `author, content` | server (external) | Input from a person or integration. The payload exists; nothing sends it yet. |
+| `UserMessage` | `author, content` | server (external) | Input from a person or integration. The native loop shows it to the model and wakes a parked run with it; no endpoint sends it yet (`POST /v1/runs/{run}/messages`, [desk.md](desk.md) T12). |
+| `RunParked` | `waiting_for: input, wake_at?` | worker | The worker has nothing to do until a message arrives. Appending it ends the writer's lease (`RunHead::append`), so a parked run holds no lease; it must be last in its batch. `timer` with `wake_at` is planned. |
+| `RunWoken` | `reason: input` | worker | The first event a worker writes after taking a parked run again. |
 | `PolicyDecision` | `call_id?, tool, decision: allow\|deny\|ask, rule?, reason` | server (external, `shiioo-api::ApiState::permission`) | The owner's rules' verdict on a tool call ([governance.md](governance.md)). |
 | `ApprovalRequested` | `approval_id, call_id?, tool, input, summary, expires_at?` | server (external) | The owner has been asked; the tool call waits. |
 | `ApprovalDecided` | `approval_id, decision: allow\|deny, by, note?` | server (external) | The owner's answer, or `by: timeout`. |
@@ -112,8 +114,6 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 | `ForkedFrom` | `parent_run_id, parent_seq, parent_hash, changes` | store (at create) | First own event of a forked run, instead of `RunCreated`. Written at `parent_seq + 1` with `prev_hash = parent_hash`, so seqs and the hash chain continue from the parent's prefix ([fork-and-replay.md](fork-and-replay.md)). |
 | `ReplayOf` | `source_run_id, mode: strict\|live_on_divergence\|stop_on_divergence, changes` | store (at create) | Seq 0 of a replay run ([fork-and-replay.md](fork-and-replay.md)). |
 | `ReplayDiverged` | `turn, expected_digest, actual_digest` | worker | A replayed turn no longer matches the recording. |
-| `RunParked` | `waiting_for: input\|approval\|tool\|timer, wake_at?` | worker | The worker releases the run; no lease is held while parked. |
-| `RunWoken` | `reason` | worker | First event after a parked run is picked up again. |
 | `ToolReconciled` | `call_id, outcome, source: node\|hook\|human` | worker | Resolves a `ToolOutcomeUnknown`. |
 | `BudgetWarning` / `BudgetExceeded` | `budget_id, used, limit` | worker | Soft limit crossed; hard limit hit (the run parks or fails, per budget) ([governance.md](governance.md)). |
 | `ConfigUpdated` | `kind, from_version, to_version` | worker | A change marked `applies_to_running` took effect mid-run ([governance.md](governance.md)). |

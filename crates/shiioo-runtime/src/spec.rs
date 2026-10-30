@@ -13,6 +13,11 @@ pub struct RunSpec {
     /// selector. None: the office's own machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// Native runtime: when the agent answers without calling a tool, park
+    /// the run for the owner's next message (`RunParked { input }`) instead
+    /// of completing it. A conversation is a run that parks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub park_on_answer: bool,
 }
 
 /// The agent working on a run. Inline for now; versioned agent definitions

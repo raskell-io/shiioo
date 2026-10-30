@@ -26,6 +26,8 @@ export function describe(ev) {
     }
     case "secret_redacted": return `redacted secret ${p.name} (${p.count} occurrence(s))`;
     case "mail_sent": return `mail sent to ${(p.to || []).join(", ")}: ${p.subject}`;
+    case "run_parked": return `parked, waiting for ${p.waiting_for}`;
+    case "run_woken": return `woken by ${p.reason}`;
     case "run_completed": return `completed: ${trunc(typeof p.output === "string" ? p.output : JSON.stringify(p.output), 140)}`;
     case "run_failed": return `failed: ${p.reason}`;
     case "run_cancelled": return `cancelled: ${p.reason}`;

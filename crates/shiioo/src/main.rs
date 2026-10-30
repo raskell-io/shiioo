@@ -422,6 +422,7 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 role.apply(&mut runtime, &mut agent);
             }
             let spec = RunSpec {
+                park_on_answer: false,
                 task,
                 agent,
                 runtime,
@@ -1519,6 +1520,7 @@ fn status_line(view: &shiioo_api::RunView) -> String {
         RunStatus::Completed { .. } => ("✅", String::new()),
         RunStatus::Failed { reason } => ("❌", format!(" {reason}")),
         RunStatus::Cancelled { .. } => ("🛑", String::new()),
+        RunStatus::Parked { waiting_for } => ("💤", format!(" waiting for {waiting_for}")),
     };
     let task: String = view.task.chars().take(70).collect();
     let place = match (&view.machine, &view.worker) {
@@ -1631,6 +1633,7 @@ impl shiioo_telegram::Office for TelegramOffice {
                 None => employee,
             };
             let spec = RunSpec {
+                park_on_answer: false,
                 task: task.clone(),
                 agent,
                 runtime,
@@ -1898,6 +1901,9 @@ impl Notifications for TelegramNotifications {
                 RunStatus::Open | RunStatus::WaitingApproval { .. } => {
                     format!("⏸ {} stopped without finishing: {task}", short(run))
                 }
+                RunStatus::Parked { .. } => {
+                    format!("💤 {} waits for your message: {task}", short(run))
+                }
             };
             self.notifier
                 .notify(&format!("{text}{}", self.link(run)))
@@ -1954,6 +1960,7 @@ impl shiioo_intake::IntakeSink for IssueSink {
             let run = self
                 .state
                 .start_run(RunSpec {
+                    park_on_answer: false,
                     task,
                     agent,
                     runtime,
@@ -1977,7 +1984,9 @@ impl shiioo_intake::IntakeSink for IssueSink {
             let run = uuid::Uuid::parse_str(&run_id).ok().map(RunId)?;
             let view = self.state.run_view(run).await.ok()?;
             match view.status {
-                RunStatus::Open | RunStatus::WaitingApproval { .. } => None,
+                RunStatus::Open | RunStatus::WaitingApproval { .. } | RunStatus::Parked { .. } => {
+                    None
+                }
                 RunStatus::Completed { output } => Some(Ok(output)),
                 RunStatus::Failed { reason } => Some(Err(reason)),
                 RunStatus::Cancelled { reason } => Some(Err(reason)),
@@ -2362,6 +2371,10 @@ async fn drive(
             RunOutcome::Cancelled(reason) => {
                 eprintln!("run {reason}");
                 return Ok(ExitCode::from(4));
+            }
+            RunOutcome::Parked(waiting_for) => {
+                eprintln!("run parked, waiting for {waiting_for}");
+                return Ok(ExitCode::SUCCESS);
             }
             RunOutcome::LostLease => eprintln!("lease lost, taking the run again"),
         }

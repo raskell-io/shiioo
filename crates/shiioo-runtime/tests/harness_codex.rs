@@ -106,6 +106,7 @@ impl Fixture {
         harness.binary_args = vec![fake.binary().to_string_lossy().into_owned()];
         harness.repo = repo;
         let spec = RunSpec {
+            park_on_answer: false,
             task: "Run date and report its output.".into(),
             agent: AgentSpec {
                 model: String::new(),

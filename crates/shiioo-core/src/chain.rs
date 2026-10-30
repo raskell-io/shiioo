@@ -94,6 +94,7 @@ mod tests {
                 Payload::ModelResponseRecorded {
                     model: "test".into(),
                     response: json!({ "i": i }),
+                    context_seq: None,
                 },
             );
             match ev {

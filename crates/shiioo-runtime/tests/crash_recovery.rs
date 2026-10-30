@@ -112,6 +112,7 @@ impl<S: EventStore + 'static> Fixture<S> {
 
     async fn start(&self) -> RunId {
         let spec = RunSpec {
+            park_on_answer: false,
             task: "Charge the customer 42 and check their note.".into(),
             agent: AgentSpec {
                 model: "scripted".into(),
