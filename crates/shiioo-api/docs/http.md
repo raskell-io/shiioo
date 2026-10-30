@@ -151,6 +151,27 @@ reason }`; the worker notices at its next step (next harness line or next
 native turn) and appends `RunCancelled`. A run that already closed → `409
 the run has already finished`.
 
+### `POST /v1/runs/{id}/messages` → `202 Accepted`, `{"seq": n}`
+
+The owner writes to a run: `{"text": "…"}` is appended as `UserMessage {
+author: "owner" }` without a lease (`ApiState::send_message`), and `seq` is
+where it landed.
+
+- A parked run becomes runnable and is driven (or, if it is addressed to a
+  machine, that node is woken); a run being worked on reads the message at
+  its next turn, and answers it before completing or parking (see
+  `shiioo-runtime/docs/worker-loop.md`). An open run that nobody drives is
+  picked up.
+- With `Idempotency-Key`, a repeat for the same run returns the first
+  message's `seq` with `200` and appends nothing. Sends are serialized
+  while the key is checked and the message appended, so a retry racing the
+  first attempt waits for it. The keys are kept in memory.
+- `400` for an empty text; `404` for an unknown run; `409` for a finished
+  run, and for Claude Code and Codex runs, which can't take messages until
+  harness delivery exists (desk T13).
+- When a drive ends, the office re-reads the run: a message that arrived
+  while the drive was ending (and so did not start another) wakes it then.
+
 ### `GET /v1/runs/{id}/diff` → `200`, `text/plain`
 
 `git -C <repo> diff --stat -p HEAD...shiioo/<run>` for a harness run with a

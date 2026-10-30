@@ -30,15 +30,15 @@ pub use model::{
     BoxFuture, ModelProvider, ModelRequest, ModelResponse, ProviderError, StopReason, ToolCall,
     ToolResultBlock, ToolSpec, Transcript, Turn, Usage,
 };
-pub use scripted::ScriptedProvider;
 pub use redact::Redactor;
 pub use sandbox::{Sandbox, SandboxError};
+pub use scripted::ScriptedProvider;
 pub use secrets::{NoSecrets, SecretSource};
 pub use spec::{
     AgentSpec, ContainerSpec, Egress, HarnessBilling, HarnessKind, HarnessSpec, Isolation, Mount,
     OpenshellSpec, RunSpec, Runtime,
 };
-pub use status::{RunStatus, open_approval, run_status};
+pub use status::{RunStatus, open_approval, parked, run_status, wake_reason};
 pub use tools::{Tool, ToolOutput, Toolbox};
 pub use unconfigured::UnconfiguredProvider;
 pub use worker::{CrashPoint, Faults, RunOutcome, Worker, WorkerError};

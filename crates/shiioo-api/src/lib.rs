@@ -75,7 +75,7 @@ use shiioo_rules::{Decision, PermissionRequest, RuleSet};
 use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
 use shiioo_runtime::{
     AgentSpec, HarnessSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
-    open_approval, run_status,
+    open_approval, run_status, wake_reason,
 };
 use shiioo_store::Notifying;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -324,6 +324,10 @@ pub struct ApiState<S> {
     /// `Idempotency-Key` → run, so a retried create doesn't start a second
     /// run. In memory for now: it does not survive a restart.
     idempotency: Mutex<HashMap<String, RunId>>,
+    /// `(run, Idempotency-Key)` → where that message landed. Held across
+    /// the append, so a retry racing the first attempt waits for it
+    /// instead of appending twice. In memory, like `idempotency`.
+    message_keys: tokio::sync::Mutex<HashMap<(RunId, String), MessageAck>>,
     /// Runs this process is driving, so a resume doesn't start a second
     /// worker in the same process (the lease would refuse it anyway).
     active: Mutex<HashSet<RunId>>,
@@ -387,6 +391,17 @@ pub struct DecideBody {
     pub decision: String,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MessageBody {
+    pub text: String,
+}
+
+/// Where a message landed in the run's log.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageAck {
+    pub seq: u64,
 }
 
 #[derive(Deserialize, Default)]
@@ -464,6 +479,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             default_agent,
             options,
             idempotency: Mutex::new(HashMap::new()),
+            message_keys: tokio::sync::Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             plans: Mutex::new(plans),
@@ -1342,6 +1358,66 @@ impl<S: EventStore + 'static> ApiState<S> {
     }
 
     /// Asks a run to stop. The worker closes it at its next step.
+    /// The owner writes to a run: the message is appended without a lease
+    /// and the run is driven if that made it runnable (a parked run wakes;
+    /// a run being worked on reads it at its next turn). With `key`, a
+    /// repeat returns where the first one landed (`Ok((ack, false))`).
+    pub async fn send_message(
+        self: &Arc<Self>,
+        run_id: RunId,
+        text: &str,
+        key: Option<String>,
+    ) -> Result<(MessageAck, bool), ApiError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(ApiError::BadRequest("the message is empty".into()));
+        }
+        let mut keys = self.message_keys.lock().await;
+        if let Some(ack) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
+            return Ok((*ack, false));
+        }
+        let log = self.store.read(run_id, Seq(0)).await?;
+        if let Some(Runtime::Harness(h)) = run_spec(&log).map(|s| s.runtime) {
+            return Err(ApiError::Conflict(format!(
+                "{} runs can't take messages yet; cancel it or start a follow-up run",
+                h.harness.name()
+            )));
+        }
+        let events = match self
+            .store
+            .append_external(
+                run_id,
+                vec![Payload::UserMessage {
+                    author: "owner".into(),
+                    content: text.to_owned(),
+                }],
+            )
+            .await
+        {
+            Ok(events) => events,
+            Err(StoreError::RunClosed(_)) => {
+                return Err(ApiError::Conflict(
+                    "the run has finished; it no longer accepts messages".into(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let ack = MessageAck {
+            seq: events.last().map_or(0, |e| e.seq.0),
+        };
+        if let Some(k) = key {
+            keys.insert((run_id, k), ack);
+        }
+        drop(keys);
+        // A parked run is runnable again; an open one that nobody drives
+        // (after a restart, say) is picked up so the message is answered.
+        if matches!(self.run_view(run_id).await?.status, RunStatus::Open) {
+            self.spawn_drive(run_id);
+            self.work_notify.notify_waiters();
+        }
+        Ok((ack, true))
+    }
+
     pub async fn cancel(&self, run_id: RunId, by: &str, reason: &str) -> Result<(), ApiError> {
         match self
             .store
@@ -1544,6 +1620,15 @@ impl<S: EventStore + 'static> ApiState<S> {
                 }
             }
             lock(&state.active).remove(&run_id);
+            // A message that arrived while this drive was ending found the
+            // run still active and did not start another; look again now
+            // that it is not.
+            if let Ok(log) = state.store.read(run_id, Seq(0)).await
+                && wake_reason(&log).is_some()
+            {
+                state.spawn_drive(run_id);
+                return;
+            }
             state.after_run(run_id).await;
         });
     }
@@ -1758,6 +1843,7 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/events/stream", get(office_events::<S>))
         .route("/v1/runs/{id}/resume", post(resume_run::<S>))
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
+        .route("/v1/runs/{id}/messages", post(post_message::<S>))
         .route("/v1/runs/{id}/lease", post(acquire_lease::<S>))
         .route("/v1/runs/{id}/lease/renew", post(renew_lease::<S>))
         .route("/v1/machines", get(machines_list::<S>))
@@ -2328,6 +2414,25 @@ async fn resume_run<S: EventStore + 'static>(
     state.spawn_drive(run_id);
     state.work_notify.notify_waiters();
     Ok((StatusCode::ACCEPTED, Json(current)))
+}
+
+async fn post_message<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<MessageBody>,
+) -> Result<(StatusCode, Json<MessageAck>), ApiError> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let (ack, new) = state.send_message(parse_run(&id)?, &body.text, key).await?;
+    let code = if new {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((code, Json(ack)))
 }
 
 async fn cancel_run<S: EventStore + 'static>(

@@ -91,7 +91,7 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 | `HarnessSessionStarted` | `harness, version, session_id, cwd, model` | worker | A harness started or resumed a session; its steps follow as the events above ([runtimes-and-providers.md](runtimes-and-providers.md)). |
 | `HarnessResult` | `harness, session_id, subtype, is_error, cost_usd, usage, permission_denials` | worker | The harness's own summary, before the terminal event. |
 | `CapacityObserved` | `provider, windows` | worker | A provider's rate-limit windows, as seen by a harness. Input for capacity routing. |
-| `UserMessage` | `author, content` | server (external) | Input from a person or integration. The native loop shows it to the model and wakes a parked run with it; no endpoint sends it yet (`POST /v1/runs/{run}/messages`, [desk.md](desk.md) T12). |
+| `UserMessage` | `author, content` | server (external) | Input from a person or integration. The native loop shows it to the model and wakes a parked run with it; `POST /v1/runs/{run}/messages` sends it. |
 | `RunParked` | `waiting_for: input, wake_at?` | worker | The worker has nothing to do until a message arrives. Appending it ends the writer's lease (`RunHead::append`), so a parked run holds no lease; it must be last in its batch. `timer` with `wake_at` is planned. |
 | `RunWoken` | `reason: input` | worker | The first event a worker writes after taking a parked run again. |
 | `PolicyDecision` | `call_id?, tool, decision: allow\|deny\|ask, rule?, reason` | server (external, `shiioo-api::ApiState::permission`) | The owner's rules' verdict on a tool call ([governance.md](governance.md)). |
