@@ -15,7 +15,7 @@ export function describe(ev) {
     case "harness_session_started": return `${p.harness} session ${p.session_id} (${p.model})`;
     case "harness_result": return `harness result: ${p.subtype}, cost $${Number(p.cost_usd || 0).toFixed(4)}`;
     case "capacity_observed": return `capacity ${p.provider}: 5h ${Math.round((p.windows?.five_hour?.utilization || 0) * 100)}%, 7d ${Math.round((p.windows?.seven_day?.utilization || 0) * 100)}% used`;
-    case "user_message": return `${p.author}: ${trunc(p.content, 140)}`;
+    case "user_message": return `${p.author === "owner" ? "you" : p.author}: ${trunc(p.content, 140)}`;
     case "policy_decision": return `rules: ${p.decision} ${p.tool} (${p.reason})`;
     case "approval_requested": return `waiting for approval: ${p.summary}`;
     case "approval_decided": return `${p.decision} by ${p.by}`;

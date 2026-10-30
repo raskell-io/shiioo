@@ -1,6 +1,6 @@
 // The run list: capacity line, one row per run, the new-task form.
 
-import { api, app, ago, el, esc, GLYPH, onLeave, short, showError } from "../core.js";
+import { api, app, ago, el, esc, GLYPH, onLeave, short, showError, stateLabel } from "../core.js";
 
 export async function renderList(showForm = false) {
   app.innerHTML = "";
@@ -23,7 +23,7 @@ export async function renderList(showForm = false) {
         list.appendChild(el(`<li><a class="row" href="#run=${esc(r.id)}">
           <span class="glyph status-${esc(st)}">${GLYPH[st] || "•"}</span>
           <span><span class="task">${esc(r.task || "(no task)")}</span>
-            <span class="muted">${esc(st.replace("_", " "))}${st === "waiting_approval" ? ": " + esc(r.status.summary) : ""}</span></span>
+            <span class="muted">${esc(stateLabel(st))}${st === "waiting_approval" ? ": " + esc(r.status.summary) : ""}</span></span>
           <span class="meta">${esc(ago(r.updated_at))}<br><span class="id">${esc(short(r.id))}</span></span>
         </a></li>`));
       }

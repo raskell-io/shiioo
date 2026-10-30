@@ -68,7 +68,17 @@ url` from `config.toml` (or the listen address).
 - **Resume** when the run is open, posting to `/resume`.
 - **Diff** fetches `/diff` and shows it in a `<pre class="diff">`.
 - The **log**: every event rendered with the same one-line `describe()` the
-  server uses, newest at the bottom.
+  server uses, newest at the bottom; the owner's messages read "you: …" in
+  the accent colour.
+- The **message box**, pinned under the log while the run can still read a
+  message (open, waiting approval, needs attention, parked): posts to
+  `/v1/runs/{id}/messages` with an `Idempotency-Key` made per message and
+  kept until it is accepted, so resending after a dropped connection can't
+  deliver it twice. ⌘/Ctrl-Enter sends. The hint says when it will be read:
+  at the next turn (native), when Claude Code or Codex finishes its current
+  step (read from the run's spec in the first log event), or "it is waiting
+  for your reply" for a parked run. The message appears in the log through
+  the live stream, not optimistically.
 
 ## Live log
 

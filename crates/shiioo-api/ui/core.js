@@ -38,6 +38,10 @@ export function ago(ms) {
   return `${Math.floor(d / 86400)} d ago`;
 }
 
+const LABEL = { parked: "waiting for you" };
+/** How a run state reads in a sentence: "waiting approval", "waiting for you". */
+export const stateLabel = (st) => LABEL[st] || String(st).replace("_", " ");
+
 export const GLYPH = { open: "▶", waiting_approval: "🔐", needs_attention: "⚠️", completed: "✅", failed: "❌", cancelled: "🛑", parked: "💤" };
 
 // ---- API ---------------------------------------------------------------
