@@ -205,7 +205,7 @@ async fn a_message_wakes_a_parked_run_once_even_when_retried() {
 }
 
 #[tokio::test]
-async fn messages_are_refused_where_nobody_would_read_them() {
+async fn messages_are_refused_where_nobody_would_read_them_and_harness_runs_take_them() {
     let office = office().await;
 
     // Empty.
@@ -221,20 +221,13 @@ async fn messages_are_refused_where_nobody_would_read_them() {
     let resp = office.say(done, "One more thing.", None).await;
     assert_eq!(resp.status(), 409);
 
-    // A harness run, until harness delivery exists.
-    let harness = office
-        .create(Runtime::Harness(HarnessSpec::claude_code()), false)
-        .await;
-    let resp = office.say(harness, "Hello?", None).await;
-    assert_eq!(resp.status(), 409);
-    let problem: Value = resp.json().await.unwrap_or_default();
-    assert!(
-        problem["detail"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("claude-code"),
-        "{problem}"
-    );
+    // A harness run takes messages too (delivered when its process
+    // finishes). `/bin/false` stands in for Claude Code, so the drive the
+    // message starts fails at once instead of running a real harness.
+    let mut spec = HarnessSpec::claude_code();
+    spec.binary = Some("/bin/false".into());
+    let harness = office.create(Runtime::Harness(spec), false).await;
+    assert_eq!(office.say(harness, "Hello?", None).await.status(), 202);
 
     // Unknown run, and no token.
     let resp = office.say(RunId::new(), "Hi.", None).await;

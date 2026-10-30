@@ -290,7 +290,13 @@ impl<S: EventStore + 'static> Session<'_, S> {
             }
         }
         if let Runtime::Harness(spec) = self.spec.runtime.clone() {
-            return self.run_harness(&spec).await;
+            // A message the harness has not seen when it finishes is
+            // delivered by resuming its session: one more process.
+            loop {
+                if let Some(outcome) = self.run_harness(&spec).await? {
+                    return Ok(outcome);
+                }
+            }
         }
         if let Some(reason) = unresolved_unknown(&self.log) {
             return Ok(RunOutcome::NeedsAttention(reason));
@@ -389,7 +395,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
                 )
             };
             // A message that arrived during the turn is answered first.
-            return Ok(self.settle(last).await?.then_some(outcome));
+            return Ok(self.settle(last, native_seen).await?.then_some(outcome));
         }
         for call in calls {
             if self.intent(&CallId(call.id.clone())).is_err() {
@@ -418,7 +424,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
     /// Drives an external harness for this run. The harness executes its
     /// own tools; Shiioo records what it sees. A session that was started
     /// by a previous worker is resumed rather than started again.
-    async fn run_harness(&mut self, spec: &HarnessSpec) -> Result<RunOutcome, WorkerError> {
+    async fn run_harness(&mut self, spec: &HarnessSpec) -> Result<Option<RunOutcome>, WorkerError> {
         // The repository as this machine has it: by label when the spec
         // names one this machine knows, else by the spec's path.
         let repo = match (&spec.repo_label, &spec.repo) {
@@ -434,7 +440,8 @@ impl<S: EventStore + 'static> Session<'_, S> {
                         label.as_deref().unwrap_or("?"),
                         path.display()
                     ))
-                    .await;
+                    .await
+                    .map(Some);
             }
             (_, None) => None,
         };
@@ -451,31 +458,26 @@ impl<S: EventStore + 'static> Session<'_, S> {
             }
             None => self.worker.machine.workspace().to_path_buf(),
         };
-        let starts: Vec<String> = self
-            .log
-            .iter()
-            .filter_map(|e| match &*e.payload {
-                Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
-                _ => None,
-            })
-            .collect();
-        if starts.len() >= MAX_HARNESS_STARTS {
+        let session = self.log.iter().rev().find_map(|e| match &*e.payload {
+            Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        });
+        // Starts since the session last finished cleanly: resumes after a
+        // crash, not deliveries of the owner's messages.
+        let unfinished = unfinished_starts(&self.log);
+        if unfinished >= MAX_HARNESS_STARTS {
             return self
                 .fail(format!(
-                    "harness stopped without finishing {} times",
-                    starts.len()
+                    "harness stopped without finishing {unfinished} times"
                 ))
-                .await;
+                .await
+                .map(Some);
         }
-        let (prompt, resume) = match starts.last() {
-            Some(session) => (harness::CONTINUE_PROMPT, Some(session.as_str())),
-            None => (self.spec.task.as_str(), None),
-        };
         // The harness's environment: secrets are resolved here and only
         // here; a reference nobody can resolve is the owner's to fix.
         let env = match secrets::resolve_env(&spec.env, &*self.worker.secrets) {
             Ok(env) => env,
-            Err(reason) => return self.fail(reason).await,
+            Err(reason) => return self.fail(reason).await.map(Some),
         };
         let ctx = SandboxContext {
             run_id: self.run_id,
@@ -493,9 +495,15 @@ impl<S: EventStore + 'static> Session<'_, S> {
             Err(e) => {
                 return self
                     .fail(format!("{} isolation: {e}", spec.isolation.level()))
-                    .await;
+                    .await
+                    .map(Some);
             }
         };
+        // Where the harness runs is on the record before it starts. This
+        // event also marks what the process is told: messages before it
+        // go into its prompt, messages after it are unread.
+        self.append(vec![sandbox.started()]).await?;
+        let prompt = harness_prompt(&self.log, &self.spec.task, session.is_some());
         let mut driver = harness::driver_for(spec, &self.spec.agent, &cwd).await;
         let run_id = self.run_id.to_string();
         let hooks = sandbox.hooks();
@@ -503,8 +511,8 @@ impl<S: EventStore + 'static> Session<'_, S> {
             spec,
             &self.spec.agent,
             &cwd,
-            prompt,
-            resume,
+            &prompt,
+            session.as_deref(),
             hooks.as_ref().map(|h| (h, run_id.as_str())),
         );
         let cmd = sandbox.wrap(cmd);
@@ -530,8 +538,6 @@ impl<S: EventStore + 'static> Session<'_, S> {
             }
             None => tokio::time::Instant::now() + Duration::from_secs(60 * 60 * 24 * 365),
         };
-        // Where the harness runs is on the record before it starts.
-        self.append(vec![sandbox.started()]).await?;
         let result = self
             .drive_harness(cmd, &mut *driver, &redactor, deadline, spec)
             .await;
@@ -547,7 +553,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
         redactor: &Redactor,
         deadline: tokio::time::Instant,
         spec: &HarnessSpec,
-    ) -> Result<RunOutcome, WorkerError> {
+    ) -> Result<Option<RunOutcome>, WorkerError> {
         let mut process = HarnessProcess::spawn(cmd)?;
         let mut lost = self.lease_lost.clone();
         loop {
@@ -560,27 +566,57 @@ impl<S: EventStore + 'static> Session<'_, S> {
                             "time budget of {} minutes exceeded",
                             spec.max_minutes.unwrap_or(0)
                         ))
-                        .await;
+                        .await
+                        .map(Some);
                 }
                 _ = lost.changed() => {
                     process.kill().await;
-                    return Ok(RunOutcome::LostLease);
+                    return Ok(Some(RunOutcome::LostLease));
                 }
             };
             let Some(line) = line else { break };
             let step = driver.interpret(&line)?;
-            if !step.payloads.is_empty() {
-                self.append(redactor.redact_payloads(step.payloads)).await?;
+            let mut payloads = redactor.redact_payloads(step.payloads);
+            // The harness finished its task: complete (or park), unless
+            // the owner wrote since this process started.
+            if let Some(RunOutcome::Completed(text)) = &step.outcome
+                && let Some(completed) =
+                    payloads.pop_if(|p| matches!(p, Payload::RunCompleted { .. }))
+            {
+                if !payloads.is_empty() {
+                    self.append(payloads).await?;
+                }
+                let (last, outcome) = if self.spec.park_on_answer {
+                    (
+                        Payload::RunParked {
+                            waiting_for: "input".into(),
+                            wake_at: None,
+                        },
+                        RunOutcome::Parked("input".into()),
+                    )
+                } else {
+                    (completed, RunOutcome::Completed(text.clone()))
+                };
+                if self.settle(last, harness_seen).await? {
+                    return Ok(Some(redact_outcome(redactor, outcome)));
+                }
+                // Let the process exit on its own, so the session is saved
+                // before it is resumed with the message.
+                process.finish().await;
+                return Ok(None);
+            }
+            if !payloads.is_empty() {
+                self.append(payloads).await?;
             }
             if let Some(outcome) = step.outcome {
                 // The outcome is printed and sent to the phone; it must
                 // say what the record says.
-                return Ok(redact_outcome(redactor, outcome));
+                return Ok(Some(redact_outcome(redactor, outcome)));
             }
             if cancel_requested(&self.log).is_some() {
                 process.kill().await;
                 if let Some(outcome) = self.cancel_if_requested().await? {
-                    return Ok(outcome);
+                    return Ok(Some(outcome));
                 }
             }
         }
@@ -755,11 +791,15 @@ impl<S: EventStore + 'static> Session<'_, S> {
     /// nothing is appended and `false` says the model must answer first.
     /// The append names the seq it expects, so a message can't slip in
     /// between the check and the write.
-    async fn settle(&mut self, last: Payload) -> Result<bool, WorkerError> {
+    async fn settle(
+        &mut self,
+        last: Payload,
+        seen: fn(&[Event]) -> usize,
+    ) -> Result<bool, WorkerError> {
         let lease = self.current_lease()?;
         for _ in 0..4 {
             self.catch_up().await?;
-            if unread_input(&self.log) {
+            if unread_input(&self.log, seen) {
                 return Ok(false);
             }
             let next = Seq(self.log.len() as u64);
@@ -884,11 +924,17 @@ fn parse_spec(log: &[Event]) -> Result<RunSpec, WorkerError> {
     }
 }
 
-/// A message from the owner that the latest model response did not see:
-/// after the part of the log its request was built from.
-fn unread_input(log: &[Event]) -> bool {
-    let seen = log
-        .iter()
+/// A message from the owner at or after `seen(log)`: the agent has not
+/// seen it yet.
+fn unread_input(log: &[Event], seen: fn(&[Event]) -> usize) -> bool {
+    log.iter()
+        .skip(seen(log))
+        .any(|e| matches!(*e.payload, Payload::UserMessage { .. }))
+}
+
+/// Native loop: what the latest model request was built from.
+fn native_seen(log: &[Event]) -> usize {
+    log.iter()
         .enumerate()
         .rev()
         .find_map(|(i, e)| match &*e.payload {
@@ -897,8 +943,173 @@ fn unread_input(log: &[Event]) -> bool {
             }
             _ => None,
         })
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// Harness: the latest process start. Messages before it were in its
+/// prompt (`harness_prompt`).
+fn harness_seen(log: &[Event]) -> usize {
     log.iter()
-        .skip(seen)
-        .any(|e| matches!(*e.payload, Payload::UserMessage { .. }))
+        .rposition(|e| matches!(*e.payload, Payload::SandboxStarted { .. }))
+        .map_or(0, |i| i + 1)
+}
+
+/// What a harness process is told, given the log up to and including the
+/// `SandboxStarted` written for it: the task, the owner's messages since
+/// the previous process started, or, after a crash, a request to continue.
+fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
+    let starts: Vec<usize> = log
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(*e.payload, Payload::SandboxStarted { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    let (from, to) = match starts.as_slice() {
+        [.., previous, current] => (*previous, *current),
+        [current] => (0, *current),
+        [] => (0, log.len()),
+    };
+    let messages: Vec<String> = log[from..to]
+        .iter()
+        .filter_map(|e| match &*e.payload {
+            Payload::UserMessage { author, content } if author == "owner" => Some(content.clone()),
+            Payload::UserMessage { author, content } => Some(format!("{author}: {content}")),
+            _ => None,
+        })
+        .collect();
+    let messages = messages.join("\n\n");
+    let finished = log[..to]
+        .iter()
+        .rev()
+        .take_while(|e| !matches!(*e.payload, Payload::HarnessSessionStarted { .. }))
+        .any(|e| matches!(*e.payload, Payload::HarnessResult { .. }));
+    match (resumed, finished, messages.is_empty()) {
+        (false, _, true) => task.to_owned(),
+        (false, _, false) => format!("{task}\n\n{messages}"),
+        (true, true, false) => messages,
+        (true, _, true) => harness::CONTINUE_PROMPT.to_owned(),
+        (true, false, false) => format!(
+            "{}\n\nWhile you were stopped, the owner wrote:\n\n{messages}",
+            harness::CONTINUE_PROMPT
+        ),
+    }
+}
+
+/// Harness sessions started since the session last finished cleanly.
+fn unfinished_starts(log: &[Event]) -> usize {
+    log.iter()
+        .rev()
+        .take_while(|e| !matches!(*e.payload, Payload::HarnessResult { .. }))
+        .filter(|e| matches!(*e.payload, Payload::HarnessSessionStarted { .. }))
+        .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiioo_core::{Epoch, RunId, Timestamp};
+
+    fn log(payloads: Vec<Payload>) -> Vec<Event> {
+        let run = RunId::new();
+        let mut out: Vec<Event> = Vec::new();
+        for (i, p) in payloads.into_iter().enumerate() {
+            let prev = out.last().map(|e| e.hash);
+            match Event::seal(run, Seq(i as u64), Epoch(1), Timestamp(i as u64), prev, p) {
+                Ok(ev) => out.push(ev),
+                Err(e) => panic!("{e}"),
+            }
+        }
+        out
+    }
+
+    fn start() -> Payload {
+        Payload::SandboxStarted {
+            level: "worktree".into(),
+            detail: json!({}),
+        }
+    }
+
+    fn session() -> Payload {
+        Payload::HarnessSessionStarted {
+            harness: "claude-code".into(),
+            version: String::new(),
+            session_id: "s".into(),
+            cwd: String::new(),
+            model: String::new(),
+        }
+    }
+
+    fn result() -> Payload {
+        Payload::HarnessResult {
+            harness: "claude-code".into(),
+            session_id: "s".into(),
+            subtype: "success".into(),
+            is_error: false,
+            cost_usd: None,
+            usage: json!({}),
+            permission_denials: json!([]),
+        }
+    }
+
+    fn say(text: &str) -> Payload {
+        Payload::UserMessage {
+            author: "owner".into(),
+            content: text.into(),
+        }
+    }
+
+    fn created() -> Payload {
+        Payload::RunCreated { spec: json!({}) }
+    }
+
+    #[test]
+    fn the_first_process_gets_the_task_and_earlier_messages() {
+        let l = log(vec![created(), say("In sango."), start()]);
+        assert_eq!(harness_prompt(&l, "Fix it.", false), "Fix it.\n\nIn sango.");
+        let l = log(vec![created(), start()]);
+        assert_eq!(harness_prompt(&l, "Fix it.", false), "Fix it.");
+    }
+
+    #[test]
+    fn after_a_clean_finish_the_prompt_is_the_new_messages() {
+        let l = log(vec![
+            created(),
+            start(),
+            session(),
+            say("One."),
+            result(),
+            say("Two."),
+            start(),
+        ]);
+        assert_eq!(harness_prompt(&l, "Fix it.", true), "One.\n\nTwo.");
+    }
+
+    #[test]
+    fn after_a_crash_the_harness_continues_and_hears_the_messages() {
+        let l = log(vec![created(), start(), session(), start()]);
+        assert_eq!(
+            harness_prompt(&l, "Fix it.", true),
+            harness::CONTINUE_PROMPT
+        );
+        let l = log(vec![created(), start(), session(), say("Hurry."), start()]);
+        let prompt = harness_prompt(&l, "Fix it.", true);
+        assert!(prompt.starts_with(harness::CONTINUE_PROMPT), "{prompt}");
+        assert!(prompt.ends_with("the owner wrote:\n\nHurry."), "{prompt}");
+    }
+
+    #[test]
+    fn only_crashes_count_against_the_start_limit() {
+        let l = log(vec![session(), result(), session(), result(), session()]);
+        assert_eq!(unfinished_starts(&l), 1);
+        let l = log(vec![session(), session(), session()]);
+        assert_eq!(unfinished_starts(&l), 3);
+    }
+
+    #[test]
+    fn a_harness_has_seen_what_came_before_its_start() {
+        let l = log(vec![created(), say("Before."), start(), session()]);
+        assert!(!unread_input(&l, harness_seen));
+        let l = log(vec![created(), start(), session(), say("During.")]);
+        assert!(unread_input(&l, harness_seen));
+    }
 }

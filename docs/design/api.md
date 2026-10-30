@@ -25,7 +25,7 @@ One office means no `{org}` or `{project}` segment in the built routes: `/v1/run
 | Agents | `GET/POST /v1/projects/{project}/agents`, `GET/PATCH /v1/agents/{agent}`, `GET /v1/agents/{agent}/versions` *(planned; today the agent is inline in the run body or an `[[employees]]` entry)* |
 | Runs | `POST /v1/runs` *(built)*, `GET /v1/runs` *(built; most recently updated first)*, `GET /v1/runs/{run}` *(built)* |
 | Run events | `GET /v1/runs/{run}/events?from={seq}` *(built; `limit` planned)*, `GET /v1/runs/{run}/events/stream` *(built)* |
-| Run commands | `POST /v1/runs/{run}/messages` *(built, native runs)*, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` *(planned)* |
+| Run commands | `POST /v1/runs/{run}/messages` *(built)*, `POST /v1/runs/{run}/cancel` *(built)*, `POST /v1/runs/{run}/resume` *(built)*, `POST /v1/runs/{run}/fork` *(planned)* |
 | Dashboard | `GET /` (and `/ui`, `/ui/app.js`, `/ui/app.css`) *(built)*: the mobile web dashboard, static, no auth on the page itself; it stores the token from `#token=…` locally and sends it on every API call |
 | Capacity | `GET /v1/capacity` *(built)*: the latest rate-limit windows per provider (`five_hour`, `seven_day`: utilization, reset time), folded from `CapacityObserved` events; the broker and the phone read it |
 | Diff | `GET /v1/runs/{run}/diff` *(built)*: `git diff HEAD...shiioo/<run>` of a repo run, text/plain |
@@ -70,7 +70,7 @@ HTTP/1.1 201 Created
 
 The same body is returned by `GET /v1/runs/{run}` and, one per run, by `GET /v1/runs`. `status` is one of `open`, `waiting_approval` (with the pending request), `completed` (with the final `output`), `failed`, `needs_attention`, `cancelled` (with a `reason`), folded from the log by `shiioo-runtime::status`. *(planned)* `Location` header, `machine` and `budget` fields, and a `stream` URL in the response.
 
-### Sending a message to a run *(built for native runs)*
+### Sending a message to a run *(built)*
 
 ```http
 POST /v1/runs/run_01J9…/messages
@@ -83,7 +83,7 @@ Idempotency-Key: 9b0d…
 { "seq": 41 }
 ```
 
-Built: `202` with the message's `seq`; the run is woken if it was parked, and a run being worked on answers the message before it completes or parks. A repeat with the same `Idempotency-Key` returns the first `seq` with `200`. `409` for a finished run and, until harness delivery ([desk.md](desk.md) T13), for Claude Code and Codex runs. Details: [`shiioo-api/docs/http.md`](../../crates/shiioo-api/docs/http.md).
+Built: `202` with the message's `seq`; the run is woken if it was parked, and a run being worked on answers the message before it completes or parks. A repeat with the same `Idempotency-Key` returns the first `seq` with `200`. A Claude Code or Codex run reads it when its process finishes: the session is resumed with the message instead of completing. `409` for a finished run. Details: [`shiioo-api/docs/http.md`](../../crates/shiioo-api/docs/http.md).
 
 ### Forking *(planned)*
 

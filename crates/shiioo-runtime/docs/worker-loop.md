@@ -140,14 +140,21 @@ this is the loop around them.
    on branch `shiioo/<first 8 chars of run id>`. A machine without a
    worktrees root fails the run with `this machine has no worktree directory
    for repo runs`. Without a repo the harness runs in `machine.workspace()`.
-2. **Start budget.** `starts` = number of `HarnessSessionStarted` events in
-   the log. At `MAX_HARNESS_STARTS` (5) the run fails with `harness stopped
-   without finishing N times`.
-3. **Prompt.** First start: the task. Later starts: `CONTINUE_PROMPT` ("The
-   process running you was stopped before you finished. Check the current
-   state of the workspace, then continue the task to completion.") together
-   with the last recorded session id, so the harness resumes its own
-   conversation.
+2. **Start budget.** `unfinished_starts` = `HarnessSessionStarted` events
+   since the last `HarnessResult` (resumes after a crash, not deliveries of
+   messages). At `MAX_HARNESS_STARTS` (5) the run fails with `harness
+   stopped without finishing N times`.
+3. **Marker and prompt.** `SandboxStarted` is appended before every process
+   starts, and marks what that process is told (`harness_prompt`): messages
+   before it are in its prompt, messages after it are unread. First start:
+   the task, plus any messages sent before it. After the session finished
+   cleanly (a `HarnessResult` since its start): the owner's messages since
+   the previous start. After a crash: `CONTINUE_PROMPT` ("The process
+   running you was stopped before you finished. Check the current state of
+   the workspace, then continue the task to completion."), followed by
+   "While you were stopped, the owner wrote:" and the messages, if any.
+   Every later start passes the last recorded session id, so the harness
+   resumes its own conversation.
 4. **Command.** `driver_for(spec, agent, cwd)` picks the adapter (Codex also
    gets its `--version` probed) and `driver.command(spec, agent, cwd, prompt,
    resume, hooks)` builds the `tokio::process::Command`. `hooks` is the
@@ -159,6 +166,13 @@ this is the loop around them.
    - line → `driver.interpret(line)` → append each payload; when the
      interpretation carries an outcome (`RunCompleted`/`RunFailed`) return
      it; then `cancel_if_requested` → kill and return `Cancelled`.
+   - a successful finish is not appended directly: the `HarnessResult` is,
+     then `settle` appends `RunCompleted` (or `RunParked { input }` when
+     `park_on_answer`) only if no message came after this process's
+     `SandboxStarted` (`harness_seen`). Otherwise the process is let exit,
+     `run_harness` returns `None`, and `Session::run` calls it again: a new
+     sandbox, a new marker, and the session resumed with the messages as
+     its prompt.
    - deadline → kill, `RunFailed("time budget of N minutes exceeded")`.
    - lease lost → kill, `LostLease`.
 7. **End of output without an outcome.** `HarnessError::ExitedEarly { status,

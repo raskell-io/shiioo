@@ -1360,7 +1360,8 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// Asks a run to stop. The worker closes it at its next step.
     /// The owner writes to a run: the message is appended without a lease
     /// and the run is driven if that made it runnable (a parked run wakes;
-    /// a run being worked on reads it at its next turn). With `key`, a
+    /// a run being worked on reads it at its next turn, a harness when its
+    /// process finishes, by resuming the session with it). With `key`, a
     /// repeat returns where the first one landed (`Ok((ack, false))`).
     pub async fn send_message(
         self: &Arc<Self>,
@@ -1375,13 +1376,6 @@ impl<S: EventStore + 'static> ApiState<S> {
         let mut keys = self.message_keys.lock().await;
         if let Some(ack) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
             return Ok((*ack, false));
-        }
-        let log = self.store.read(run_id, Seq(0)).await?;
-        if let Some(Runtime::Harness(h)) = run_spec(&log).map(|s| s.runtime) {
-            return Err(ApiError::Conflict(format!(
-                "{} runs can't take messages yet; cancel it or start a follow-up run",
-                h.harness.name()
-            )));
         }
         let events = match self
             .store

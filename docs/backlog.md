@@ -31,7 +31,6 @@ Known rough edges and small debts, found while reviewing or documenting the code
 - **Codex ignores `max_turns` and `max_budget_usd`**: neither has a `codex exec` equivalent that is passed today; `max_minutes` is the budget that applies to both harnesses.
 - **Codex's hook matcher is `^(Bash|shell)$`**, so its file edits and MCP calls are recorded but not gated by the rules (the rules know `Edit`/`Write`, not `apply_patch`).
 - **`max_turns` counts every response in a run**, so a conversation (a run that parks after each answer) eventually fails with "stopped after N turns". It should count the turns since the run last woke, or conversations should get their own limit.
-- **A message to a run whose worker crashed mid-turn** may already be placed in the transcript before the crashed turn's response when that response carries no `context_seq` (harness runs); the native loop records `context_seq`, harness runs get message delivery in desk T13.
 - **The intake's branch placeholder** is filled with the literal `$(git branch --show-current)`, which only expands when the agent runs the command in a shell. Letting the caller choose the run id would allow the real branch name.
 - **The Linux systemd unit** does not pass `--keep-awake` (macOS-only today) and the install path is untested on Linux.
 - **The `Command::Hook` arm** in the CLI's dispatch is unreachable (the hook path returns earlier); harmless, but tidy it when touching that match.

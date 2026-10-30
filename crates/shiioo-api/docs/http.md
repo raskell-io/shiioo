@@ -166,9 +166,12 @@ where it landed.
   message's `seq` with `200` and appends nothing. Sends are serialized
   while the key is checked and the message appended, so a retry racing the
   first attempt waits for it. The keys are kept in memory.
+- Claude Code and Codex read the message when their process finishes:
+  instead of completing, the worker resumes the session with the message
+  as the prompt (`shiioo-runtime/docs/worker-loop.md`, section 4). The
+  "Now" option that interrupts the process is desk T14.
 - `400` for an empty text; `404` for an unknown run; `409` for a finished
-  run, and for Claude Code and Codex runs, which can't take messages until
-  harness delivery exists (desk T13).
+  run.
 - When a drive ends, the office re-reads the run: a message that arrived
   while the drive was ending (and so did not start another) wakes it then.
 
