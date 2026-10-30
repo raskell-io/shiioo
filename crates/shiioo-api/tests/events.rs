@@ -63,7 +63,9 @@ struct Reader {
 
 impl Reader {
     async fn open(http: &reqwest::Client, base: &str, last_id: Option<u64>) -> Self {
-        let mut req = http.get(format!("{base}/v1/events/stream")).bearer_auth(TOKEN);
+        let mut req = http
+            .get(format!("{base}/v1/events/stream"))
+            .bearer_auth(TOKEN);
         if let Some(id) = last_id {
             req = req.header("last-event-id", id.to_string());
         }

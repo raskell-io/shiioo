@@ -862,10 +862,7 @@ reason = "pushes leave the machine"
         // `|&` pipes stderr too; still a separator.
         assert_eq!(split_command("make |& tee log"), vec!["make", "tee log"]);
         // An unbalanced quote keeps the rest together, as the shell would.
-        assert_eq!(
-            split_command("echo \"oops && rm -rf /"),
-            vec!["echo \"oops && rm -rf /"]
-        );
+        assert_eq!(split_command("echo \"oops && rm -rf /"), vec!["echo \"oops && rm -rf /"]);
     }
 
     #[test]

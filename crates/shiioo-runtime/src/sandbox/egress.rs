@@ -65,10 +65,7 @@ pub fn proxy_env(url: &str) -> Vec<(String, String)> {
 }
 
 pub async fn ensure_network(engine: &str) -> Result<(), SandboxError> {
-    if output(engine, &["network", "inspect", NETWORK])
-        .await
-        .is_ok()
-    {
+    if output(engine, &["network", "inspect", NETWORK]).await.is_ok() {
         return Ok(());
     }
     output(engine, &["network", "create", "--internal", NETWORK]).await?;

@@ -199,7 +199,9 @@ pub(crate) async fn output(program: &str, args: &[&str]) -> Result<String, Sandb
         .stdin(std::process::Stdio::null())
         .output()
         .await
-        .map_err(|e| SandboxError::Unavailable(format!("{program} is not available ({e})")))?;
+        .map_err(|e| {
+            SandboxError::Unavailable(format!("{program} is not available ({e})"))
+        })?;
     if !out.status.success() {
         return Err(SandboxError::Command {
             program: program.into(),
@@ -233,7 +235,10 @@ mod tests {
             with_host("http://127.0.0.1:7878", "host.docker.internal"),
             "http://host.docker.internal:7878"
         );
-        assert_eq!(with_host("http://0.0.0.0:80/v1", "h"), "http://h:80/v1");
+        assert_eq!(
+            with_host("http://0.0.0.0:80/v1", "h"),
+            "http://h:80/v1"
+        );
         assert_eq!(with_host("http://localhost", "h"), "http://h");
         assert_eq!(port_of("http://127.0.0.1:7878"), Some(7878));
         assert_eq!(port_of("http://localhost/x"), None);

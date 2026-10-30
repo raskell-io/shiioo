@@ -95,10 +95,7 @@ mod tests {
         env.insert("GH_TOKEN".to_owned(), "secret:gh-token".to_owned());
         match resolve_env(&env, &NoSecrets) {
             Err(err) => {
-                assert!(
-                    err.contains("gh-token") && err.contains("shiioo secret set"),
-                    "{err}"
-                );
+                assert!(err.contains("gh-token") && err.contains("shiioo secret set"), "{err}");
             }
             Ok(resolved) => panic!("resolved a missing secret: {resolved:?}"),
         }

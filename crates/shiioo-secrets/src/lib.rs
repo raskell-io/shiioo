@@ -183,10 +183,7 @@ mod tests {
     fn round_trips_and_persists_across_opens() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let store = SecretStore::open(dir.path()).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(
-            store.get("gh-token").unwrap_or_else(|e| panic!("{e}")),
-            None
-        );
+        assert_eq!(store.get("gh-token").unwrap_or_else(|e| panic!("{e}")), None);
         store
             .set("gh-token", "ghp_secret")
             .unwrap_or_else(|e| panic!("{e}"));

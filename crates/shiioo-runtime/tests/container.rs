@@ -97,7 +97,13 @@ impl Office {
         )])))
     }
 
-    async fn start(&self, script: &Path, image: &str, mounts: Vec<Mount>, egress: Egress) -> RunId {
+    async fn start(
+        &self,
+        script: &Path,
+        image: &str,
+        mounts: Vec<Mount>,
+        egress: Egress,
+    ) -> RunId {
         let mut harness = HarnessSpec::claude_code();
         harness.binary = Some(PathBuf::from("/bin/sh"));
         harness.binary_args = vec![script.to_string_lossy().into_owned()];
@@ -167,10 +173,7 @@ fn containers_named(prefix: &str) -> Vec<String> {
 #[ignore = "needs a running Docker daemon"]
 async fn runs_the_harness_in_a_container_with_the_worktree_mounted() {
     let office = Office::new();
-    let fixtures = PathBuf::from(FIXTURE)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
+    let fixtures = PathBuf::from(FIXTURE).parent().map(Path::to_path_buf).unwrap_or_default();
     // Prints the recorded session, then leaks the secret in a result line,
     // which the redactor must catch.
     let (fake_dir, script) = office.fake(&format!(
@@ -220,13 +223,14 @@ async fn runs_the_harness_in_a_container_with_the_worktree_mounted() {
             .any(|x| matches!(x, Payload::SecretRedacted { name, count: 1 } if name == "gh-token")),
         "{p:?}"
     );
-    assert!(
-        p.iter()
-            .any(|x| matches!(x, Payload::HarnessSessionStarted { .. }))
-    );
+    assert!(p.iter().any(|x| matches!(x, Payload::HarnessSessionStarted { .. })));
 
     // The worktree was the working directory, at its host path.
-    let worktree = office.data.path().join("worktrees").join(run.to_string());
+    let worktree = office
+        .data
+        .path()
+        .join("worktrees")
+        .join(run.to_string());
     let cwd = std::fs::read_to_string(fake_dir.join("cwd.txt")).unwrap_or_default();
     assert_eq!(cwd.trim(), worktree.to_string_lossy());
     let env = std::fs::read_to_string(fake_dir.join("env.txt")).unwrap_or_default();
@@ -267,18 +271,13 @@ async fn egress_allowlist_blocks_everything_else() {
                 let mut buf = [0u8; 1024];
                 let _ = socket.read(&mut buf).await;
                 socket
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\noffice",
-                    )
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\noffice")
                     .await
                     .ok();
             });
         }
     });
-    let fixtures = PathBuf::from(FIXTURE)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
+    let fixtures = PathBuf::from(FIXTURE).parent().map(Path::to_path_buf).unwrap_or_default();
     let (fake_dir, script) = office.fake(&format!(
         "head -n 1 '{FIXTURE}'\n\
          if curl -sSf --max-time 15 https://api.github.com/zen >/dev/null 2>&1; then a=ok; else a=blocked; fi\n\

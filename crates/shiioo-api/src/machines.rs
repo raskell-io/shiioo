@@ -56,11 +56,7 @@ impl Machine {
     /// One line for `/machines`.
     pub fn describe(&self, now_ms: u64) -> String {
         let state = if self.online(now_ms) { "🟢" } else { "⚪" };
-        let labels: Vec<String> = self
-            .labels
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect();
+        let labels: Vec<String> = self.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let mut line = format!("{state} {}", self.name);
         if !labels.is_empty() {
             line.push_str(&format!(" [{}]", labels.join(", ")));
@@ -277,10 +273,7 @@ mod tests {
         let now = 1_700_000_000_000;
         let labels = BTreeMap::from([("pool".to_owned(), "gpu".to_owned())]);
         let token = ms.create_enrollment(labels, now);
-        assert!(
-            ms.enroll("bad name", "x y", BTreeMap::new(), vec![], "1".into(), now)
-                .is_err()
-        );
+        assert!(ms.enroll("bad name", "x y", BTreeMap::new(), vec![], "1".into(), now).is_err());
         let machine_token = ms
             .enroll(
                 &token,
@@ -291,13 +284,8 @@ mod tests {
                 now,
             )
             .unwrap_or_else(|e| panic!("{e}"));
-        assert!(
-            ms.enroll(&token, "again", BTreeMap::new(), vec![], "1".into(), now)
-                .is_err()
-        );
-        let m = ms
-            .authenticate(&machine_token)
-            .unwrap_or_else(|| panic!("no machine"));
+        assert!(ms.enroll(&token, "again", BTreeMap::new(), vec![], "1".into(), now).is_err());
+        let m = ms.authenticate(&machine_token).unwrap_or_else(|| panic!("no machine"));
         assert_eq!(m.name, "spark");
         assert_eq!(m.labels.get("pool").map(String::as_str), Some("gpu"));
         assert_eq!(m.labels.get("gpu").map(String::as_str), Some("true"));
@@ -306,17 +294,7 @@ mod tests {
         assert!(m.online(now + 10_000) && !m.online(now + ONLINE_WINDOW_MS + 1));
         // An expired enrollment is gone.
         let t2 = ms.create_enrollment(BTreeMap::new(), now);
-        assert!(
-            ms.enroll(
-                &t2,
-                "late",
-                BTreeMap::new(),
-                vec![],
-                "1".into(),
-                now + ENROLLMENT_TTL_MS + 1
-            )
-            .is_err()
-        );
+        assert!(ms.enroll(&t2, "late", BTreeMap::new(), vec![], "1".into(), now + ENROLLMENT_TTL_MS + 1).is_err());
     }
 
     #[test]
@@ -326,21 +304,12 @@ mod tests {
         let token = ms.create_enrollment(BTreeMap::new(), now);
         ms.enroll(&token, "spark", BTreeMap::new(), vec![], "0.1".into(), now)
             .unwrap_or_else(|e| panic!("{e}"));
-        assert!(ms.heartbeat(
-            "spark",
-            Some("0.2".into()),
-            None,
-            vec!["r1".into()],
-            now + 5000
-        ));
+        assert!(ms.heartbeat("spark", Some("0.2".into()), None, vec!["r1".into()], now + 5000));
         assert!(!ms.heartbeat("ghost", None, None, vec![], now));
         let text = ms.text(now + 6000);
         assert!(text.starts_with("🟢 spark v0.2, 1 run(s)"), "{text}");
         let later = ms.text(now + 7_300_000);
-        assert!(
-            later.contains("⚪ spark") && later.contains("last seen 2h ago"),
-            "{later}"
-        );
+        assert!(later.contains("⚪ spark") && later.contains("last seen 2h ago"), "{later}");
         assert!(ms.revoke("spark") && !ms.revoke("spark"));
         assert!(ms.text(now).starts_with("No machines"));
     }

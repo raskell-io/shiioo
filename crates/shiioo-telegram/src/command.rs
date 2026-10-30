@@ -323,14 +323,8 @@ mod tests {
                 "/run @reviewer shiioo check PR 12",
                 run_as("reviewer", Some("shiioo"), "check PR 12"),
             ),
-            (
-                "/run @reviewer check PR 12",
-                run_as("reviewer", None, "check PR 12"),
-            ),
-            (
-                "@reviewer check PR 12",
-                run_as("reviewer", None, "check PR 12"),
-            ),
+            ("/run @reviewer check PR 12", run_as("reviewer", None, "check PR 12")),
+            ("@reviewer check PR 12", run_as("reviewer", None, "check PR 12")),
             ("@ check", run(None, "@ check")),
             (
                 "/run on:spark shiioo train the model",
@@ -370,12 +364,7 @@ mod tests {
             ("/enroll", Command::Unknown("/enroll".into())),
             ("/roles", Command::Roles),
             ("/routines", Command::Routines),
-            (
-                "/routine nightly",
-                Command::Routine {
-                    name: "nightly".into(),
-                },
-            ),
+            ("/routine nightly", Command::Routine { name: "nightly".into() }),
             ("/routine", Command::Unknown("/routine".into())),
             ("/report", Command::Report),
             ("/plans", Command::Plans),
@@ -393,18 +382,8 @@ mod tests {
                     goal: "ship v0.3".into(),
                 },
             ),
-            (
-                "/plan approve abcd",
-                Command::PlanApprove {
-                    plan: "abcd".into(),
-                },
-            ),
-            (
-                "/plan show abcd",
-                Command::PlanShow {
-                    plan: "abcd".into(),
-                },
-            ),
+            ("/plan approve abcd", Command::PlanApprove { plan: "abcd".into() }),
+            ("/plan show abcd", Command::PlanShow { plan: "abcd".into() }),
             ("/plan approve", Command::Unknown("/plan approve".into())),
             ("/plan", Command::Unknown("/plan".into())),
             ("/status", Command::Status),

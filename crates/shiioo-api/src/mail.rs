@@ -70,7 +70,10 @@ impl<S: EventStore + 'static> ApiState<S> {
                 return Err(ApiError::Forbidden(outcome.reason));
             }
         }
-        let message_id = sender.send(mail.clone()).await.map_err(ApiError::Failed)?;
+        let message_id = sender
+            .send(mail.clone())
+            .await
+            .map_err(ApiError::Failed)?;
         if let Some(run_id) = run {
             self.store
                 .append_external(

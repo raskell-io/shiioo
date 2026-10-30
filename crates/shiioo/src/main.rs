@@ -18,9 +18,9 @@ use shiioo_api::{
 use shiioo_core::{Event, EventStore, RunId, Seq, verify_chain};
 use shiioo_rules::RuleSet;
 use shiioo_runtime::{
-    AgentSpec, AnthropicProvider, ContainerSpec, Egress, HarnessBilling, HarnessSpec, HookCommand,
-    HookEndpoint, LocalMachine, ModelProvider, Mount, OpenshellSpec, RunOutcome, RunSpec,
-    RunStatus, Runtime, SecretSource, Toolbox, UnconfiguredProvider, Worker,
+    AgentSpec, AnthropicProvider, ContainerSpec, Egress, HarnessBilling, HarnessSpec,
+    HookCommand, HookEndpoint, LocalMachine, ModelProvider, Mount, OpenshellSpec, RunOutcome,
+    RunSpec, RunStatus, Runtime, SecretSource, Toolbox, UnconfiguredProvider, Worker,
     anthropic::DEFAULT_MODEL, branch_for,
 };
 use shiioo_secrets::SecretStore;
@@ -397,26 +397,26 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let is_harness = matches!(runtime, Runtime::Harness(_));
             let mut runtime = runtime;
             let mut agent = AgentSpec {
-                model: model.unwrap_or_else(|| {
-                    if is_harness {
-                        String::new()
-                    } else {
-                        DEFAULT_MODEL.into()
-                    }
-                }),
-                system,
-                tools: tools.unwrap_or_else(|| {
-                    if is_harness {
-                        ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)"]
-                            .map(String::from)
-                            .to_vec()
-                    } else {
-                        ["read_file", "write_file", "shell"]
-                            .map(String::from)
-                            .to_vec()
-                    }
-                }),
-                max_turns,
+                    model: model.unwrap_or_else(|| {
+                        if is_harness {
+                            String::new()
+                        } else {
+                            DEFAULT_MODEL.into()
+                        }
+                    }),
+                    system,
+                    tools: tools.unwrap_or_else(|| {
+                        if is_harness {
+                            ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)"]
+                                .map(String::from)
+                                .to_vec()
+                        } else {
+                            ["read_file", "write_file", "shell"]
+                                .map(String::from)
+                                .to_vec()
+                        }
+                    }),
+                    max_turns,
             };
             if let Some(role) = &chosen_role {
                 role.apply(&mut runtime, &mut agent);
@@ -539,13 +539,10 @@ async fn node_command(
             Ok(ExitCode::SUCCESS)
         }
         None => {
-            let file: NodeFile =
-                toml::from_str(&std::fs::read_to_string(&node_file).map_err(|e| {
-                    format!(
-                        "{}: {e}; run `shiioo node enroll` first",
-                        node_file.display()
-                    )
-                })?)?;
+            let file: NodeFile = toml::from_str(
+                &std::fs::read_to_string(&node_file)
+                    .map_err(|e| format!("{}: {e}; run `shiioo node enroll` first", node_file.display()))?,
+            )?;
             let machine_token = std::fs::read_to_string(&token_file)
                 .map_err(|e| format!("{}: {e}", token_file.display()))?
                 .trim()
@@ -598,12 +595,7 @@ async fn node_command(
 /// isolation levels it has an engine for.
 fn node_capabilities() -> Vec<String> {
     let mut caps = vec!["isolation.worktree".to_owned()];
-    for (bin, cap) in [
-        ("claude", "harness.claude-code"),
-        ("codex", "harness.codex"),
-        ("docker", "isolation.container"),
-        ("openshell", "isolation.openshell"),
-    ] {
+    for (bin, cap) in [("claude", "harness.claude-code"), ("codex", "harness.codex"), ("docker", "isolation.container"), ("openshell", "isolation.openshell")] {
         if std::process::Command::new(bin)
             .arg("--version")
             .stdout(std::process::Stdio::null())
@@ -635,9 +627,7 @@ async fn mail_command(
     } = action;
     let body = match (body, body_file) {
         (Some(b), _) => b,
-        (None, Some(f)) => {
-            std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?
-        }
+        (None, Some(f)) => std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?,
         (None, None) => {
             let mut b = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut b)?;
@@ -652,12 +642,7 @@ async fn mail_command(
         _ => (
             server.to_owned(),
             std::fs::read_to_string(data.join("api-token"))
-                .map_err(|e| {
-                    format!(
-                        "{}: {e}; is the office here?",
-                        data.join("api-token").display()
-                    )
-                })?
+                .map_err(|e| format!("{}: {e}; is the office here?", data.join("api-token").display()))?
                 .trim()
                 .to_owned(),
             None,
@@ -722,12 +707,7 @@ async fn machines_command(
     action: Option<MachinesAction>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let token = std::fs::read_to_string(data.join("api-token"))
-        .map_err(|e| {
-            format!(
-                "{}: {e}; is this the office's workspace?",
-                data.join("api-token").display()
-            )
-        })?
+        .map_err(|e| format!("{}: {e}; is this the office's workspace?", data.join("api-token").display()))?
         .trim()
         .to_owned();
     let http = reqwest::Client::new();
@@ -781,10 +761,7 @@ async fn machines_command(
 }
 
 /// `shiioo secret set|list|rm`.
-fn secret_command(
-    data: &Path,
-    action: SecretAction,
-) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn secret_command(data: &Path, action: SecretAction) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let store = SecretStore::open(data)?;
     match action {
         SecretAction::Set {
@@ -864,23 +841,12 @@ async fn sandbox_command(
             }
             container::ensure_image(&engine, &egress::image(), egress::DOCKERFILE, &dir).await?;
             egress::ensure_network(&engine).await?;
-            println!(
-                "harness image: {image}\negress image: {}\nnetwork: {}",
-                egress::image(),
-                egress::NETWORK
-            );
+            println!("harness image: {image}\negress image: {}\nnetwork: {}", egress::image(), egress::NETWORK);
             Ok(ExitCode::SUCCESS)
         }
         SandboxAction::Prune => {
             let out = tokio::process::Command::new(&engine)
-                .args([
-                    "ps",
-                    "-a",
-                    "--filter",
-                    "name=^shiioo-",
-                    "--format",
-                    "{{.Names}}",
-                ])
+                .args(["ps", "-a", "--filter", "name=^shiioo-", "--format", "{{.Names}}"])
                 .output()
                 .await?;
             let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
@@ -1192,15 +1158,9 @@ struct MailSection {
 }
 
 impl MailSection {
-    fn mailer(
-        &self,
-        secrets: &dyn SecretSource,
-    ) -> Result<Option<shiioo_mail::Mailer>, Box<dyn std::error::Error>> {
+    fn mailer(&self, secrets: &dyn SecretSource) -> Result<Option<shiioo_mail::Mailer>, Box<dyn std::error::Error>> {
         if !self.outbox_dir.is_empty() {
-            return Ok(Some(shiioo_mail::Mailer::file(
-                &self.outbox_dir,
-                &self.from,
-            )?));
+            return Ok(Some(shiioo_mail::Mailer::file(&self.outbox_dir, &self.from)?));
         }
         if self.smtp_host.is_empty() {
             return Ok(None);
@@ -1211,12 +1171,8 @@ impl MailSection {
                 .ok_or_else(|| format!("[mail] password: secret {name} is not set"))?,
             None => self.password.clone(),
         };
-        let security = shiioo_mail::Security::parse(&self.security).ok_or_else(|| {
-            format!(
-                "[mail] security {:?}: use starttls, tls or none",
-                self.security
-            )
-        })?;
+        let security = shiioo_mail::Security::parse(&self.security)
+            .ok_or_else(|| format!("[mail] security {:?}: use starttls, tls or none", self.security))?;
         let port = if self.smtp_port == 0 {
             match security {
                 shiioo_mail::Security::Tls => 465,
@@ -1584,11 +1540,7 @@ impl shiioo_telegram::Office for TelegramOffice {
 
     fn files(&self, run: String) -> shiioo_telegram::BoxFuture<'_, Result<String, String>> {
         Box::pin(async move {
-            let run = self
-                .state
-                .resolve_run(&run)
-                .await
-                .map_err(|e| e.to_string())?;
+            let run = self.state.resolve_run(&run).await.map_err(|e| e.to_string())?;
             self.state
                 .artifacts_text(run)
                 .await
@@ -1602,11 +1554,7 @@ impl shiioo_telegram::Office for TelegramOffice {
         path: String,
     ) -> shiioo_telegram::BoxFuture<'_, Result<(String, Vec<u8>), String>> {
         Box::pin(async move {
-            let run = self
-                .state
-                .resolve_run(&run)
-                .await
-                .map_err(|e| e.to_string())?;
+            let run = self.state.resolve_run(&run).await.map_err(|e| e.to_string())?;
             let (bytes, _) = self
                 .state
                 .artifact_bytes(run, &path)
@@ -1962,12 +1910,7 @@ impl Notifications for TelegramNotifications {
             for artifact in media {
                 match state.artifact_bytes(run, &artifact.path).await {
                     Ok((bytes, _)) => {
-                        let name = artifact
-                            .path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or("file")
-                            .to_owned();
+                        let name = artifact.path.rsplit('/').next().unwrap_or("file").to_owned();
                         if let Err(e) = self
                             .notifier
                             .send_file(&name, bytes, &format!("{} · {}", short(run), artifact.path))

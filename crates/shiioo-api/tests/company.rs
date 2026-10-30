@@ -7,9 +7,7 @@ use shiioo_api::{
     Routine, router,
 };
 use shiioo_core::{RunId, SystemClock};
-use shiioo_runtime::{
-    AgentSpec, LocalMachine, ModelProvider, RunStatus, ScriptedProvider, Toolbox, Worker,
-};
+use shiioo_runtime::{AgentSpec, LocalMachine, ModelProvider, RunStatus, ScriptedProvider, Toolbox, Worker};
 use shiioo_store::{MemoryStore, Notifying};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -46,13 +44,7 @@ impl Notifications for Recorder {
     fn approval_resolved(&self, _: String, _: String) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
-    fn run_ended(
-        &self,
-        run: RunId,
-        _: String,
-        _: RunStatus,
-        _: Vec<shiioo_api::Artifact>,
-    ) -> BoxFuture<'_, ()> {
+    fn run_ended(&self, run: RunId, _: String, _: RunStatus, _: Vec<shiioo_api::Artifact>) -> BoxFuture<'_, ()> {
         lock(&self.ended).push(run);
         Box::pin(async {})
     }
@@ -110,10 +102,7 @@ async fn serve(script: Vec<shiioo_runtime::ModelResponse>) -> Company {
     assert!(ok, "git commit");
 
     let store = Arc::new(Notifying::new(MemoryStore::new(SystemClock)));
-    let machine = Arc::new(LocalMachine::in_memory(
-        dir.path().join("ws"),
-        Toolbox::builtin(),
-    ));
+    let machine = Arc::new(LocalMachine::in_memory(dir.path().join("ws"), Toolbox::builtin()));
     std::fs::create_dir_all(dir.path().join("ws")).unwrap_or_else(|e| panic!("{e}"));
     let provider: Arc<dyn ModelProvider> = Arc::new(ScriptedProvider::new(script));
     let factory_store = Arc::clone(&store);
@@ -290,13 +279,8 @@ async fn a_plan_is_proposed_from_the_planners_answer_and_approved_into_issues() 
         .json()
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-    let task = events[0]["payload"]["spec"]["task"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(
-        task.contains("chief of staff") && task.contains("Ship v0.3"),
-        "{task}"
-    );
+    let task = events[0]["payload"]["spec"]["task"].as_str().unwrap_or_default();
+    assert!(task.contains("chief of staff") && task.contains("Ship v0.3"), "{task}");
 
     // The plan is proposed once the run ends; the owner got the plan, not
     // a run notification.
@@ -321,9 +305,7 @@ async fn a_plan_is_proposed_from_the_planners_answer_and_approved_into_issues() 
     assert_eq!(plan_view["notes"], "Two small steps.");
     let messages = lock(&company.recorder.messages).clone();
     assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("1. Write the changelog") && m.contains("/plan approve")),
+        messages.iter().any(|m| m.contains("1. Write the changelog") && m.contains("/plan approve")),
         "{messages:?}"
     );
     assert!(lock(&company.recorder.ended).is_empty());
@@ -338,22 +320,14 @@ async fn a_plan_is_proposed_from_the_planners_answer_and_approved_into_issues() 
         .json()
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(
-        approved["plan"]["status"]["status"], "approved",
-        "{approved}"
-    );
+    assert_eq!(approved["plan"]["status"]["status"], "approved", "{approved}");
     let issues = lock(&company.recorder.issues).clone();
     assert_eq!(issues.len(), 2);
     assert_eq!(issues[0].1, "Write the changelog");
     assert_eq!(issues[0].3, "shiioo");
     assert!(issues[0].2.contains("From the git log.") && issues[0].2.contains("Part 1 of 2"));
     assert!(issues[1].2.contains("2. **Tag the release** (this issue)"));
-    assert!(
-        approved["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("issues/2")
-    );
+    assert!(approved["message"].as_str().unwrap_or_default().contains("issues/2"));
     // A second approval is refused.
     let status = http
         .post(format!("{}/v1/plans/{}/approve", company.base, &run[..8]))
@@ -364,8 +338,8 @@ async fn a_plan_is_proposed_from_the_planners_answer_and_approved_into_issues() 
         .status();
     assert_eq!(status, 409);
     // The plan survived on disk.
-    let on_disk =
-        std::fs::read_to_string(company._dir.path().join("data/plans.json")).unwrap_or_default();
+    let on_disk = std::fs::read_to_string(company._dir.path().join("data/plans.json"))
+        .unwrap_or_default();
     assert!(on_disk.contains("Write the changelog"));
 }
 
@@ -402,10 +376,7 @@ async fn an_unreadable_plan_fails_with_the_planners_words() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let reason = plan_view["status"]["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("not JSON") && reason.contains("I could not decide."),
-        "{plan_view}"
-    );
+    assert!(reason.contains("not JSON") && reason.contains("I could not decide."), "{plan_view}");
 }
 
 #[tokio::test]
@@ -422,14 +393,8 @@ async fn routines_fire_on_demand_and_the_report_counts_them() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
     let summary = listed["summary"].as_str().unwrap_or_default();
-    assert!(
-        summary.contains("nightly: daily 02:00, next") && summary.contains("on demo"),
-        "{summary}"
-    );
-    assert!(
-        summary.contains("report: weekdays 07:00, next"),
-        "{summary}"
-    );
+    assert!(summary.contains("nightly: daily 02:00, next") && summary.contains("on demo"), "{summary}");
+    assert!(summary.contains("report: weekdays 07:00, next"), "{summary}");
 
     let fired: Value = http
         .post(format!("{}/v1/routines/nightly/run", company.base))
@@ -441,10 +406,7 @@ async fn routines_fire_on_demand_and_the_report_counts_them() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
     let message = fired["message"].as_str().unwrap_or_default();
-    assert!(
-        message.starts_with("⏰ routine nightly started run"),
-        "{message}"
-    );
+    assert!(message.starts_with("⏰ routine nightly started run"), "{message}");
     assert!(message.contains("scripted as @writer"), "{message}");
     let run = fired["run"].as_str().unwrap_or_default().to_owned();
     let view = wait_terminal(&http, &company.base, &run).await;
@@ -474,12 +436,6 @@ async fn routines_fire_on_demand_and_the_report_counts_them() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(report.starts_with("📋 Report, "), "{report}");
-    assert!(
-        report.contains("✅ 1 finished:") && report.contains("Write the nightly note."),
-        "{report}"
-    );
-    assert!(
-        report.contains("Capacity:") && report.contains("Next routines:"),
-        "{report}"
-    );
+    assert!(report.contains("✅ 1 finished:") && report.contains("Write the nightly note."), "{report}");
+    assert!(report.contains("Capacity:") && report.contains("Next routines:"), "{report}");
 }

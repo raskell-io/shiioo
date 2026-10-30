@@ -187,7 +187,11 @@ pub fn parse_plan(output: &str) -> Result<(String, Vec<PlanItem>), String> {
             }
             Some(PlanItem {
                 title: title.chars().take(120).collect(),
-                body: item["body"].as_str().unwrap_or_default().trim().to_owned(),
+                body: item["body"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
             })
         })
         .collect();
@@ -195,10 +199,7 @@ pub fn parse_plan(output: &str) -> Result<(String, Vec<PlanItem>), String> {
         return Err("the plan has no items with a title".into());
     }
     if items.len() > 24 {
-        return Err(format!(
-            "the plan has {} items; that is not a plan",
-            items.len()
-        ));
+        return Err(format!("the plan has {} items; that is not a plan", items.len()));
     }
     Ok((notes, items))
 }
@@ -286,10 +287,7 @@ pub fn plan_text(plan: &Plan) -> String {
 /// The plan with every item's body, for `/plan show`.
 pub fn plan_details(plan: &Plan) -> String {
     let mut out = plan_text(plan);
-    if matches!(
-        plan.status,
-        PlanStatus::Proposed | PlanStatus::Approved { .. }
-    ) {
+    if matches!(plan.status, PlanStatus::Proposed | PlanStatus::Approved { .. }) {
         for (i, item) in plan.items.iter().enumerate() {
             out.push_str(&format!("\n\n{}. {}\n{}", i + 1, item.title, item.body));
         }

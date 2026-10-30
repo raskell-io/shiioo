@@ -145,12 +145,7 @@ pub async fn unmerged_branches(repo: &Path) -> Vec<String> {
             .await;
         let ahead = count
             .ok()
-            .and_then(|c| {
-                String::from_utf8_lossy(&c.stdout)
-                    .trim()
-                    .parse::<u64>()
-                    .ok()
-            })
+            .and_then(|c| String::from_utf8_lossy(&c.stdout).trim().parse::<u64>().ok())
             .unwrap_or(0);
         if ahead > 0 {
             names.push(branch.to_owned());

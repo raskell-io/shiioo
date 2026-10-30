@@ -69,9 +69,7 @@ impl OpenshellSandbox {
 
         let mut env = ctx.env.to_vec();
         let mut uploads = vec![format!("{}:{WORKDIR}", ctx.cwd.to_string_lossy())];
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         match ctx.harness {
             HarnessKind::Codex => {
                 let auth = home.join(".codex").join("auth.json");
@@ -137,8 +135,11 @@ impl OpenshellSandbox {
         let mut exec = Command::new(&self.bin);
         exec.args(["sandbox", "exec", "-n", &self.name, "--workdir", WORKDIR]);
         for (k, v) in std_cmd.get_envs().filter_map(|(k, v)| Some((k, v?))) {
-            exec.arg("--env")
-                .arg(format!("{}={}", k.to_string_lossy(), v.to_string_lossy()));
+            exec.arg("--env").arg(format!(
+                "{}={}",
+                k.to_string_lossy(),
+                v.to_string_lossy()
+            ));
         }
         for (k, v) in &self.env {
             exec.arg("--env").arg(format!("{k}={v}"));
@@ -186,12 +187,7 @@ pub fn binary() -> PathBuf {
 
 /// The arguments of `openshell sandbox create` for a run, without the
 /// trailing `-- <command>`.
-pub fn create_args(
-    name: &str,
-    spec: &OpenshellSpec,
-    policy: &Path,
-    uploads: &[String],
-) -> Vec<String> {
+pub fn create_args(name: &str, spec: &OpenshellSpec, policy: &Path, uploads: &[String]) -> Vec<String> {
     let mut args = vec![
         "sandbox".to_owned(),
         "create".to_owned(),

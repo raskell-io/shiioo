@@ -223,19 +223,8 @@ mod tests {
             parse("mon,Thu 09:30").map(|s| s.to_string()),
             Ok("mon,thu 09:30".to_owned())
         );
-        assert_eq!(
-            parse("every 6h").map(|s| s.to_string()),
-            Ok("every 6h".to_owned())
-        );
-        for bad in [
-            "",
-            "every",
-            "every 0m",
-            "daily 25:00",
-            "fun 07:00",
-            "7am",
-            "every 3d",
-        ] {
+        assert_eq!(parse("every 6h").map(|s| s.to_string()), Ok("every 6h".to_owned()));
+        for bad in ["", "every", "every 0m", "daily 25:00", "fun 07:00", "7am", "every 3d"] {
             assert!(parse(bad).is_err(), "{bad:?} parsed");
         }
     }

@@ -36,11 +36,7 @@ pub trait Office: Send + Sync {
         Box::pin(async move { Err(format!("no files for {run}")) })
     }
     /// One produced file: its name and bytes, for `sendDocument`.
-    fn get_file(
-        &self,
-        run: String,
-        path: String,
-    ) -> BoxFuture<'_, Result<(String, Vec<u8>), String>> {
+    fn get_file(&self, run: String, path: String) -> BoxFuture<'_, Result<(String, Vec<u8>), String>> {
         Box::pin(async move { Err(format!("no file {path} for {run}")) })
     }
     /// The enrolled machines and whether they are online.
@@ -159,12 +155,10 @@ async fn handle(
             let command = parse_command(&text, &office.repos());
             if let Command::Get { run, path } = command {
                 let reply = match office.get_file(run, path.clone()).await {
-                    Ok((name, bytes)) => {
-                        match bot.send_document(owner, &name, bytes, Some(&path)).await {
-                            Ok(_) => return,
-                            Err(e) => format!("Couldn't send {path}: {e}"),
-                        }
-                    }
+                    Ok((name, bytes)) => match bot.send_document(owner, &name, bytes, Some(&path)).await {
+                        Ok(_) => return,
+                        Err(e) => format!("Couldn't send {path}: {e}"),
+                    },
                     Err(e) => format!("Couldn't get that: {e}"),
                 };
                 bot.send_message(owner, &reply, None).await.ok();

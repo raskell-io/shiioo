@@ -203,10 +203,7 @@ pub async fn enroll(
         .build()
         .unwrap_or_default();
     let response = http
-        .post(format!(
-            "{}/v1/machines/enroll",
-            server_url.trim_end_matches('/')
-        ))
+        .post(format!("{}/v1/machines/enroll", server_url.trim_end_matches('/')))
         .json(&json!({
             "token": enrollment_token,
             "name": name,
@@ -295,11 +292,7 @@ pub async fn run_node(
     }
 }
 
-async fn heartbeat(
-    store: &RemoteStore,
-    config: &NodeConfig,
-    in_flight: &[String],
-) -> Result<(), StoreError> {
+async fn heartbeat(store: &RemoteStore, config: &NodeConfig, in_flight: &[String]) -> Result<(), StoreError> {
     let _: Value = store
         .call(
             reqwest::Method::POST,
