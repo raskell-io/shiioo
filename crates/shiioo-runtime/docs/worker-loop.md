@@ -66,7 +66,9 @@ latest `RunParked` has no `RunWoken` after it and no `UserMessage` since
 (`status::parked`, `status::wake_reason`) returns `Parked` without taking a
 lease, so a spurious wake-up costs nothing. With a message, the worker takes
 the lease (the parker's ended when it parked, see `RunHead::append`) and
-writes `RunWoken { reason: "input" }` before anything else.
+writes `RunWoken { reason: "input" }` before anything else. A
+`CancelRequested` wakes a parked run too (`wake_reason` is `cancel`), so
+the drive that follows closes it with `RunCancelled`.
 
 ## 3. Native runtime
 

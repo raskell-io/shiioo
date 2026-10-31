@@ -157,9 +157,11 @@ other status → `409 only open runs can be resumed`.
 ### `POST /v1/runs/{id}/cancel` → `202 Accepted`
 
 Optional body `{"reason": "…"}`. Appends `CancelRequested { by: "owner",
-reason }`; the worker notices at its next step (next harness line or next
-native turn) and appends `RunCancelled`. A run that already closed → `409
-the run has already finished`.
+reason }`; the worker notices at its next step (next harness line, the
+two-second check while a harness is silent, or next native turn) and
+appends `RunCancelled`. A run nobody works on (parked, or left open by a
+restart) is driven once, which closes it. A run that already closed →
+`409 the run has already finished`.
 
 ### `POST /v1/runs/{id}/messages` → `202 Accepted`, `{"seq": n}`
 

@@ -113,10 +113,18 @@ pub fn parked(log: &[Event]) -> Option<(usize, &str)> {
 }
 
 /// Why a parked run should be taken up again, if it should: `input` when
-/// a message arrived after it parked. `None` for a run that is not parked.
+/// a message arrived after it parked, `cancel` when the owner cancelled it
+/// (only a worker can close it). `None` for a run that is not parked.
 pub fn wake_reason(log: &[Event]) -> Option<&'static str> {
     let (at, _) = parked(log)?;
-    log[at..]
+    let since = &log[at..];
+    if since
+        .iter()
+        .any(|e| matches!(*e.payload, Payload::CancelRequested { .. }))
+    {
+        return Some("cancel");
+    }
+    since
         .iter()
         .any(|e| matches!(*e.payload, Payload::UserMessage { .. }))
         .then_some("input")

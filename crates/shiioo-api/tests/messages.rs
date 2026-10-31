@@ -273,3 +273,15 @@ async fn now_asks_for_an_interrupt_right_after_the_message() {
         1
     );
 }
+
+#[tokio::test]
+async fn cancelling_a_parked_run_closes_it() {
+    let office = office().await;
+    // A parked run has no worker; the cancel itself must get it closed.
+    let run = office.conversation().await;
+    let resp = office
+        .post(&format!("/v1/runs/{run}/cancel"), json!({"reason": "not needed"}), None)
+        .await;
+    assert_eq!(resp.status(), 202);
+    office.wait_for(run, "cancelled", 1).await;
+}

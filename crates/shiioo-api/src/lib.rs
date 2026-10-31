@@ -1399,7 +1399,6 @@ impl<S: EventStore + 'static> ApiState<S> {
         Ok(text)
     }
 
-    /// Asks a run to stop. The worker closes it at its next step.
     /// The owner writes to a run: the message is appended without a lease
     /// and the run is driven if that made it runnable (a parked run wakes;
     /// a run being worked on reads it at its next turn, a harness when its
@@ -1539,7 +1538,14 @@ impl<S: EventStore + 'static> ApiState<S> {
         Ok(None)
     }
 
-    pub async fn cancel(&self, run_id: RunId, by: &str, reason: &str) -> Result<(), ApiError> {
+    /// Asks a run to stop. A run nobody works on (parked, or left open by
+    /// a restart) is driven once, which closes it.
+    pub async fn cancel(
+        self: &Arc<Self>,
+        run_id: RunId,
+        by: &str,
+        reason: &str,
+    ) -> Result<(), ApiError> {
         match self
             .store
             .append_external(
@@ -1551,7 +1557,10 @@ impl<S: EventStore + 'static> ApiState<S> {
             )
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                self.spawn_drive(run_id);
+                Ok(())
+            }
             Err(StoreError::RunClosed(_)) => {
                 Err(ApiError::Conflict("the run has already finished".into()))
             }
