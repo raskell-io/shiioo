@@ -1,8 +1,8 @@
 # The desk: the web UI, and working with an employee directly
 
-Status: **requirements draft, for the owner's review** (phase 8 candidate). Nothing here is built. Decisions marked **D1**…**D16** are open; the rest follows from the picture.
+Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), follow-ups (T15), the message box (T16, without **Now**), and a first pass of the desk itself: tokens and fonts (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
 
-Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the phone dashboard today), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
+Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the dashboard as built), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
 
 ## 1. The picture
 

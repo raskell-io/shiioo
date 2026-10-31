@@ -2,7 +2,7 @@
 
 The HTTP face of a Shiioo office: an axum router that creates runs, streams
 their event logs over SSE, answers the harness permission hook, takes the
-owner's approval decisions, and serves the phone dashboard. It also holds the
+owner's approval decisions, and serves the dashboard (the desk). It also holds the
 two pieces of in-memory coordination the server needs: pending approvals
 waiting for an answer and the capacity tracker that decides which employee
 takes the next task.
@@ -42,7 +42,7 @@ shiioo-rules ─┘
 | `src/routines.rs` | `Routine`, `RoutineState`, `due`: scheduled runs and what already fired. |
 | `src/report.rs` | `ApiState::report`: the morning report, counted from the record and the repositories. |
 | `src/plans.rs` | `Plan`, `Plans`, `IssueCreator`, the planner's task and plan parsing: the chief of staff. |
-| `ui/index.html`, `ui/app.js`, `ui/app.css` | The dashboard, embedded into the binary and served at `/ui`. |
+| `ui/` | The dashboard (the desk): `index.html`, `app.css`, native ES modules (`app.js`, `core.js`, `office.js`, `views/…`) and two fonts, embedded into the binary (`UI_FILES`, `UI_FONTS`) and served at `/` and `/ui/{path}`. See [docs/dashboard.md](docs/dashboard.md). |
 
 ## Public API
 
@@ -81,12 +81,15 @@ Full request and response shapes are in [docs/http.md](docs/http.md).
 | Method and path | Auth | Purpose |
 | --- | --- | --- |
 | `GET /v1/health` | no | `{"status":"ok"}` |
-| `GET /`, `GET /ui`, `GET /ui/app.js`, `GET /ui/app.css` | no | dashboard files |
+| `GET /`, `GET /ui`, `GET /ui/{path}` | no | dashboard files |
 | `POST /v1/runs` | yes | create a run (`Idempotency-Key` honoured) |
 | `GET /v1/runs` | yes | all runs, most recently updated first |
 | `GET /v1/runs/{id}` | yes | one `RunView` |
 | `GET /v1/runs/{id}/events?from=` | yes | the event log from a `seq` |
 | `GET /v1/runs/{id}/events/stream` | yes | SSE, resumes from `Last-Event-ID` |
+| `GET /v1/events/stream` | yes | SSE of every run's `RunView` as it changes |
+| `POST /v1/runs/{id}/messages` | yes | the owner writes to a run (`Idempotency-Key` honoured) |
+| `POST /v1/runs/{id}/follow-up` | yes | continue a finished harness run in a new run |
 | `POST /v1/runs/{id}/resume` | yes | drive an open run again |
 | `POST /v1/runs/{id}/cancel` | yes | ask the run to stop at its next step |
 | `POST /v1/runs/{id}/permissions` | yes | the harness hook asks "may I?" |
@@ -113,9 +116,18 @@ cargo test -p shiioo-api
 - `tests/permissions.rs`: rules answer at once, `ask` waits for the owner's
   decision through `/v1/approvals/{id}`, cancel stops the run at its next
   step.
-- `tests/dashboard.rs`: dashboard files need no token, diff of a run without a
-  repository is 404, diff shows the branch's changes after a fake harness
-  commits on it.
+- `tests/dashboard.rs`: dashboard files need no token, `UI_FILES` and
+  `UI_FONTS` match `ui/` and every module import resolves, diff of a run
+  without a repository is 404, diff shows the branch's changes after a fake
+  harness commits on it.
+- `tests/events.rs`: the office stream sends a snapshot, then live
+  changes, and resumes from `Last-Event-ID`; it needs the token and a
+  numeric id.
+- `tests/messages.rs`: a message wakes a parked run once even when retried;
+  empty, finished and unknown runs are refused.
+- `tests/follow_up.rs`: a follow-up resumes the session and names the
+  original, retries return the same run, chains stay on one branch, and
+  follow-ups are refused for open, native and busy runs.
 - `tests/company.rs`: roles, plans (proposed from a scripted planner, approved
   into issues through a fake creator), routines fired on demand and the report,
   over HTTP.
@@ -132,7 +144,7 @@ Tests use the memory store and a fake harness (a shell script run through
 - [docs/approvals-and-capacity.md](docs/approvals-and-capacity.md): the
   permission flow from hook to Telegram and back, timeouts, the capacity
   tracker and the employee broker.
-- [docs/dashboard.md](docs/dashboard.md): the embedded phone UI.
+- [docs/dashboard.md](docs/dashboard.md): the embedded web UI, the desk.
 - Top-level: [API design](../../docs/design/api.md),
   [governance design](../../docs/design/governance.md),
   [security design](../../docs/design/security.md),

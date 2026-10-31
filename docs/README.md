@@ -28,7 +28,7 @@ Detailed designs, one per area. Each section is marked *(built)*, *(planned)* or
 | [Security](design/security.md) | Threat model, controls, today's posture (isolation levels, egress, secrets and redaction), and what is not protected |
 | [Deployment](design/deployment.md) | The office on one Mac (`install`, keep-awake, Tailscale), several machines, config, observability, upgrades, backups |
 | [Conversation](design/conversation.md) | *Requirements draft.* Talking to Shiioo: one remembered thread, voice notes, delegation from the conversation |
-| [The desk](design/desk.md) | *Requirements draft.* The web UI on a wide screen, instructing an employee mid-run, taking over its session in a terminal; the API a native app will use |
+| [The desk](design/desk.md) | *Partly built: the desk layout, structured log, messages, parking and follow-ups.* The web UI on a wide screen, instructing an employee mid-run, taking over its session in a terminal; the API a native app will use |
 
 ## Crates
 

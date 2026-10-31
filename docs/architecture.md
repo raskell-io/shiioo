@@ -126,7 +126,7 @@ Details: [design/fork-and-replay.md](design/fork-and-replay.md).
 | `shiioo-policy` | Cedar evaluation, quorum boards, budgets, change management | planned (if several owners share an office) |
 | `shiioo-auth` | OIDC, API keys, Biscuit tokens, RBAC | planned |
 | `shiioo-protocol` | Daemon ↔ gateway wire protocol (protobuf) | planned |
-| `shiioo-api` | REST + SSE handlers, the mobile dashboard, OpenAPI | built: runs, events, resumable SSE, permissions and approvals, cancel, diff, the dashboard, token auth, problem+json; planned: OpenAPI |
+| `shiioo-api` | REST + SSE handlers, the dashboard (the desk), OpenAPI | built: runs, events, resumable SSE per run and office-wide, messages, follow-ups, permissions and approvals, cancel, diff, the desk, token auth, problem+json; planned: OpenAPI |
 | `shiioo-sim` | Deterministic whole-system simulation tests | planned |
 | `shiioo` | The binary: `up`/`serve`, `install`, `node`, CLI | built: `run`, `resume`, `log`, `serve`/`up`, `install`/`uninstall`, `hook`; planned: `node` |
 

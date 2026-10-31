@@ -87,7 +87,7 @@ Secrets (GitHub tokens, mail credentials) are stored encrypted, referenced by na
 ## The owner's surfaces
 
 - **Telegram** (primary): delegate ("fix the flaky test in sango"), approve with one tap, get told when something finished or needs you, ask "what's everyone doing?". The bot long-polls Telegram, so the office needs no public address.
-- **Mobile web dashboard** over Tailscale: runs, logs, diffs, capacity, the day's report. Served by the server, no app store.
+- **Web dashboard (the desk)** over Tailscale: runs, logs, diffs, approvals, capacity; one column on the phone, a three-column desk on a big screen, where the owner can also message an agent directly or follow up on its work. Served by the server, no app store. A Rust-native client is the long-term desk ([desk.md](design/desk.md)).
 - **GitHub**: label an issue to delegate it; review and merge the pull request in the GitHub app.
 - **CLI** on any machine on the tailnet.
 

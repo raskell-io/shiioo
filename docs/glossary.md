@@ -41,8 +41,9 @@ Shiioo has two vocabularies. The **platform terms** are what the API, code and d
 - **Tool intent / result**: the events written before dispatching a tool call and after it returns.
 - **Outcome unknown**: a side-effecting call that may or may not have run; resolved by reconciling with the machine's journal or by a human.
 - **Parked**: a run waiting for input, approval or a timer, holding no lease.
+- **Follow-up**: a new run that continues a finished harness run in its worktree, branch and session; its spec names the original (`origin`). The original stays closed.
 - **Worker**: a stateless process that leases runs and executes turns.
-- **Server**: the `shiioo` process that holds the record, decides (rules, approvals, capacity), serves the API, dashboard and Telegram bot, and runs the workers. Its gateway role holds node connections and stream subscribers.
+- **Server**: the `shiioo` process that holds the record, decides (rules, approvals, capacity), serves the API, the dashboard (the desk) and Telegram bot, and runs the workers. Its gateway role holds node connections and stream subscribers.
 - **Scheduler**: finds runnable runs, fires triggers and timers.
 - **Node**: `shiioo node`, a worker on another machine that enrolls with the office, dials out over HTTP, takes the runs addressed to it and appends to the office's log through the API ([ADR-0010](adr/0010-single-binary-server-and-nodes.md), [ADR-0012](adr/0012-nodes-are-workers-over-the-offices-api.md)). Early docs called it the daemon. The office's own machine is the node inside the server process (`shiioo up`).
 - **Snapshot**: a saved copy of a run's workspace at a turn boundary.
