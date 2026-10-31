@@ -5,9 +5,11 @@ ES modules, embedded into the binary and served by the API at `/`, `/ui`
 and `/ui/{path}`. It speaks only to the HTTP API described in
 [http.md](http.md), so anything it shows can also be fetched with `curl`.
 The design follows `docs/design/desk.md` (requirements U1–U14) and its
-mockups: a quiet desk on a wide screen (sidebar · tabs · up to three panes
-of runs side by side, each with its own side panel), one column on a
-phone, and only "needs you" in colour. Everything is reachable from the
+mockups: a quiet desk on a wide screen (a narrow rail on the window's frame,
+then one rounded layer holding the sidebar, tabs and up to three panes of
+runs side by side, each with its own side panel), one column on a phone,
+and only "needs you" in colour. Your messages are bubbles on the right,
+the message box is a floating rounded card. Everything is reachable from the
 keyboard, through single keys and the ⌘K palette.
 
 ## Files
@@ -241,7 +243,10 @@ theme, or the system's, onto `data-theme` before the first paint, and
 classes scope a set to a subtree (the kit shows both at once). Every text
 colour meets WCAG AA (4.5:1) on the surfaces it sits on, in both sets:
 `tests/dashboard.rs` reads the tokens from `app.css` and checks the same
-pairs the kit shows. One attention colour is used only for "needs you":
+pairs the kit shows. The surfaces stack like ChatGPT's desktop app: the
+window is `--frame`, with the rail on it; the sidebar (`--side`) and the
+work area (`--panel`) are one rounded layer inset into it; your messages,
+the composer card and the open tab are `--raise`. One attention colour is used only for "needs you":
 `--attn` for marks and borders, `--attn-ink` for text. The brand teal
 (`--accent`) is for selection, primary actions and working. Spacing is a
 4 px scale (`--s1`…`--s10`), radii `--r1`…`--r3`, elevation `--e1`/`--e2`,

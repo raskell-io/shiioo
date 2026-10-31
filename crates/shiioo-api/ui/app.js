@@ -3,25 +3,28 @@
 // (home), "#run=<id>" (a run, opened as a tab), "#kit" (every component in
 // both themes). Tabs, panes and their sizes live in `desk.js`.
 
-import { hasToken, renderToken, setRoute, side } from "./core.js";
+import { chrome, hasToken, renderToken, setRoute, takeTokenFromHash } from "./core.js";
 import * as desk from "./desk.js";
 import { installKeys } from "./keys.js";
 import { startOffice } from "./office.js";
 import { createKit } from "./views/kit.js";
 import { openNewTask } from "./views/runs.js";
-import { renderSide } from "./views/side.js";
+import { renderRail, renderSide } from "./views/side.js";
 
 let started = false;
 let paged = false;
 
 function route() {
+  // A fresh link with a token in an open tab: use it, from a clean start.
+  if (takeTokenFromHash() && started) { location.reload(); return; }
   if (!hasToken()) { renderToken(); return; }
-  side.hidden = false;
+  chrome(true);
   const first = !started;
   if (!started) {
     started = true;
     startOffice();
     renderSide();
+    renderRail();
     installKeys();
   }
   desk.mountDesk();

@@ -15,8 +15,10 @@ export const PAIRS = [
   ["accent", "bg"], ["accent", "panel"], ["accent", "accent-soft"], ["accent-ink", "accent"],
   ["attn-ink", "attn-soft"], ["attn-ink", "sunk"], ["attn-ink", "panel"],
   ["ok", "panel"], ["bad", "panel"], ["bad", "bad-soft"], ["panel", "ink"],
+  ["ink", "frame"], ["muted", "frame"], ["ink", "side"], ["muted", "side"], ["faint", "side"],
+  ["ink", "raise"], ["muted", "raise"], ["faint", "raise"], ["attn-ink", "raise"],
 ];
-const TOKENS = ["bg", "panel", "sunk", "ink", "muted", "faint", "line", "accent", "accent-soft", "attn", "attn-soft", "attn-ink", "ok", "bad", "bad-soft", "add", "del"];
+const TOKENS = ["frame", "bg", "panel", "side", "raise", "sunk", "ink", "muted", "faint", "line", "accent", "accent-soft", "attn", "attn-soft", "attn-ink", "ok", "bad", "bad-soft", "add", "del"];
 const STATES = ["open", "waiting_approval", "parked", "needs_attention", "completed", "failed", "cancelled"];
 
 const DIFF = `diff --git a/src/retry.rs b/src/retry.rs
@@ -121,11 +123,11 @@ function column(themeName, title) {
   sec("Diff", diff);
   renderDiff(diff, DIFF);
 
-  sec("Message box", `<div class="kit-box" style="padding:0;overflow:hidden"><form class="composer" onsubmit="return false">
+  sec("Message box", `<div class="kit-box" style="padding:0;overflow:hidden;background:var(--panel)"><form class="composer" onsubmit="return false">
     <label class="hint">Tell Claude Code something. It reads it when it finishes its current step, or at once with Now.</label>
-    <textarea rows="1" placeholder="e.g. use the existing helper, don't add a dependency"></textarea>
-    <div class="row"><span class="note">Your message goes into the run's log.</span>
-      <button class="btn" type="button">Now <kbd>${MOD}⇧↵</kbd></button><button class="btn primary" type="button">Send at next turn <kbd>${MOD}↵</kbd></button></div></form></div>`);
+    <div class="box"><textarea rows="1" placeholder="e.g. use the existing helper, don't add a dependency"></textarea>
+    <div class="row"><span class="note">Goes into the run's log. The rules still apply.</span>
+      <button class="btn" type="button">Now <kbd>${MOD}⇧↵</kbd></button><button class="btn primary" type="button">Send at next turn <kbd>${MOD}↵</kbd></button></div></div></form></div>`);
 
   sec("Palette", `<div class="palette" style="animation:none;max-height:none"><div class="pal-in"><input type="text" value="flak" aria-label="Sample search"><kbd>Esc</kbd></div>
     <div class="pal-list"><div class="pal-sec">Needs you</div>

@@ -3,19 +3,29 @@
 
 export const app = document.getElementById("app");
 export const side = document.getElementById("side");
+export const rail = document.getElementById("rail");
+/** Shows or hides the desk's chrome (the rail and the sidebar). */
+export const chrome = (on) => { side.hidden = !on; rail.hidden = !on; };
 const TOKEN_KEY = "shiioo_token";
 const THEME_KEY = "shiioo_theme";
 let token = localStorage.getItem(TOKEN_KEY) || "";
 let route = () => {};
 
-// A token arriving in the fragment (#token=…) is stored and removed
-// from the URL so it never ends up in a screenshot or the history.
-const frag = new URLSearchParams(location.hash.replace(/^#/, ""));
-if (frag.get("token")) {
+/**
+ * A token arriving in the fragment (#token=…) is stored and removed from
+ * the URL so it never ends up in a screenshot or the history. Checked on
+ * load and on every route: a link opened in a tab that is already open
+ * only changes the fragment.
+ */
+export function takeTokenFromHash() {
+  const frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+  if (!frag.get("token")) return false;
   token = frag.get("token");
   localStorage.setItem(TOKEN_KEY, token);
   history.replaceState(null, "", location.pathname);
+  return true;
 }
+takeTokenFromHash();
 
 export const hasToken = () => Boolean(token);
 export const authHeader = () => ({ Authorization: `Bearer ${token}` });
@@ -147,7 +157,7 @@ export function showError(e) {
 
 // ---- token form --------------------------------------------------------
 export function renderToken(message) {
-  side.hidden = true;
+  chrome(false);
   app.innerHTML = "";
   const form = el(`<form class="empty sign-in">
     <div class="art" aria-hidden="true"><span class="brand-mark">s</span></div>
@@ -160,7 +170,7 @@ export function renderToken(message) {
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     token = form.querySelector("#tok").value.trim();
-    if (token) { localStorage.setItem(TOKEN_KEY, token); side.hidden = false; route(); }
+    if (token) { localStorage.setItem(TOKEN_KEY, token); chrome(true); route(); }
   });
   app.appendChild(form);
   form.querySelector("#tok").focus();

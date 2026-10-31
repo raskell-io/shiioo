@@ -413,10 +413,12 @@ export function createRunView(id) {
 function messageBox(id) {
   const form = el(`<form class="composer" hidden>
     <label class="hint" for="message-${esc(id)}"></label>
-    <textarea id="message-${esc(id)}" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
-    <div class="row"><span class="note">Your message goes into the run's log. The rules still apply to what the agent does next.</span>
-      <button class="btn now" type="submit" data-now hidden title="Stop the current step and deliver this now">Now <kbd>${MOD}⇧↵</kbd></button>
-      <button class="btn primary" type="submit"><span class="label">Send</span> <kbd>${MOD}↵</kbd></button></div>
+    <div class="box">
+      <textarea id="message-${esc(id)}" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
+      <div class="row"><span class="note">Goes into the run's log. The rules still apply.</span>
+        <button class="btn now" type="submit" data-now hidden title="Stop the current step and deliver this now">Now <kbd>${MOD}⇧↵</kbd></button>
+        <button class="btn primary" type="submit"><span class="label">Send</span> <kbd>${MOD}↵</kbd></button></div>
+    </div>
   </form>`);
   const text = form.querySelector("textarea");
   const send = form.querySelector(".btn.primary");

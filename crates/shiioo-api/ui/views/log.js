@@ -34,7 +34,7 @@ export function createLog(box, { onDecide }) {
   };
   const open = (kind, name, ev, via) => {
     if (turn && turn.kind === kind && turn.name === name && kind !== "you") return turn.body;
-    const t = el(`<div class="turn">${header(kind, name, ev, via)}<div class="body"></div></div>`);
+    const t = el(`<div class="turn ${kind}">${header(kind, name, ev, via)}<div class="body"></div></div>`);
     inner.appendChild(t);
     turn = { kind, name, body: t.querySelector(".body") };
     return turn.body;

@@ -2,10 +2,11 @@
 // providers' capacity. Quiet by design: only "needs you" is coloured, and a
 // finished run you have not opened yet carries a small dot.
 
-import { age, el, esc, isOpen, kind, mark, MOD, needsYou, setTheme, side, theme, trunc, who } from "../core.js";
+import { age, el, esc, isOpen, kind, mark, MOD, needsYou, rail, setTheme, side, theme, trunc, who } from "../core.js";
 import { allRuns, getCapacity, isLive, watch } from "../office.js";
 import * as desk from "../desk.js";
 import { openNewTask } from "./runs.js";
+import { nextNeedsYou } from "../commands.js";
 
 const SEEN_KEY = "shiioo_seen";
 const SINCE_KEY = "shiioo_since";
@@ -53,7 +54,7 @@ export function waitingFor(r) {
 export function renderSide() {
   side.innerHTML = "";
   const top = el(`<div class="side-top"><a class="brand" href="#">shiioo<small>office</small></a></div>`);
-  const newBtn = el(`<button class="new-btn" type="button"><span>New task</span><kbd>N</kbd></button>`);
+  const newBtn = el(`<button class="new-btn" type="button"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 10.5V15a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5h4.5"/><path d="m13.2 3.8 3 3L10 13l-3.4.4.4-3.4z"/></svg><span>New task</span><kbd>N</kbd></button>`);
   newBtn.addEventListener("click", () => openNewTask());
   const scroll = el(`<div class="side-scroll"></div>`);
   const foot = el(`<div class="side-foot"></div>`);
@@ -150,4 +151,47 @@ function favicon(dot) {
     <text x="${dot ? 13 : 16}" y="23" font-family="system-ui,sans-serif" font-size="21" font-weight="700" text-anchor="middle" fill="#fff">s</text>
     ${dot ? `<circle cx="25" cy="7" r="6.5" fill="#e3a64c" stroke="#fff" stroke-width="2"/>` : ""}</svg>`;
   document.getElementById("favicon")?.setAttribute("href", `data:image/svg+xml,${encodeURIComponent(svg)}`);
+}
+
+// ---- the rail --------------------------------------------------------------
+// The narrow column on the window's frame: the brand, and the few things
+// you do from anywhere. Every button has its key in the tooltip.
+
+const ICON = {
+  home: '<path d="M3.5 9.5 10 4l6.5 5.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-4V17H4.5a1 1 0 0 1-1-1z"/>',
+  new: '<path d="M10 4.5v11M4.5 10h11"/>',
+  search: '<circle cx="9" cy="9" r="5"/><path d="m12.8 12.8 3.7 3.7"/>',
+  attn: '<path d="M5.5 13.5V9a4.5 4.5 0 0 1 9 0v4.5l1.2 1.5H4.3z"/><path d="M8.3 16.8a1.9 1.9 0 0 0 3.4 0"/>',
+  keys: '<rect x="2.5" y="5.5" width="15" height="9.5" rx="2"/><path d="M5.5 8.5h.01M8.5 8.5h.01M11.5 8.5h.01M14.5 8.5h.01M6.5 11.8h7"/>',
+  kit: '<rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1.4"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1.4"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1.4"/><rect x="11" y="11" width="5.5" height="5.5" rx="1.4"/>',
+};
+const icon = (name) => `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
+
+export function renderRail() {
+  rail.innerHTML = `
+    <a class="rail-brand" href="#" title="Home (H)" aria-label="Home"><span>s</span></a>
+    <button class="rail-btn" type="button" data-act="home" title="Home (H)" aria-label="Home">${icon("home")}</button>
+    <button class="rail-btn" type="button" data-act="new" title="New task (N)" aria-label="New task">${icon("new")}</button>
+    <button class="rail-btn" type="button" data-act="search" title="Search runs and commands (${MOD}K)" aria-label="Search">${icon("search")}</button>
+    <button class="rail-btn attn-btn" type="button" data-act="next" title="Next run that needs you (J)" aria-label="Next run that needs you">${icon("attn")}<i class="rail-dot" hidden></i></button>
+    <span class="grow"></span>
+    <button class="rail-btn" type="button" data-act="keys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">${icon("keys")}</button>
+    <a class="rail-btn" href="#kit" title="Component kit" aria-label="Component kit">${icon("kit")}</a>`;
+  rail.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === "home") desk.show(null);
+    if (act === "new") openNewTask();
+    if (act === "search") document.dispatchEvent(new CustomEvent("shiioo:palette"));
+    if (act === "next") nextNeedsYou();
+    if (act === "keys") document.dispatchEvent(new CustomEvent("shiioo:help"));
+  });
+  watch(() => {
+    const n = allRuns().filter((r) => needsYou(r.status.state)).length;
+    const dot = rail.querySelector(".rail-dot");
+    dot.hidden = n === 0;
+    dot.textContent = n > 9 ? "9+" : String(n);
+    rail.querySelector(".attn-btn").classList.toggle("on", n > 0);
+  });
 }

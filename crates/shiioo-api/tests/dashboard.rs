@@ -337,6 +337,15 @@ fn text_colours_meet_aa_in_both_themes() {
         ("bad", "panel"),
         ("bad", "bad-soft"),
         ("panel", "ink"),
+        ("ink", "frame"),
+        ("muted", "frame"),
+        ("ink", "side"),
+        ("muted", "side"),
+        ("faint", "side"),
+        ("ink", "raise"),
+        ("muted", "raise"),
+        ("faint", "raise"),
+        ("attn-ink", "raise"),
     ];
     let css = UI_FILES
         .iter()
