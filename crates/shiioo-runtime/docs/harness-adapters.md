@@ -130,7 +130,7 @@ conversation back, and the Shiioo log has every turn from both sessions.
 ### Command line
 
 ```
-<binary> [binary_args…] exec [resume <thread_id>] --json -C <cwd>
+<binary> [binary_args…] exec (-C <cwd> | resume <thread_id>) --json
     -c approval_policy="never"
     --dangerously-bypass-approvals-and-sandbox          # danger-full-access
   | -c sandbox_mode="read-only" | "workspace-write"     # otherwise
@@ -209,7 +209,10 @@ capacity broker treats Codex as always available until that is wired in
 ### Resume
 
 The thread id from `thread.started` is passed as `exec resume <thread_id>`
-on the next start, with the continue prompt.
+on the next start, with the continue prompt or the owner's messages.
+`exec resume` takes no `-C` (Codex 0.163 refuses it), so the process is
+started in the worktree instead. Verified with Codex 0.163: a message sent
+mid-run and a follow-up both resume the same thread.
 
 ## Adding an adapter
 

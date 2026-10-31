@@ -90,14 +90,17 @@ pub fn command(
     let mut cmd = Command::new(binary);
     cmd.args(&spec.binary_args);
     cmd.current_dir(cwd).arg("exec");
-    if let Some(thread) = resume {
-        cmd.arg("resume").arg(thread);
+    match resume {
+        // `exec resume` takes no `-C` (Codex 0.163 refuses it); the
+        // process's working directory is the worktree already.
+        Some(thread) => {
+            cmd.arg("resume").arg(thread);
+        }
+        None => {
+            cmd.arg("-C").arg(cwd);
+        }
     }
-    cmd.arg("--json")
-        .arg("-C")
-        .arg(cwd)
-        .arg("-c")
-        .arg("approval_policy=\"never\"");
+    cmd.arg("--json").arg("-c").arg("approval_policy=\"never\"");
     match sandbox_for(&spec.permission_mode) {
         Sandbox::DangerFullAccess => {
             cmd.arg("--dangerously-bypass-approvals-and-sandbox");
@@ -465,6 +468,8 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(&args[..3], ["exec", "resume", "thread-1"]);
+        assert!(!args.contains(&"-C".to_string()), "{args:?}");
+        assert_eq!(cmd.as_std().get_current_dir(), Some(Path::new("/work")));
         assert!(args.contains(&"--skip-git-repo-check".to_string()));
         assert!(args.contains(&"sandbox_mode=\"read-only\"".to_string()));
     }

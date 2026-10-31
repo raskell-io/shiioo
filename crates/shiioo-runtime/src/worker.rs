@@ -991,10 +991,25 @@ fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
         .filter(|(_, e)| matches!(*e.payload, Payload::SandboxStarted { .. }))
         .map(|(i, _)| i)
         .collect();
-    let (from, to) = match starts.as_slice() {
-        [.., previous, current] => (*previous, *current),
-        [current] => (0, *current),
-        [] => (0, log.len()),
+    // Messages after the last process that got as far as starting its
+    // session; one that failed before that (a bad flag, a missing binary)
+    // was told nothing.
+    let ran = |i: usize| {
+        let next = starts
+            .iter()
+            .find(|&&s| s > i)
+            .copied()
+            .unwrap_or(log.len());
+        log[i..next]
+            .iter()
+            .any(|e| matches!(*e.payload, Payload::HarnessSessionStarted { .. }))
+    };
+    let (from, to) = match starts.split_last() {
+        Some((current, earlier)) => (
+            earlier.iter().rev().copied().find(|&i| ran(i)).unwrap_or(0),
+            *current,
+        ),
+        None => (0, log.len()),
     };
     let messages: Vec<String> = log[from..to]
         .iter()
@@ -1122,6 +1137,24 @@ mod tests {
         let prompt = harness_prompt(&l, "Fix it.", true);
         assert!(prompt.starts_with(harness::CONTINUE_PROMPT), "{prompt}");
         assert!(prompt.ends_with("the owner wrote:\n\nHurry."), "{prompt}");
+    }
+
+    #[test]
+    fn a_process_that_never_started_was_told_nothing() {
+        // The message went into the prompt of a process that failed before
+        // starting its session; the next one must carry it.
+        let l = log(vec![
+            created(),
+            start(),
+            session(),
+            say("Also the README."),
+            result(),
+            start(),
+            start(),
+        ]);
+        assert_eq!(harness_prompt(&l, "Fix it.", true), "Also the README.");
+        let l = log(vec![created(), say("In sango."), start(), start()]);
+        assert_eq!(harness_prompt(&l, "Fix it.", false), "Fix it.\n\nIn sango.");
     }
 
     #[test]

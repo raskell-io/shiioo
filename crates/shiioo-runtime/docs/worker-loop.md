@@ -149,7 +149,9 @@ this is the loop around them.
    stopped without finishing N times`.
 3. **Marker and prompt.** `SandboxStarted` is appended before every process
    starts, and marks what that process is told (`harness_prompt`): messages
-   before it are in its prompt, messages after it are unread. First start:
+   before it are in its prompt, messages after it are unread. A process
+   that failed before starting its session (no `HarnessSessionStarted`
+   after its marker) read nothing: its messages go to the next one. First start:
    the task, plus any messages sent before it. After the session finished
    cleanly (a `HarnessResult` since its start): the owner's messages since
    the previous start. After a crash: `CONTINUE_PROMPT` ("The process

@@ -34,7 +34,7 @@ It is built for one owner with an always-on machine (a Mac Studio, say), not for
 | Rules (`rules.toml`), approvals via the harness hook, cancellation | built, verified live |
 | Telegram bot: `/run`, `/status`, `/log`, `/cancel`, `/capacity`, Allow / Deny buttons, notifications | built; tested against a fake Telegram server, live check pending |
 | The desk (web dashboard): what needs you in a sidebar, runs by repository, a conversation-style live log, the diff and approval side by side, light and dark, a phone layout | built, verified in a browser |
-| Talking to an agent: messages mid-run (read at its next turn), runs that park for your reply, follow-ups that continue a finished Claude Code or Codex run on its branch and session | built; harness delivery tested with fakes, live check pending |
+| Talking to an agent: messages mid-run (read at its next turn), runs that park for your reply, follow-ups that continue a finished Claude Code or Codex run on its branch and session | built; verified live with Claude Code 2.1 and Codex 0.163 |
 | `shiioo install`: login service, keep-awake, token handling | built (macOS launchd; Linux systemd unit untested) |
 | Capacity broker across subscription windows, `[[employees]]`, `/capacity` | built (Codex reports no windows in headless mode yet) |
 | Local models through `ollama/…`, `lmstudio/…`, `openai/…` names | built; untested against a live Ollama |
