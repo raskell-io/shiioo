@@ -8,6 +8,7 @@ import { liveStream } from "./stream.js";
 const runs = new Map(); // id -> RunView
 let capacity = [];
 let live = false;
+let loaded = false;
 const listeners = new Set();
 
 /** Calls `fn` now and after every change; returns the unsubscribe. */
@@ -24,6 +25,8 @@ export const allRuns = () => [...runs.values()].sort((a, b) => b.updated_at - a.
 export const getRun = (id) => runs.get(id);
 export const getCapacity = () => capacity;
 export const isLive = () => live;
+/** The first list has arrived: a run missing now is gone, not late. */
+export const isLoaded = () => loaded;
 
 /** A view the desk got from elsewhere (a POST's answer), shown at once. */
 export function upsert(view) {
@@ -34,6 +37,7 @@ export function upsert(view) {
 export async function startOffice() {
   try {
     for (const r of await api("/v1/runs")) runs.set(r.id, r);
+    loaded = true;
     changed();
   } catch (e) { showError(e); }
   loadCapacity();

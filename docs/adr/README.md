@@ -16,6 +16,7 @@ Each ADR records one decision: the context, what we chose, what we gave up, and 
 | [0010](0010-single-binary-server-and-nodes.md) | One binary: a server, nodes that dial out, an embedded store | Accepted |
 | [0011](0011-containers-through-the-owners-engine.md) | Isolation through the owner's container engine, egress through a proxy sidecar, secrets sealed locally | Accepted |
 | [0012](0012-nodes-are-workers-over-the-offices-api.md) | Nodes are workers over the office's HTTP API | Accepted |
+| [0013](0013-a-websocket-for-the-takeover-terminal.md) | A WebSocket for the takeover terminal, with single-use attach tickets | Proposed |
 
 ## Template
 

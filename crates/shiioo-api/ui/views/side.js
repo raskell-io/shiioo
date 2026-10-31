@@ -4,6 +4,7 @@
 
 import { age, el, esc, isOpen, kind, mark, MOD, needsYou, setTheme, side, theme, trunc, who } from "../core.js";
 import { allRuns, getCapacity, isLive, watch } from "../office.js";
+import * as desk from "../desk.js";
 import { openNewTask } from "./runs.js";
 
 const SEEN_KEY = "shiioo_seen";
@@ -60,8 +61,15 @@ export function renderSide() {
 
   scroll.addEventListener("click", (e) => {
     const more = e.target.closest("[data-more]");
-    if (more) { expanded.add(more.dataset.more); paint(); }
+    if (more) { expanded.add(more.dataset.more); paint(); return; }
+    // Shift-click opens the run beside the focused pane.
+    const item = e.target.closest("a.item");
+    if (item && e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      desk.showBeside(new URLSearchParams(item.getAttribute("href").slice(1)).get("run"));
+    }
   });
+  document.addEventListener("shiioo:theme", () => paint());
 
   paint = () => {
     const runs = allRuns();
@@ -125,9 +133,21 @@ export function renderSide() {
       <div class="foot-row"><span class="live ${isLive() ? "" : "off"}"><i></i>${isLive() ? "Live" : "Reconnecting…"}</span><span class="grow"></span>
       <span class="seg" role="group" aria-label="Theme">${["system", "light", "dark"].map((v) =>
         `<button type="button" data-theme="${v}" aria-pressed="${t === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</span></div>`;
-    for (const b of foot.querySelectorAll("[data-theme]")) b.addEventListener("click", () => { setTheme(b.dataset.theme); paint(); });
+    for (const b of foot.querySelectorAll("[data-theme]")) b.addEventListener("click", () => setTheme(b.dataset.theme));
     document.title = attn.length ? `(${attn.length}) Shiioo` : "Shiioo";
+    favicon(attn.length > 0);
   };
   watch(paint);
-  newBtn.title = `New task (N) · Next that needs you (J) · ${MOD}↵ sends`;
+  newBtn.title = `New task (N) · Search (${MOD}K) · All keys (?)`;
+}
+
+/** The tab's icon: the brand mark, with an amber dot while something waits. */
+let dotted = null;
+function favicon(dot) {
+  if (dot === dotted) return;
+  dotted = dot;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#2c746b"/>
+    <text x="${dot ? 13 : 16}" y="23" font-family="system-ui,sans-serif" font-size="21" font-weight="700" text-anchor="middle" fill="#fff">s</text>
+    ${dot ? `<circle cx="25" cy="7" r="6.5" fill="#e3a64c" stroke="#fff" stroke-width="2"/>` : ""}</svg>`;
+  document.getElementById("favicon")?.setAttribute("href", `data:image/svg+xml,${encodeURIComponent(svg)}`);
 }

@@ -1,12 +1,11 @@
 // Shared by every view: the token, the API call, small DOM helpers, the
-// current view's teardown, the routing hook, run states and the theme.
+// routing hook, run states and the theme.
 
 export const app = document.getElementById("app");
 export const side = document.getElementById("side");
 const TOKEN_KEY = "shiioo_token";
 const THEME_KEY = "shiioo_theme";
 let token = localStorage.getItem(TOKEN_KEY) || "";
-let stop = null; // closes the current view's background work
 let route = () => {};
 
 // A token arriving in the fragment (#token=…) is stored and removed
@@ -22,11 +21,6 @@ export const hasToken = () => Boolean(token);
 export const authHeader = () => ({ Authorization: `Bearer ${token}` });
 export const setRoute = (fn) => { route = fn; };
 export const rerender = () => route();
-
-/** Registers what to stop when the view is left. */
-export const onLeave = (fn) => { stop = fn; };
-/** Stops the current view's background work, if any. */
-export function leave() { if (stop) { stop(); stop = null; } }
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -101,9 +95,17 @@ export const who = (runtime) => WHO[runtime] || runtime || "Agent";
 
 // ---- theme -------------------------------------------------------------
 export const theme = () => localStorage.getItem(THEME_KEY) || "system";
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+/** Puts the chosen theme (or the system's) on <html>. */
+function applyTheme() {
+  const t = theme();
+  document.documentElement.dataset.theme = t === "system" ? (systemDark.matches ? "dark" : "light") : t;
+}
+systemDark.addEventListener("change", () => { if (theme() === "system") applyTheme(); });
 export function setTheme(t) {
-  if (t === "system") { localStorage.removeItem(THEME_KEY); delete document.documentElement.dataset.theme; }
-  else { localStorage.setItem(THEME_KEY, t); document.documentElement.dataset.theme = t; }
+  if (t === "system") localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, t);
+  applyTheme();
+  document.dispatchEvent(new CustomEvent("shiioo:theme"));
 }
 
 // ---- API ---------------------------------------------------------------

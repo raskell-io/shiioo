@@ -1,17 +1,16 @@
 // Home and the new-task sheet. On a phone, home is the run list (what
 // needs you, then everything else); on a desk the sidebar is the list, so
-// home is a quiet overview.
+// home is a quiet overview, shown in any pane that has no run in it.
 
-import { age, api, app, el, esc, kind, mark, MOD, narrow, needsYou, onLeave, showError, who } from "../core.js";
+import { age, api, el, esc, kind, mark, MOD, narrow, needsYou, showError, who } from "../core.js";
 import { allRuns, getCapacity, upsert, watch } from "../office.js";
 import { unread, waitingFor, where } from "./side.js";
 
-export function renderHome() {
-  if (narrow()) { renderPhoneList(); return; }
-  app.innerHTML = "";
+/** Home as a component: `{ root, destroy }`. `extra` is for a second pane. */
+export function createHome({ extra = false } = {}) {
+  if (narrow()) return createPhoneList();
   const home = el(`<div class="home"></div>`);
-  app.appendChild(home);
-  onLeave(watch(() => {
+  const unwatch = watch(() => {
     const runs = allRuns();
     const attn = runs.filter((r) => needsYou(r.status.state));
     const working = runs.filter((r) => r.status.state === "open");
@@ -33,22 +32,26 @@ export function renderHome() {
       home.innerHTML = `<div class="empty">
         <div class="art" aria-hidden="true"><span class="brand-mark">s</span></div>
         <h2>${esc(line)}</h2>
-        <p>${attn.length ? "Open the first one with <kbd>J</kbd>, or pick a run on the left." : "Pick a run on the left, or give the office something new."}</p>
+        <p>${extra ? "This pane is empty. Pick a run on the left or with <kbd>" + MOD + "K</kbd>, and it opens here."
+          : attn.length ? "Open the first one with <kbd>J</kbd>, or pick a run on the left." : "Pick a run on the left, or give the office something new."}</p>
         <div class="actions">${attn.length ? `<a class="btn primary" href="#run=${esc(attn[0].id)}">Next that needs you <kbd>J</kbd></a>` : ""}
-          <button class="btn${attn.length ? "" : " primary"}" type="button" data-new>New task <kbd>N</kbd></button></div>
+          <button class="btn${attn.length ? "" : " primary"}" type="button" data-new>New task <kbd>N</kbd></button>
+          <button class="btn quiet" type="button" data-palette>Search <kbd>${MOD}K</kbd></button></div>
       </div>`;
     }
     home.querySelector("[data-new]")?.addEventListener("click", () => openNewTask());
-  }));
+    home.querySelector("[data-palette]")?.addEventListener("click", () => document.dispatchEvent(new CustomEvent("shiioo:palette")));
+  });
+  return { root: home, destroy() { unwatch(); home.remove(); } };
 }
 
-function renderPhoneList() {
-  app.innerHTML = "";
+function createPhoneList() {
+  const root = el(`<div class="phone"></div>`);
   const top = el(`<div class="ph-top"><a class="brand" href="#">shiioo</a><button class="btn" type="button">New task</button></div>`);
   top.querySelector("button").addEventListener("click", () => openNewTask());
   const list = el(`<div class="ph-list"></div>`);
-  app.append(top, list);
-  onLeave(watch(() => {
+  root.append(top, list);
+  const unwatch = watch(() => {
     const runs = allRuns();
     const attn = runs.filter((r) => needsYou(r.status.state));
     const rest = runs.filter((r) => !needsYou(r.status.state));
@@ -64,11 +67,12 @@ function renderPhoneList() {
       ${attn.length ? `<h2 class="attn-h">Needs you · ${attn.length}</h2>${attn.map((r) => row(r, true)).join("")}` : ""}
       ${rest.length ? `<h2>Runs</h2>${rest.map((r) => row(r, false)).join("")}` : ""}
       ${runs.length ? "" : `<div class="empty"><h2>Nothing running yet</h2><p>Tap New task to give the office something to do.</p></div>`}`;
-  }));
+  });
+  return { root, destroy() { unwatch(); root.remove(); } };
 }
 
 /** The new-task sheet: a task, optionally a repository and who does it. */
-export function openNewTask() {
+export function openNewTask({ repo: preset = "" } = {}) {
   if (document.querySelector(".scrim")) return;
   const repos = [...new Set(allRuns().map((r) => r.repo).filter(Boolean))];
   const scrim = el(`<div class="scrim" role="dialog" aria-modal="true" aria-labelledby="nt-h">
@@ -78,7 +82,7 @@ export function openNewTask() {
       <div class="field"><label for="nt-task">What should be done?</label>
         <textarea id="nt-task" required placeholder="Fix the flaky test in tests/net.rs and open a PR"></textarea></div>
       <div class="field"><label for="nt-repo">Repository</label>
-        <input id="nt-repo" list="nt-repos" placeholder="A configured label or an absolute path (optional)" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <input id="nt-repo" list="nt-repos" value="${esc(preset)}" placeholder="A configured label or an absolute path (optional)" autocapitalize="off" autocorrect="off" spellcheck="false">
         <datalist id="nt-repos">${repos.map((r) => `<option value="${esc(r)}">`).join("")}</datalist></div>
       <div class="field"><label for="nt-who">Who</label>
         <select id="nt-who"><option value="auto">Whoever has the most capacity left</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select></div>

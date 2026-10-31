@@ -1,6 +1,6 @@
 # The desk: the web UI, and working with an employee directly
 
-Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), **Now** (T14), follow-ups (T15), the message box (T16), and a first pass of the desk itself: tokens and fonts (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
+Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), **Now** (T14), follow-ups (T15), the message box (T16), and the desk's layout and keyboard: tabs and split panes (T4), the command palette and shortcuts (T5), tokens, fonts and the `#kit` page with AA contrast checked (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. ADR-0013 (the takeover terminal, T17) is proposed. Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
 
 Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the dashboard as built), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
 
@@ -170,7 +170,7 @@ One line each, in build order within a phase. "Needs" names what must land first
 | | Task | Where | Needs | Done when |
 |---|---|---|---|---|
 | T27 | Interactive mockups of the desk and phone layouts, light and dark: sidebar, run view with log, diff and approval card, palette, empty states, takeover frame; reviewed by the owner before T3 | an artifact or `docs/design/desk-mockups/` | | Owner signs off; open questions folded into this doc |
-| T28 *(part built: tokens, components, fonts, light and dark; no `#kit` page yet)* | Design tokens and base components in CSS: colour (three themes), type scale, spacing, radius, elevation, motion; buttons, cards, rows, pills, the attention mark; bundled fonts (D12) | `ui/tokens.css`, `ui/components.css`, `assets/brand/fonts` | T1, T27 | A reference page `/ui/#kit` renders every component in every theme; AA contrast checked |
+| T28 *(built: tokens, components, fonts, light and dark, `#kit` with a live contrast table, AA checked by `tests/dashboard.rs`; tokens are still in `app.css`, not split into files)* | Design tokens and base components in CSS: colour (three themes), type scale, spacing, radius, elevation, motion; buttons, cards, rows, pills, the attention mark; bundled fonts (D12) | `ui/tokens.css`, `ui/components.css`, `assets/brand/fonts` | T1, T27 | A reference page `/ui/#kit` renders every component in every theme; AA contrast checked |
 
 ### 8a. The desk layout
 
@@ -179,8 +179,8 @@ One line each, in build order within a phase. "Needs" names what must land first
 | T1 *(built)* | Split `app.js` into native ES modules (core: token, `api()`, routing, SSE client; one module per view) and serve each embedded file under `/ui/` | `shiioo-api/ui/`, `lib.rs` UI routes, `tests/dashboard.rs` | | Phone dashboard unchanged; every module served without a token; D10 settled |
 | T2 *(built; machine frames planned)* | Office-wide event stream `GET /v1/events/stream`: a `RunView` per run created or changed (approvals and plans included, as run states), a `ready` frame after the first pass; resumable with `Last-Event-ID` | `shiioo-api` (store notifications), `docs/http.md`, `docs/design/api.md` | | `tests/events.rs`: snapshot, a live run arriving without polling, resume from the last id skipping unchanged runs; D1 settled |
 | T3 *(part built: sidebar with Needs you, runs by repository, unread marks; no machines group)* | Desk layout: breakpoint, sidebar (Needs you, repos, machines), unread marks kept in `localStorage`, attention rules of U1 | `ui/` | T1, T2, T28 | Wide screen shows grouped runs; a new approval appears under Needs you without reload |
-| T4 | Tabs and split panes, one live log per pane; the diff and approval card in a side panel | `ui/` | T3 | Two runs stream side by side; Allow in the side panel answers the hook |
-| T5 | Command palette and shortcuts (new task, jump to run, next "needs me", allow / deny focused, cancel) | `ui/` | T4 | Every action reachable without the mouse |
+| T4 *(built: tabs with drag to reorder, up to three resizable panes, views kept mounted and paused when covered, the side panel per pane by container query, the layout kept across reloads)* | Tabs and split panes, one live log per pane; the diff and approval card in a side panel | `ui/` | T3 | Two runs stream side by side; Allow in the side panel answers the hook |
+| T5 *(built: one command list behind the keys, the ⌘K palette with fuzzy matching and the `?` cheat sheet)* | Command palette and shortcuts (new task, jump to run, next "needs me", allow / deny focused, cancel) | `ui/` | T4 | Every action reachable without the mouse |
 | T6 | API-parity test: drive the flows the desk uses (create, stream, approve, cancel, diff) through `/v1` only | `shiioo-api/tests/` | T2 | Test passes; R3 holds by construction |
 
 ### Polish (alongside 8a–8d)
@@ -190,10 +190,10 @@ One line each, in build order within a phase. "Needs" names what must land first
 | T29 *(part built: turns, tool-call rows, folded output, markdown, tail-follow; no virtualised list or inline edit diffs)* | The structured log: turns, collapsible tool-call rows with status and duration, folded output, inline edit diffs, rendered markdown, relative times, tail-follow with "jump to latest", virtualised list (U3, U5) | `ui/log.js` | T4, T28 | 10 000 events scroll at 60 fps; a test fixture log renders without layout shift while streaming |
 | T30 *(part built: file list and unified hunks in the side panel)* | The diff viewer: file list, unified and split, word-level changes, collapsed context, highlighting (U4, D13) | `ui/diff.js`, possibly `shiioo-api` diff endpoint | T4, T28 | A real multi-file PR diff reads comfortably at desk width and on the phone |
 | T31 | Optimistic actions with reconciliation, reconnecting indicator, designed empty / loading / error states for every view (U5, U8) | `ui/` | T3 | Each view checked with the server stopped, slow and empty |
-| T32 | Notifications, sound, tab title and favicon count for "needs you"; click opens the run with the card focused (U9) | `ui/` | T2, T3 | A pending approval in a background window notifies once, and the click lands on the card |
+| T32 *(part built: tab title count and favicon dot)* | Notifications, sound, tab title and favicon count for "needs you"; click opens the run with the card focused (U9) | `ui/` | T2, T3 | A pending approval in a background window notifies once, and the click lands on the card |
 | T33 | PWA: manifest, icons, standalone window, service worker for the shell only (never caching API responses) (U10) | `ui/`, `lib.rs` routes, `assets/brand/build.py` | T3 | Installs from Safari and Chrome on macOS; opens in its own window |
 | T34 | Owner themes and key bindings from `.shiioo/desk/theme.toml` and `keys.toml` via `GET /v1/desk/settings`; default rules deny agent writes under `.shiioo/` (U12) | `shiioo-api`, `shiioo-rules` defaults, `ui/` | T5, T28 | Changing `theme.toml` restyles the desk on reload; an agent's write there is denied |
-| T35 | Accessibility pass: labels, focus order, keyboard-only walkthrough, contrast in all themes (U13) | `ui/` | T5, T28 | Keyboard-only walkthrough of every flow passes; automated contrast check in `tests/dashboard.rs` or a script |
+| T35 *(part built: AA contrast in both themes, checked by a test)* | Accessibility pass: labels, focus order, keyboard-only walkthrough, contrast in all themes (U13) | `ui/` | T5, T28 | Keyboard-only walkthrough of every flow passes; automated contrast check in `tests/dashboard.rs` or a script |
 | T36 | UX review at the end of each sub-phase: screenshots of every view (light, dark, phone, desk) driven by a browser script, papercut list, fixes (U14) | `docs/design/desk-reviews/`, `scripts/` | each sub-phase | Review committed; papercuts fixed or listed in the backlog |
 
 ### 8b. The office pages
@@ -220,7 +220,7 @@ One line each, in build order within a phase. "Needs" names what must land first
 
 | | Task | Where | Needs | Done when |
 |---|---|---|---|---|
-| T17 | ADR-0013: a WebSocket for the takeover terminal, amending ADR-0004 for one endpoint (D8) | `docs/adr/` | | Accepted by the owner |
+| T17 *(proposed: [ADR-0013](../adr/0013-a-websocket-for-the-takeover-terminal.md), waiting for the owner)* | ADR-0013: a WebSocket for the takeover terminal, amending ADR-0004 for one endpoint (D8) | `docs/adr/` | | Accepted by the owner |
 | T18 | Events `TakeoverStarted { by }` and `TakeoverEnded { reason, transcript_blob? }` | `shiioo-core/src/event.rs`, `docs/design/event-log.md` | T11 | Payload round-trip and hash tests |
 | T19 | Interactive driver mode: the harness command without `--print` / `exec`, same hook flags and environment, under a PTY, resumed from the run's session; holds the run's lease while attached | `shiioo-runtime/src/harness/` (new `interactive.rs`), `claude_code.rs`, `codex.rs` | T18 | A test with a fake harness binary gets keystrokes in and output out; the hook env is set |
 | T20 | `POST /v1/runs/{run}/takeover` returning a single-use, short-lived attach ticket; `GET /v1/runs/{run}/terminal?ticket=…` WebSocket with binary PTY frames and a resize control frame (D9) | `shiioo-api` | T17, T19 | Used or expired ticket refused; detach and re-attach keeps the session |

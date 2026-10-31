@@ -120,7 +120,9 @@ async fn serves_the_dashboard_files_without_a_token() {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resp.status(), 200, "{name}");
         assert_eq!(
-            resp.headers().get("content-type").and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
             Some("font/woff2")
         );
         assert_eq!(&resp.bytes().await.unwrap_or_default()[..], *body, "{name}");
@@ -308,4 +310,100 @@ async fn diff_shows_the_branch_changes() {
         !diff.contains("OTHER.md"),
         "owner's commit leaked in: {diff}"
     );
+}
+
+/// Text colours meet WCAG AA (4.5:1) on the surfaces they sit on, in both
+/// themes. The pairs are the ones `ui/views/kit.js` checks in the browser.
+#[test]
+fn text_colours_meet_aa_in_both_themes() {
+    const PAIRS: &[(&str, &str)] = &[
+        ("ink", "bg"),
+        ("ink", "panel"),
+        ("ink", "sunk"),
+        ("muted", "bg"),
+        ("muted", "panel"),
+        ("muted", "sunk"),
+        ("faint", "bg"),
+        ("faint", "panel"),
+        ("faint", "sunk"),
+        ("accent", "bg"),
+        ("accent", "panel"),
+        ("accent", "accent-soft"),
+        ("accent-ink", "accent"),
+        ("attn-ink", "attn-soft"),
+        ("attn-ink", "sunk"),
+        ("attn-ink", "panel"),
+        ("ok", "panel"),
+        ("bad", "panel"),
+        ("bad", "bad-soft"),
+        ("panel", "ink"),
+    ];
+    let css = UI_FILES
+        .iter()
+        .find(|(n, _)| *n == "app.css")
+        .map(|(_, b)| *b)
+        .unwrap_or_else(|| panic!("app.css is not served"));
+    let kit = UI_FILES
+        .iter()
+        .find(|(n, _)| *n == "views/kit.js")
+        .map(|(_, b)| *b)
+        .unwrap_or_default();
+    for (fg, bg) in PAIRS {
+        assert!(
+            kit.contains(&format!("[\"{fg}\", \"{bg}\"]")),
+            "kit.js does not check {fg} on {bg}"
+        );
+    }
+    // The token block that starts with `selector`: `--name: #rrggbb;` pairs.
+    let block = |selector: &str| -> std::collections::HashMap<String, String> {
+        let start = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("no {selector} in app.css"));
+        let body = &css[start + selector.len()..];
+        let body = &body[..body.find('}').unwrap_or(body.len())];
+        body.split(';')
+            .filter_map(|decl| {
+                // Skip what comes before the property (a comment, space).
+                let decl = &decl[decl.find("--")?..];
+                let (name, value) = decl.split_once(':')?;
+                let name = name.trim().strip_prefix("--")?;
+                let value = value.trim();
+                (value.len() == 7 && value.starts_with('#'))
+                    .then(|| (name.to_owned(), value.to_owned()))
+            })
+            .collect()
+    };
+    let luminance = |hex: &str| -> f64 {
+        let channel = |i: usize| {
+            let c = f64::from(u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0)) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+    };
+    let mut failures = Vec::new();
+    for (theme, selector) in [
+        ("light", ":root, .t-light {"),
+        ("dark", ":root[data-theme=\"dark\"], .t-dark {"),
+    ] {
+        let tokens = block(selector);
+        for (fg, bg) in PAIRS {
+            let (Some(a), Some(b)) = (tokens.get(*fg), tokens.get(*bg)) else {
+                failures.push(format!("{theme}: --{fg} or --{bg} is missing"));
+                continue;
+            };
+            let (hi, lo) = {
+                let (x, y) = (luminance(a), luminance(b));
+                if x > y { (x, y) } else { (y, x) }
+            };
+            let ratio = (hi + 0.05) / (lo + 0.05);
+            if ratio < 4.5 {
+                failures.push(format!("{theme}: --{fg} on --{bg} is {ratio:.2}:1"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "below AA: {failures:#?}");
 }

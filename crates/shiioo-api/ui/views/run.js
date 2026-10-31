@@ -1,18 +1,22 @@
 // One run: the header (task, state, where it works), the structured log,
 // the box for writing to it, and a side panel with the approval it waits
-// on and the diff of its branch.
+// on and the diff of its branch. A view is an instance a desk pane mounts:
+// it streams while it is shown and pauses when another tab covers it, so
+// switching back is instant and resumes from the last event it has.
 
-import { api, app, el, esc, isOpen, kind, mark, MOD, narrow, onLeave, short, showError, span, stateLabel, toast, who } from "../core.js";
+import { api, el, esc, isOpen, kind, mark, MOD, narrow, short, showError, span, stateLabel, toast, who } from "../core.js";
 import { describe } from "../describe.js";
 import { getRun, upsert, watch } from "../office.js";
 import { liveStream } from "../stream.js";
 import { renderDiff } from "./diff.js";
 import { createLog } from "./log.js";
 
-export async function renderRun(id) {
-  app.innerHTML = "";
-  const run = el(`<div class="run">
-    <div class="pane">
+/** Room the side panel needs beside the log; narrower, it slides over. */
+const INLINE_ASIDE = 1000;
+
+export function createRunView(id) {
+  const root = el(`<div class="run" data-run="${esc(id)}">
+    <div class="run-main">
       <header class="run-head">
         <a class="back" href="#">‹ Runs</a>
         <div class="run-title"><h1></h1><span class="pill"></span></div>
@@ -24,17 +28,16 @@ export async function renderRun(id) {
     <aside class="aside" hidden aria-label="Approval and diff">
       <div class="aside-h"><h2>Approval &amp; diff</h2>
         <span class="seg" role="group" aria-label="Long lines"><button type="button" data-wrap="0" aria-pressed="true">Scroll</button><button type="button" data-wrap="1" aria-pressed="false">Wrap</button></span>
-        <button class="icon-btn" type="button" data-close aria-label="Close">✕</button></div>
-      <div class="aside-scroll"><div class="ask-slot"></div><div class="diff-slot"><div class="sk" style="width:60%"></div></div></div>
+        <button class="icon-btn" type="button" data-close aria-label="Close" title="Close (Esc)">✕</button></div>
+      <div class="aside-scroll"><div class="ask-slot"></div><div class="diff-slot"><div class="sk" style="width:60%"></div><div class="sk" style="width:85%"></div><div class="sk" style="width:40%"></div></div></div>
     </aside>
   </div>`);
-  app.appendChild(run);
-  const $ = (s) => run.querySelector(s);
+  const $ = (s) => root.querySelector(s);
   const logBox = $(".log");
   const jump = $(".jump");
   const aside = $(".aside");
   const composer = messageBox(id);
-  $(".pane").appendChild(composer.form);
+  $(".run-main").appendChild(composer.form);
 
   let view = getRun(id) || null;
   let harness = null;   // "claude-code" | "codex" | null, from the spec
@@ -42,6 +45,8 @@ export async function renderRun(id) {
   let raw = false;
   let wrap = false;
   let lastId = -1;
+  let active = false;
+  let saved = null; // the log's scroll while hidden: { top, follow }
   const events = [];
 
   // ---- log ------------------------------------------------------------
@@ -49,14 +54,15 @@ export async function renderRun(id) {
     try {
       await api(`/v1/approvals/${approvalId}`, { method: "POST", body: JSON.stringify({ decision }) });
       toast(decision === "allow" ? "Allowed" : "Denied");
-    } catch (err) { showError(err); }
+      return true;
+    } catch (err) { showError(err); return false; }
   };
   let log = createLog(logBox, { onDecide: decide });
   const atBottom = () => logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 60;
   let follow = true;
-  logBox.addEventListener("scroll", () => { follow = atBottom(); if (follow) jump.classList.remove("show"); });
+  logBox.addEventListener("scroll", () => { if (!active) return; follow = atBottom(); if (follow) jump.classList.remove("show"); });
   jump.addEventListener("click", () => { logBox.scrollTo({ top: logBox.scrollHeight, behavior: "smooth" }); });
-  const toBottom = () => { if (follow) logBox.scrollTop = logBox.scrollHeight; else jump.classList.add("show"); };
+  const toBottom = () => { if (!active) return; if (follow) logBox.scrollTop = logBox.scrollHeight; else jump.classList.add("show"); };
 
   const rawLine = (ev) => el(`<div><span class="seq">#${ev.seq}</span><span>${esc(describe(ev))}</span></div>`);
   const rebuild = () => {
@@ -73,6 +79,10 @@ export async function renderRun(id) {
     logBox.scrollTop = logBox.scrollHeight;
   };
 
+  let refreshTimer = null;
+  const refresh = async () => {
+    try { const v = await api(`/v1/runs/${id}`); upsert(v); } catch (e) { showError(e); }
+  };
   const onEvent = (ev) => {
     events.push(ev);
     const p = ev.payload;
@@ -85,20 +95,18 @@ export async function renderRun(id) {
     refreshTimer = setTimeout(refresh, 400);
     if (p.type === "approval_requested" || p.type === "tool_result") diffStale = true;
   };
-  let refreshTimer = null;
-  const refresh = async () => {
-    try { const v = await api(`/v1/runs/${id}`); upsert(v); } catch (e) { showError(e); }
-  };
 
   // ---- header, actions, panel ----------------------------------------
   let asideOpen = false;
   let asideTouched = false;
   let diffStale = true;
+  let diffText = null;
   const setAside = (open) => {
     asideOpen = open;
     aside.hidden = !open;
-    $("[data-aside-toggle]")?.setAttribute("aria-pressed", String(open));
+    root.classList.toggle("aside-open", open);
     if (open) loadDiff();
+    if (view) renderActions(view.status.state);
   };
   aside.querySelector("[data-close]").addEventListener("click", () => { asideTouched = true; setAside(false); });
   for (const b of aside.querySelectorAll("[data-wrap]")) {
@@ -108,7 +116,6 @@ export async function renderRun(id) {
       diffStale = true; loadDiff();
     });
   }
-  let diffText = null;
   const loadDiff = async () => {
     const slot = $(".diff-slot");
     if (!view?.repo) { slot.innerHTML = `<div class="aside-empty">This run has no repository, so there is no diff.</div>`; return; }
@@ -123,18 +130,29 @@ export async function renderRun(id) {
   const renderAsk = () => {
     const slot = $(".ask-slot");
     const st = view?.status;
-    if (st?.state !== "waiting_approval") { slot.innerHTML = ""; return; }
+    if (st?.state !== "waiting_approval") { slot.innerHTML = ""; delete slot.dataset.id; return; }
     if (slot.dataset.id === st.approval_id) return;
     slot.dataset.id = st.approval_id;
     slot.innerHTML = "";
-    const card = el(`<div class="card ask">
+    const card = el(`<div class="card ask" tabindex="-1">
       <div class="eyebrow">Needs you</div>
       <h3>${esc(who(view.runtime))} wants to go ahead</h3>
       <div class="cmd">${esc(st.summary)}</div>
       <div class="row"><button class="btn" type="button" data-d="deny">Deny</button><button class="btn allow" type="button" data-d="allow">Allow</button></div>
       <div class="foot">Also on your phone. The first answer wins.</div></div>`);
-    for (const b of card.querySelectorAll("[data-d]")) b.addEventListener("click", () => { for (const x of card.querySelectorAll("button")) x.disabled = true; decide(st.approval_id, b.dataset.d); });
+    for (const b of card.querySelectorAll("[data-d]")) b.addEventListener("click", () => answer(b.dataset.d));
     slot.appendChild(card);
+  };
+  // Answers the approval the run waits on: the card greys out at once and
+  // comes back if the office refuses.
+  const answer = async (decision) => {
+    const st = view?.status;
+    if (st?.state !== "waiting_approval") return false;
+    const buttons = $(".ask-slot")?.querySelectorAll("button") || [];
+    for (const x of buttons) x.disabled = true;
+    const ok = await decide(st.approval_id, decision);
+    if (!ok) for (const x of buttons) x.disabled = false;
+    return ok;
   };
 
   const paint = () => {
@@ -160,10 +178,20 @@ export async function renderRun(id) {
     composer.update(st, harness);
     if (!raw) log.setStatus(view.status);
     renderAsk();
-    // An approval opens the panel on a wide screen, unless you closed it.
-    if (st === "waiting_approval" && !narrow() && matchMedia("(min-width: 1181px)").matches && !asideOpen && !asideTouched) setAside(true);
+    // An approval opens the panel when there is room for it beside the
+    // log, unless you closed it.
+    if (st === "waiting_approval" && active && !asideOpen && !asideTouched && root.clientWidth >= INLINE_ASIDE) setAside(true);
     if (asideOpen && diffStale) loadDiff();
   };
+
+  const cancel = async () => {
+    try { await api(`/v1/runs/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason: "from the desk" }) }); toast("Cancelling…"); return true; }
+    catch (err) { showError(err); return false; }
+  };
+  const resume = async () => {
+    try { await api(`/v1/runs/${id}/resume`, { method: "POST" }); toast("Resumed"); } catch (err) { showError(err); }
+  };
+  const toggleRaw = () => { raw = !raw; rebuild(); if (view) renderActions(view.status.state); };
 
   const renderActions = (st) => {
     const actions = $(".actions");
@@ -172,51 +200,95 @@ export async function renderRun(id) {
     actions.dataset.key = key;
     actions.innerHTML = "";
     if (isOpen(st)) {
-      const cancel = el(`<button class="btn" type="button">Cancel run</button>`);
-      cancel.addEventListener("click", async () => {
-        if (cancel.dataset.armed !== "1") {
-          cancel.dataset.armed = "1"; cancel.classList.add("armed"); cancel.textContent = "Really cancel?";
-          setTimeout(() => { cancel.dataset.armed = ""; cancel.classList.remove("armed"); cancel.textContent = "Cancel run"; }, 4000);
+      const btn = el(`<button class="btn" type="button">Cancel run</button>`);
+      btn.addEventListener("click", async () => {
+        if (btn.dataset.armed !== "1") {
+          btn.dataset.armed = "1"; btn.classList.add("armed"); btn.textContent = "Really cancel?";
+          setTimeout(() => { btn.dataset.armed = ""; btn.classList.remove("armed"); btn.textContent = "Cancel run"; }, 4000);
           return;
         }
-        cancel.disabled = true;
-        try { await api(`/v1/runs/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason: "from the desk" }) }); toast("Cancelling…"); }
-        catch (err) { showError(err); }
+        btn.disabled = true;
+        if (!(await cancel())) btn.disabled = false;
       });
-      actions.appendChild(cancel);
+      actions.appendChild(btn);
     }
     if (st === "open") {
-      const resume = el(`<button class="btn quiet" type="button" title="Start a worker on it if none is working">Resume</button>`);
-      resume.addEventListener("click", async () => {
-        resume.disabled = true;
-        try { await api(`/v1/runs/${id}/resume`, { method: "POST" }); toast("Resumed"); } catch (err) { showError(err); }
-      });
-      actions.appendChild(resume);
+      const btn = el(`<button class="btn quiet" type="button" title="Start a worker on it if none is working">Resume</button>`);
+      btn.addEventListener("click", async () => { btn.disabled = true; await resume(); btn.disabled = false; });
+      actions.appendChild(btn);
     }
     actions.appendChild(el(`<span class="grow"></span>`));
     const rawBtn = el(`<button class="btn quiet" type="button" aria-pressed="${raw}" title="Every event, one line each">Raw</button>`);
-    rawBtn.addEventListener("click", () => { raw = !raw; rebuild(); renderActions(view.status.state); });
+    rawBtn.addEventListener("click", toggleRaw);
     actions.appendChild(rawBtn);
-    const panel = el(`<button class="btn" type="button" data-aside-toggle aria-pressed="${asideOpen}">${view?.status.state === "waiting_approval" ? mark("waiting_approval") : ""}Approval &amp; diff <kbd>D</kbd></button>`);
-    panel.addEventListener("click", () => { asideTouched = true; setAside(!asideOpen); renderActions(view.status.state); });
+    const panel = el(`<button class="btn" type="button" data-aside-toggle aria-pressed="${asideOpen}">${st === "waiting_approval" ? mark(st) : ""}Approval &amp; diff <kbd>D</kbd></button>`);
+    panel.addEventListener("click", () => { asideTouched = true; setAside(!asideOpen); });
     actions.appendChild(panel);
   };
 
   // ---- wiring -----------------------------------------------------------
-  if (!view) await refresh();
-  view = getRun(id) || view;
   const unwatch = watch(() => { const v = getRun(id); if (v) { view = v; paint(); } });
+  if (!view) refresh();
   paint();
-
-  const escClose = (e) => { if (e.key === "Escape" && asideOpen && !document.querySelector(".scrim")) { asideTouched = true; setAside(false); renderActions(view.status.state); } };
-  document.addEventListener("keydown", escClose);
-  const ticker = setInterval(() => { log.tick?.(); if (view && isOpen(view.status.state)) paint(); }, 30000);
-  let stopStream = () => {};
-  onLeave(() => { stopStream(); clearTimeout(refreshTimer); clearInterval(ticker); unwatch(); document.removeEventListener("keydown", escClose); });
-  stopStream = liveStream(`/v1/runs/${id}/events/stream`, (frame) => {
+  let ticker = null;
+  const stream = liveStream(`/v1/runs/${id}/events/stream`, (frame) => {
     if (frame.id !== undefined) lastId = frame.id;
     if (frame.data) { try { onEvent(JSON.parse(frame.data)); } catch (_) { /* skip a bad frame */ } }
   }, () => lastId);
+  stream.pause();
+
+  return {
+    id,
+    root,
+    get view() { return view; },
+    /** Shown in a pane: stream, keep the clock moving, restore the scroll. */
+    activate() {
+      if (active) return;
+      active = true;
+      stream.resume();
+      ticker = setInterval(() => { log.tick?.(); if (view && isOpen(view.status.state)) paint(); }, 30000);
+      requestAnimationFrame(() => {
+        if (!saved || saved.follow) logBox.scrollTop = logBox.scrollHeight;
+        else logBox.scrollTop = saved.top;
+        follow = saved ? saved.follow : true;
+        paint();
+      });
+    },
+    /** Covered by another tab: let go of the stream, remember the scroll. */
+    deactivate() {
+      if (!active) return;
+      saved = { top: logBox.scrollTop, follow: atBottom() };
+      active = false;
+      stream.pause();
+      clearInterval(ticker);
+    },
+    destroy() {
+      this.deactivate();
+      stream.stop();
+      clearTimeout(refreshTimer);
+      unwatch();
+      root.remove();
+    },
+    /** Where the keyboard goes when the pane is focused. */
+    focus() { logBox.focus({ preventScroll: true }); },
+    focusReply() { return composer.focus(); },
+    toggleAside() { asideTouched = true; setAside(!asideOpen); },
+    /** Esc: closes the side panel; false when there was nothing to close. */
+    escape() { if (!asideOpen) return false; asideTouched = true; setAside(false); return true; },
+    /** The approval this run waits on, if any: `{ id, summary }`. */
+    pending() { const st = view?.status; return st?.state === "waiting_approval" ? { id: st.approval_id, summary: st.summary } : null; },
+    /** Opens the panel and puts the focus on Allow; Enter answers. */
+    focusApproval() {
+      if (!this.pending()) return false;
+      if (!asideOpen) setAside(true);
+      requestAnimationFrame(() => $(".ask-slot .btn.allow")?.focus());
+      return true;
+    },
+    answer,
+    cancel,
+    resume,
+    toggleRaw,
+  };
 }
 
 // Writing to the run. A message goes in at the run's next turn: a native
@@ -226,8 +298,8 @@ export async function renderRun(id) {
 // branch and session, which the view then opens.
 function messageBox(id) {
   const form = el(`<form class="composer" hidden>
-    <label class="hint" for="message"></label>
-    <textarea id="message" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
+    <label class="hint" for="message-${esc(id)}"></label>
+    <textarea id="message-${esc(id)}" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
     <div class="row"><span class="note">Your message goes into the run's log. The rules still apply to what the agent does next.</span>
       <button class="btn now" type="submit" data-now hidden title="Stop the current step and deliver this now">Now <kbd>${MOD}⇧↵</kbd></button>
       <button class="btn primary" type="submit"><span class="label">Send</span> <kbd>${MOD}↵</kbd></button></div>
@@ -281,6 +353,8 @@ function messageBox(id) {
 
   return {
     form,
+    /** Puts the cursor in the box; false when the run takes no messages. */
+    focus() { if (form.hidden) return false; text.focus(); return true; },
     update(state, harness) {
       const accepts = ["open", "waiting_approval", "needs_attention", "parked"].includes(state);
       const name = harness === "codex" ? "Codex" : harness === "claude-code" ? "Claude Code" : null;
