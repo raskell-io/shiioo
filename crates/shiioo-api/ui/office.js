@@ -3,7 +3,7 @@
 // Views subscribe and re-render from here instead of polling.
 
 import { api, showError } from "./core.js";
-import { streamEvents } from "./stream.js";
+import { liveStream } from "./stream.js";
 
 const runs = new Map(); // id -> RunView
 let capacity = [];
@@ -44,7 +44,7 @@ export async function startOffice() {
   let newest = Math.max(0, ...[...runs.values()].map((r) => r.updated_at));
   let batch = null;
   const flush = () => { batch = null; changed(); };
-  streamEvents("/v1/events/stream", new AbortController().signal, (frame) => {
+  liveStream("/v1/events/stream", (frame) => {
     if (!live) { live = true; changed(); }
     if (frame.id !== undefined) newest = Math.max(newest, frame.id);
     if (frame.event !== "run" || !frame.data) return;

@@ -48,6 +48,28 @@ export async function streamEvents(path, signal, onFrame, lastId, { stopOnTermin
   }
 }
 
+/**
+ * `streamEvents` that lets go of its connection while the tab is hidden
+ * and resumes from `lastId()` when it is shown again: browsers allow only
+ * six connections per host over plain http, and every open desk tab would
+ * otherwise hold two. Returns the function that stops it for good.
+ */
+export function liveStream(path, onFrame, lastId, opts = {}) {
+  let controller = null;
+  let stopped = false;
+  const start = () => {
+    if (stopped || controller || document.hidden) return;
+    const mine = new AbortController();
+    controller = mine;
+    streamEvents(path, mine.signal, onFrame, lastId, opts).finally(() => { if (controller === mine) controller = null; });
+  };
+  const pause = () => { if (controller) { controller.abort(); controller = null; } };
+  const onVisibility = () => (document.hidden ? pause() : start());
+  document.addEventListener("visibilitychange", onVisibility);
+  start();
+  return () => { stopped = true; pause(); document.removeEventListener("visibilitychange", onVisibility); };
+}
+
 export function parseFrame(text) {
   const frame = { data: "" };
   const data = [];

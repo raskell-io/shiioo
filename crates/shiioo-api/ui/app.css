@@ -269,7 +269,10 @@ kbd { font: 500 var(--fs-xs) var(--font-ui); border: 1px solid var(--line); bord
 .aside { width: var(--aside-w); flex: none; border-left: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; min-height: 0; }
 .aside-h { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s3) var(--s3) var(--s4); border-bottom: 1px solid var(--line); flex: none; }
 .aside-h h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; flex: 1; }
-.aside-scroll { flex: 1; overflow: auto; padding: var(--s4); display: grid; gap: var(--s4); align-content: start; overscroll-behavior: contain; }
+.aside-scroll { flex: 1; overflow: auto; padding: var(--s4); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); align-content: start;
+  overscroll-behavior: contain; }
+.aside-scroll > *, .diff-slot { min-width: 0; display: grid; gap: var(--s4); }
+.ask-slot:empty { display: none; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r3); padding: var(--s4); box-shadow: var(--e1); }
 .card.ask { border-color: var(--attn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 18%, transparent); animation: rise var(--t-med) var(--ease); }
 @keyframes rise { from { transform: translateY(6px); } to { transform: none; } }

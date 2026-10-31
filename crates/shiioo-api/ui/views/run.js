@@ -5,7 +5,7 @@
 import { api, app, el, esc, isOpen, kind, mark, MOD, narrow, onLeave, short, showError, span, stateLabel, toast, who } from "../core.js";
 import { describe } from "../describe.js";
 import { getRun, upsert, watch } from "../office.js";
-import { streamEvents } from "../stream.js";
+import { liveStream } from "../stream.js";
 import { renderDiff } from "./diff.js";
 import { createLog } from "./log.js";
 
@@ -211,9 +211,9 @@ export async function renderRun(id) {
   const escClose = (e) => { if (e.key === "Escape" && asideOpen && !document.querySelector(".scrim")) { asideTouched = true; setAside(false); renderActions(view.status.state); } };
   document.addEventListener("keydown", escClose);
   const ticker = setInterval(() => { log.tick?.(); if (view && isOpen(view.status.state)) paint(); }, 30000);
-  const controller = new AbortController();
-  onLeave(() => { controller.abort(); clearTimeout(refreshTimer); clearInterval(ticker); unwatch(); document.removeEventListener("keydown", escClose); });
-  streamEvents(`/v1/runs/${id}/events/stream`, controller.signal, (frame) => {
+  let stopStream = () => {};
+  onLeave(() => { stopStream(); clearTimeout(refreshTimer); clearInterval(ticker); unwatch(); document.removeEventListener("keydown", escClose); });
+  stopStream = liveStream(`/v1/runs/${id}/events/stream`, (frame) => {
     if (frame.id !== undefined) lastId = frame.id;
     if (frame.data) { try { onEvent(JSON.parse(frame.data)); } catch (_) { /* skip a bad frame */ } }
   }, () => lastId);
