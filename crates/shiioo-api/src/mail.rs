@@ -63,6 +63,7 @@ impl<S: EventStore + 'static> ApiState<S> {
                         }),
                         tool_use_id: None,
                         session_id: None,
+                        cwd: None,
                     },
                 )
                 .await?;

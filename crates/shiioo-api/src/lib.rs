@@ -405,6 +405,10 @@ pub struct PermissionInput {
     pub tool_use_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The harness's working directory, as its hook reports it. Used as
+    /// the run's workspace only where the office doesn't know it itself.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -1577,10 +1581,12 @@ impl<S: EventStore + 'static> ApiState<S> {
     ) -> Result<PermissionOutcome, ApiError> {
         let log = self.store.read(run_id, Seq(0)).await?;
         let repo = repo_label(&self.options.repos, &log);
+        let workspace = self.workspace_of(run_id, &log).or_else(|| input.cwd.clone());
         let request = PermissionRequest {
             tool: &input.tool_name,
             input: &input.tool_input,
             repo: repo.as_deref(),
+            workspace: workspace.as_deref(),
         };
         let verdict = self.options.rules.evaluate(&request);
         let summary = RuleSet::summarize(&request);
@@ -1706,6 +1712,25 @@ impl<S: EventStore + 'static> ApiState<S> {
             .await;
         }
         Ok(run_id)
+    }
+
+    /// Where a run's harness works, when the office knows it for certain:
+    /// the worktree of a repository run on this machine (a container
+    /// mounts it at the same path). `None` for runs without a repository
+    /// and runs on other machines; the hook's `cwd` stands in for those.
+    fn workspace_of(&self, run_id: RunId, log: &[Event]) -> Option<String> {
+        let spec = run_spec(log)?;
+        if spec.machine.is_some() {
+            return None;
+        }
+        match &spec.runtime {
+            Runtime::Harness(h) if h.repo.is_some() => self
+                .options
+                .worktrees
+                .as_ref()
+                .map(|root| root.join(spec.workspace_run(run_id).to_string()).to_string_lossy().into_owned()),
+            _ => None,
+        }
     }
 
     /// After a restart nothing is pending in memory; the log still knows.

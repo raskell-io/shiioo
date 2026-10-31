@@ -55,11 +55,14 @@ impl Decision {
 /// `Bash`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `WebFetch`, …; Shiioo
 /// native: `shell`, `read_file`, `write_file`). `input` is the tool's JSON
 /// input. `repo` is an optional repository label the owner configured.
+/// `workspace` is the run's working directory (its worktree), which a
+/// `path` glob can refer to as `{workspace}`.
 #[derive(Clone, Copy, Debug)]
 pub struct PermissionRequest<'a> {
     pub tool: &'a str,
     pub input: &'a Value,
     pub repo: Option<&'a str>,
+    pub workspace: Option<&'a str>,
 }
 
 /// One rule. All present conditions must hold for the rule to match.
@@ -73,7 +76,11 @@ pub struct Rule {
     /// condition only matches tools whose input has a string `command`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// Glob on the input's `file_path`, `path` or `notebook_path`.
+    /// Glob on the input's `file_path`, `path` or `notebook_path`. With
+    /// `{workspace}` in it (`{workspace}/*`), the path is first resolved
+    /// against the run's working directory: relative paths are joined to
+    /// it, `.` and `..` are folded, and a path that leaves it doesn't
+    /// match. Without a known workspace such a rule never matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// Glob on the repository label. A rule with this condition only
@@ -125,7 +132,8 @@ impl RuleSet {
     }
 
     /// Sensible defaults for an owner running coding agents on their own
-    /// repositories: read-only tools and edits allowed; destructive shell
+    /// repositories: read-only tools and edits inside the run's worktree
+    /// allowed; destructive shell
     /// commands denied; commands that leave the machine or install things
     /// ask; the usual build, test and git housekeeping allowed; anything
     /// else asks.
@@ -281,11 +289,14 @@ impl RuleSet {
             Decision::Allow,
             "read-only",
         ));
-        rules.push(tools(
-            &["Edit", "Write", "MultiEdit", "NotebookEdit", "write_file"],
-            Decision::Allow,
-            "edits stay in the run's worktree",
-        ));
+        rules.push(Rule {
+            path: Some(format!("{WORKSPACE}/*")),
+            ..tools(
+                &["Edit", "Write", "MultiEdit", "NotebookEdit", "write_file"],
+                Decision::Allow,
+                "edits inside the run's worktree",
+            )
+        });
         Self {
             default: Decision::Ask,
             rules,
@@ -295,6 +306,31 @@ impl RuleSet {
     /// First matching rule wins; otherwise `default`. Chained shell
     /// commands are judged segment by segment as well as whole, and the
     /// most restrictive decision wins (see the crate docs).
+    /// Tightens the edit rule earlier defaults wrote into `rules.toml`
+    /// (edits allowed anywhere, though the reason said "edits stay in the
+    /// run's worktree") to what it said: edits inside the run's worktree.
+    /// Returns a note per rule changed, for the office to print.
+    pub fn upgrade(&mut self) -> Vec<String> {
+        let mut notes = Vec::new();
+        for (i, rule) in self.rules.iter_mut().enumerate() {
+            let old = rule.decision == Decision::Allow
+                && rule.reason.as_deref() == Some("edits stay in the run's worktree")
+                && rule.path.is_none()
+                && rule.command.is_none()
+                && rule.tool.iter().any(|t| t == "Edit" || t == "Write");
+            if old {
+                rule.path = Some(format!("{WORKSPACE}/*"));
+                rule.reason = Some("edits inside the run's worktree".into());
+                notes.push(format!(
+                    "rule {} (edits) now only allows edits inside the run's worktree; \
+                     add path = \"{WORKSPACE}/*\" to it in rules.toml to keep this note away",
+                    i + 1
+                ));
+            }
+        }
+        notes
+    }
+
     pub fn evaluate(&self, req: &PermissionRequest<'_>) -> Verdict {
         let Some(command) = req.input["command"].as_str() else {
             return self.evaluate_one(req);
@@ -315,6 +351,7 @@ impl RuleSet {
                 tool: req.tool,
                 input: &input,
                 repo: req.repo,
+                workspace: req.workspace,
             });
             candidates.push(Verdict {
                 reason: format!("segment \"{segment}\": {}", verdict.reason),
@@ -401,6 +438,13 @@ impl Rule {
         };
         let path_ok = match &self.path {
             None => true,
+            Some(g) if g.contains(WORKSPACE) => match (req.workspace, path_of(req.input)) {
+                (Some(ws), Some(p)) => {
+                    let ws = normalize(ws);
+                    glob::matches(&g.replace(WORKSPACE, &ws), &resolve(&ws, p))
+                }
+                _ => false,
+            },
             Some(g) => path_of(req.input).is_some_and(|p| glob::matches(g, p)),
         };
         tool_ok && repo_ok && command_ok && path_ok
@@ -427,6 +471,36 @@ impl Rule {
 
 fn path_of(input: &Value) -> Option<&str> {
     PATH_KEYS.iter().find_map(|k| input[*k].as_str())
+}
+
+/// The placeholder for the run's working directory in a `path` glob.
+const WORKSPACE: &str = "{workspace}";
+
+/// `path` as an absolute, folded path: relative to `workspace`. A `~` path
+/// stays as it is, so it never matches a workspace glob.
+fn resolve(workspace: &str, path: &str) -> String {
+    if path.starts_with('~') {
+        path.to_owned()
+    } else if path.starts_with('/') {
+        normalize(path)
+    } else {
+        normalize(&format!("{workspace}/{path}"))
+    }
+}
+
+/// Folds `.`, `..` and repeated slashes, lexically (no symlinks).
+fn normalize(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    format!("/{}", parts.join("/"))
 }
 
 /// Splits a shell command at `&&`, `||`, `;` and `|`, outside quotes.
@@ -513,6 +587,7 @@ mod tests {
             tool,
             input,
             repo: None,
+            workspace: None,
         })
     }
 
@@ -648,21 +723,13 @@ reason = "pushes leave the machine"
     }
 
     #[test]
-    fn read_only_and_edit_tools_are_allowed() {
+    fn read_only_tools_and_edits_in_the_worktree_are_allowed() {
         let set = RuleSet::defaults();
         assert_eq!(
             judge(&set, "Read", &json!({ "file_path": "/etc/passwd" })).decision,
             Decision::Allow
         );
-        assert_eq!(
-            judge(
-                &set,
-                "Write",
-                &json!({ "file_path": "src/main.rs", "content": "" })
-            )
-            .decision,
-            Decision::Allow
-        );
+        assert_eq!(edit(&set, "src/main.rs", Some("/w")), Decision::Allow);
         assert_eq!(
             judge(&set, "read_file", &json!({ "path": "a" })).decision,
             Decision::Allow
@@ -696,18 +763,21 @@ reason = "pushes leave the machine"
             tool: "Bash",
             input: &input,
             repo: Some("sandbox-demo"),
+            workspace: None,
         });
         assert_eq!(allowed.decision, Decision::Allow);
         let other = set.evaluate(&PermissionRequest {
             tool: "Bash",
             input: &input,
             repo: Some("production"),
+            workspace: None,
         });
         assert_eq!(other.decision, Decision::Ask);
         let unlabelled = set.evaluate(&PermissionRequest {
             tool: "Bash",
             input: &input,
             repo: None,
+            workspace: None,
         });
         assert_eq!(unlabelled.decision, Decision::Ask);
     }
@@ -734,6 +804,48 @@ reason = "pushes leave the machine"
             judge(&set, "Bash", &shell("git status")).decision,
             Decision::Allow
         );
+    }
+
+    fn edit(set: &RuleSet, path: &str, workspace: Option<&str>) -> Decision {
+        set.evaluate(&PermissionRequest {
+            tool: "Write",
+            input: &json!({ "file_path": path, "content": "" }),
+            repo: None,
+            workspace,
+        })
+        .decision
+    }
+
+    #[test]
+    fn edits_are_allowed_inside_the_worktree_only() {
+        let set = RuleSet::defaults();
+        let ws = Some("/office/.shiioo/worktrees/r1");
+        assert_eq!(edit(&set, "src/retry.rs", ws), Decision::Allow);
+        assert_eq!(edit(&set, "./src/../src/retry.rs", ws), Decision::Allow);
+        assert_eq!(edit(&set, "/office/.shiioo/worktrees/r1/src/retry.rs", ws), Decision::Allow);
+        // Outside it, by any route, the owner is asked.
+        assert_eq!(edit(&set, "/home/me/code/repo/.shiioo/worktrees/r1/src/retry.rs", ws), Decision::Ask);
+        assert_eq!(edit(&set, "../r2/src/retry.rs", ws), Decision::Ask);
+        assert_eq!(edit(&set, "/office/.shiioo/worktrees/r1/../r2/x", ws), Decision::Ask);
+        assert_eq!(edit(&set, "/office/.shiioo/worktrees/r10/x", ws), Decision::Ask);
+        assert_eq!(edit(&set, "~/.ssh/config", ws), Decision::Ask);
+        // No known workspace: nothing is assumed to be inside it.
+        assert_eq!(edit(&set, "src/retry.rs", None), Decision::Ask);
+    }
+
+    #[test]
+    fn the_old_unconditional_edit_rule_is_tightened_on_load() {
+        let mut set = RuleSet::from_toml(
+            "default = \"ask\"\n[[rules]]\ntool = [\"Edit\", \"Write\"]\ndecision = \"allow\"\nreason = \"edits stay in the run's worktree\"\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(edit(&set, "/etc/hosts", Some("/w")), Decision::Allow);
+        let notes = set.upgrade();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(edit(&set, "/etc/hosts", Some("/w")), Decision::Ask);
+        assert_eq!(edit(&set, "a.rs", Some("/w")), Decision::Allow);
+        assert!(set.upgrade().is_empty());
+        assert!(RuleSet::defaults().upgrade().is_empty());
     }
 
     #[test]
@@ -790,7 +902,8 @@ reason = "pushes leave the machine"
             RuleSet::summarize(&PermissionRequest {
                 tool: "Bash",
                 input: &input,
-                repo: None
+                repo: None,
+                workspace: None,
             }),
             "Bash: git push origin shiioo/b619ff8d"
         );
@@ -799,7 +912,8 @@ reason = "pushes leave the machine"
             RuleSet::summarize(&PermissionRequest {
                 tool: "Write",
                 input: &input,
-                repo: None
+                repo: None,
+                workspace: None,
             }),
             "Write: src/main.rs"
         );
@@ -808,7 +922,8 @@ reason = "pushes leave the machine"
             RuleSet::summarize(&PermissionRequest {
                 tool: "WebFetch",
                 input: &input,
-                repo: None
+                repo: None,
+                workspace: None,
             }),
             "WebFetch: https://example.com/docs"
         );
@@ -817,6 +932,7 @@ reason = "pushes leave the machine"
             tool: "Bash",
             input: &long,
             repo: None,
+            workspace: None,
         });
         assert!(
             summary.chars().count() <= "Bash: ".len() + SUMMARY_MAX + 1,
@@ -828,7 +944,8 @@ reason = "pushes leave the machine"
             RuleSet::summarize(&PermissionRequest {
                 tool: "TodoWrite",
                 input: &empty,
-                repo: None
+                repo: None,
+                workspace: None,
             }),
             "TodoWrite"
         );

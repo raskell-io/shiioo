@@ -266,3 +266,57 @@ async fn cancel_stops_the_run_at_its_next_step() {
     assert_eq!(runs.as_array().map_or(0, Vec::len), 1);
     assert_eq!(runs[0]["task"], "write a");
 }
+
+#[tokio::test]
+async fn edits_outside_the_runs_workspace_ask_the_owner() {
+    let base = serve(Arc::new(Stalled)).await;
+    let http = reqwest::Client::new();
+    let (_, created) = post(
+        &http,
+        format!("{base}/v1/runs"),
+        json!({ "task": "do things" }),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap_or_default().to_owned();
+    let hook = |path: &str, call: &str| {
+        json!({ "tool_name": "Write", "tool_input": { "file_path": path, "content": "" },
+                "tool_use_id": call, "cwd": "/work/tree" })
+    };
+
+    // Inside the working directory: allowed by the rules.
+    let (_, outcome) = post(
+        &http,
+        format!("{base}/v1/runs/{id}/permissions"),
+        hook("src/retry.rs", "w1"),
+    )
+    .await;
+    assert_eq!(outcome["decision"], "allow");
+
+    // Somewhere else (the agent guessed a path): the owner is asked.
+    let waiting = tokio::spawn({
+        let (http, base, id) = (http.clone(), base.clone(), id.clone());
+        let body = hook("/home/me/repo/.shiioo/worktrees/x/src/retry.rs", "w2");
+        async move { post(&http, format!("{base}/v1/runs/{id}/permissions"), body).await }
+    });
+    let mut approval_id = String::new();
+    for _ in 0..50 {
+        let run = get(&http, format!("{base}/v1/runs/{id}")).await;
+        if run["status"]["state"] == "waiting_approval" {
+            approval_id = run["status"]["approval_id"].as_str().unwrap_or_default().to_owned();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!approval_id.is_empty(), "an edit outside the workspace was not asked about");
+    post(
+        &http,
+        format!("{base}/v1/approvals/{approval_id}"),
+        json!({ "decision": "deny" }),
+    )
+    .await;
+    let (_, outcome) = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap_or_else(|_| panic!("hook still waiting"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(outcome["decision"], "deny");
+}

@@ -32,7 +32,7 @@ reason = "docs edits never need a look"
 | `rules` | array of tables | Optional. Evaluated in file order; the first match decides. |
 | `rules[].tool` | string or list of strings | Globs on the tool name. Missing, empty, or `["*"]` matches any tool. |
 | `rules[].command` | string | Glob on the input's `command` (Claude Code's `Bash`, Shiioo's `shell`). The command is trimmed before matching. |
-| `rules[].path` | string | Glob on the input's `file_path`, `path` or `notebook_path`, whichever exists first. |
+| `rules[].path` | string | Glob on the input's `file_path`, `path` or `notebook_path`, whichever exists first. `{workspace}` in it stands for the run's worktree: the path is then resolved against it (relative paths joined, `.` and `..` folded), so `{workspace}/*` matches only files inside the worktree, however they are written. `~` paths and a run whose workspace isn't known never match. |
 | `rules[].repo` | string | Glob on the repository label the server attached to the request. |
 | `rules[].decision` | `"allow"` / `"ask"` / `"deny"` | Required. |
 | `rules[].reason` | string | Optional. Shown to the owner in the verdict and the approval request. |
@@ -101,9 +101,11 @@ Tool rules:
 |---|---|---|
 | `mail.send` | ask | sends mail (a run asking the office to send on its behalf) |
 | `Read`, `Glob`, `Grep`, `LS`, `WebFetch`, `WebSearch`, `TodoWrite`, `ToolSearch`, `NotebookRead`, `read_file` | allow | read-only |
-| `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `write_file` | allow | edits stay in the run's worktree |
+| `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `write_file`, with `path = "{workspace}/*"` | allow | edits inside the run's worktree |
 
 Everything else, including `git push` without arguments, `git rebase` chained after an allowed command, and any tool not listed, asks.
+
+An edit anywhere else (an agent guessing a path, `~/.ssh/…`, another run's worktree) matches no rule and asks. The workspace is the run's worktree on the office machine (a container mounts it at the same path); for runs without a repository and runs on other machines it is the working directory the harness's hook reports. Before this condition existed the default edit rule allowed every path; an office whose `rules.toml` still has that rule (allow, reason "edits stay in the run's worktree", no `path`) gets it tightened when the rules are loaded (`RuleSet::upgrade`), and prints a line saying so.
 
 Order matters: the deny rules come first so `git push --force origin main` is denied by rule 5 rather than asked by the later `git push *`. When editing the file, keep denies above asks above allows.
 

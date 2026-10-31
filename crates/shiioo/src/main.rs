@@ -1507,7 +1507,11 @@ fn load_rules(path: &Path) -> Result<RuleSet, Box<dyn std::error::Error>> {
         std::fs::write(path, RuleSet::defaults().to_toml())?;
     }
     let text = std::fs::read_to_string(path)?;
-    Ok(RuleSet::from_toml(&text).map_err(|e| format!("{}: {e}", path.display()))?)
+    let mut rules = RuleSet::from_toml(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    for note in rules.upgrade() {
+        println!("rules: {}: {note}", path.display());
+    }
+    Ok(rules)
 }
 
 /// The phone's view of the office.
