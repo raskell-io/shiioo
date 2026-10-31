@@ -143,7 +143,7 @@ Harness runs recover differently: Shiioo did not run their tools, so dangling in
 ## 7. Cancellation *(built at step boundaries)*
 
 - The server appends `CancelRequested` (an external write, no lease needed): `POST /v1/runs/{id}/cancel`, `/cancel` in Telegram, the dashboard's Cancel button.
-- The worker checks for it when it starts a session, at every native turn, and after every harness output line (`Session::cancel_if_requested`); it then kills a harness process and appends `RunCancelled`. A harness deep in one long command is stopped when that command ends, not instantly.
+- The worker checks for it when it starts a session, at every native turn, after every harness output line, and every two seconds while a harness prints nothing (`Session::cancel_if_requested`, `CANCEL_POLL`); it then kills a harness process and appends `RunCancelled`.
 - *(planned)* A `tokio_util::sync::CancellationToken` per run so in-flight model calls and tool executions stop immediately; child runs get child tokens, so cancelling a parent cancels its subtree.
 - A run that nobody is driving is cancelled by whichever worker picks it up next; it appends `RunCancelled` without running a turn.
 

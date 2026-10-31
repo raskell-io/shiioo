@@ -144,8 +144,8 @@ this is the loop around them.
    first run of its chain, for the worktree, the branch and the sandbox's
    per-run state, so it continues where that run left off.
 2. **Start budget.** `unfinished_starts` = `HarnessSessionStarted` events
-   since the last `HarnessResult` (resumes after a crash, not deliveries of
-   messages). At `MAX_HARNESS_STARTS` (5) the run fails with `harness
+   since the last `HarnessResult` or `InterruptRequested` (resumes after a
+   crash, not deliveries of messages, nor stops the owner asked for). At `MAX_HARNESS_STARTS` (5) the run fails with `harness
    stopped without finishing N times`.
 3. **Marker and prompt.** `SandboxStarted` is appended before every process
    starts, and marks what that process is told (`harness_prompt`): messages
@@ -158,6 +158,11 @@ this is the loop around them.
    running you was stopped before you finished. Check the current state of
    the workspace, then continue the task to completion."), followed by
    "While you were stopped, the owner wrote:" and the messages, if any.
+   After an interrupt (an `InterruptRequested` since the previous start):
+   `INTERRUPTED_PROMPT` ("The owner stopped you mid-step to tell you this.
+   Your last step may have been cut short, so check the workspace before
+   you rely on it, then carry on with the task with their message in
+   mind:") and the messages.
    Every later start passes the last recorded session id, so the harness
    resumes its own conversation. A follow-up's first start resumes
    `origin.session` instead, with its task as the prompt (it is a first
@@ -170,11 +175,20 @@ this is the loop around them.
    across all starts; without it the deadline is a year away.
 6. **Loop.** `select!` over the next stdout line, the deadline, the
    lease-lost watch and a two-second timer (`CANCEL_POLL`) that catches up
-   on the log and kills the process when a cancellation arrived while it
-   printed nothing:
+   on the log, so a cancellation or an interrupt that arrived while the
+   process printed nothing is acted on within two seconds:
    - line → `driver.interpret(line)` → append each payload; when the
      interpretation carries an outcome (`RunCompleted`/`RunFailed`) return
      it; then `cancel_if_requested` → kill and return `Cancelled`.
+   - an `InterruptRequested` since this process's `SandboxStarted`
+     (`interrupt_requested`, checked after each line and on the timer) →
+     `HarnessProcess::interrupt`: SIGINT to the process group (the harness
+     runs in its own, so its tools get it too, as with Ctrl-C), its
+     remaining output discarded, SIGKILL to the group after
+     `INTERRUPT_GRACE` (10 s). `run_harness` returns `None` and the session
+     is resumed with the message. An interrupt from before the current
+     process started (it arrived while the run was parked, or the process
+     finished first) does nothing.
    - a successful finish is not appended directly: the `HarnessResult` is,
      then `settle` appends `RunCompleted` (or `RunParked { input }` when
      `park_on_answer`) only if no message came after this process's

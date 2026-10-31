@@ -20,6 +20,7 @@ export function describe(ev) {
     case "approval_requested": return `waiting for approval: ${p.summary}`;
     case "approval_decided": return `${p.decision} by ${p.by}`;
     case "cancel_requested": return `cancel requested by ${p.by}${p.reason ? ": " + p.reason : ""}`;
+    case "interrupt_requested": return `interrupt requested by ${p.by}`;
     case "sandbox_started": {
       const parts = [p.detail?.container, p.detail?.sandbox, p.detail?.egress?.mode ? `egress ${p.detail.egress.mode}` : null].filter(Boolean);
       return `isolation: ${p.level}${parts.length ? ` (${parts.join(", ")})` : ""}`;

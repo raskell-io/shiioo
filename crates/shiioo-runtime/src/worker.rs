@@ -272,6 +272,10 @@ const MAX_HARNESS_STARTS: usize = 5;
 /// prints nothing (a long build, a hung command).
 const CANCEL_POLL: Duration = Duration::from_secs(2);
 
+/// How long an interrupted harness gets to close its turn and save its
+/// session before it is killed.
+const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
+
 impl<S: EventStore + 'static> Session<'_, S> {
     async fn run(&mut self) -> Result<RunOutcome, WorkerError> {
         if let Some(outcome) = self.cancel_if_requested().await? {
@@ -575,14 +579,19 @@ impl<S: EventStore + 'static> Session<'_, S> {
             let line = tokio::select! {
                 line = process.next_line() => line?,
                 _ = poll.tick() => {
-                    // Output also checks for a cancellation; a silent
-                    // process would otherwise never see one.
+                    // Output also checks for a cancellation or an
+                    // interrupt; a silent process would otherwise never
+                    // see one.
                     self.catch_up().await?;
                     if cancel_requested(&self.log).is_some() {
                         process.kill().await;
                         if let Some(outcome) = self.cancel_if_requested().await? {
                             return Ok(Some(outcome));
                         }
+                    }
+                    if interrupt_requested(&self.log) {
+                        process.interrupt(INTERRUPT_GRACE).await;
+                        return Ok(None);
                     }
                     continue;
                 }
@@ -645,6 +654,12 @@ impl<S: EventStore + 'static> Session<'_, S> {
                 if let Some(outcome) = self.cancel_if_requested().await? {
                     return Ok(Some(outcome));
                 }
+            }
+            // The owner asked to be heard now: stop the process and
+            // resume the session with their message (`harness_prompt`).
+            if interrupt_requested(&self.log) {
+                process.interrupt(INTERRUPT_GRACE).await;
+                return Ok(None);
             }
         }
         // Output ended without a result: the process died or was killed.
@@ -932,6 +947,14 @@ fn cancel_requested(log: &[Event]) -> Option<String> {
     })
 }
 
+/// An `InterruptRequested` since the current harness process started:
+/// one from before it was for an earlier process (or none at all).
+fn interrupt_requested(log: &[Event]) -> bool {
+    log.iter()
+        .skip(harness_seen(log))
+        .any(|e| matches!(*e.payload, Payload::InterruptRequested { .. }))
+}
+
 fn result(call_id: CallId, output: ToolOutput) -> Payload {
     Payload::ToolResult {
         call_id,
@@ -1020,6 +1043,9 @@ fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
         })
         .collect();
     let messages = messages.join("\n\n");
+    let interrupted = log[from..to]
+        .iter()
+        .any(|e| matches!(*e.payload, Payload::InterruptRequested { .. }));
     let finished = log[..to]
         .iter()
         .rev()
@@ -1030,6 +1056,9 @@ fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
         (false, _, false) => format!("{task}\n\n{messages}"),
         (true, true, false) => messages,
         (true, _, true) => harness::CONTINUE_PROMPT.to_owned(),
+        (true, false, false) if interrupted => {
+            format!("{}\n\n{messages}", harness::INTERRUPTED_PROMPT)
+        }
         (true, false, false) => format!(
             "{}\n\nWhile you were stopped, the owner wrote:\n\n{messages}",
             harness::CONTINUE_PROMPT
@@ -1037,11 +1066,17 @@ fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
     }
 }
 
-/// Harness sessions started since the session last finished cleanly.
+/// Harness sessions started since the session last finished cleanly or
+/// was stopped on the owner's request.
 fn unfinished_starts(log: &[Event]) -> usize {
     log.iter()
         .rev()
-        .take_while(|e| !matches!(*e.payload, Payload::HarnessResult { .. }))
+        .take_while(|e| {
+            !matches!(
+                *e.payload,
+                Payload::HarnessResult { .. } | Payload::InterruptRequested { .. }
+            )
+        })
         .filter(|e| matches!(*e.payload, Payload::HarnessSessionStarted { .. }))
         .count()
 }
@@ -1155,6 +1190,74 @@ mod tests {
         assert_eq!(harness_prompt(&l, "Fix it.", true), "Also the README.");
         let l = log(vec![created(), say("In sango."), start(), start()]);
         assert_eq!(harness_prompt(&l, "Fix it.", false), "Fix it.\n\nIn sango.");
+    }
+
+    fn interrupt() -> Payload {
+        Payload::InterruptRequested { by: "owner".into() }
+    }
+
+    #[test]
+    fn an_interrupted_harness_hears_why_it_was_stopped() {
+        let l = log(vec![
+            created(),
+            start(),
+            session(),
+            say("Use the backoff helper."),
+            interrupt(),
+            start(),
+        ]);
+        assert_eq!(
+            harness_prompt(&l, "Fix it.", true),
+            format!("{}\n\nUse the backoff helper.", harness::INTERRUPTED_PROMPT)
+        );
+        // The process finished before the interrupt reached it: the
+        // message is an ordinary next prompt.
+        let l = log(vec![
+            created(),
+            start(),
+            session(),
+            say("Use the backoff helper."),
+            interrupt(),
+            result(),
+            start(),
+        ]);
+        assert_eq!(
+            harness_prompt(&l, "Fix it.", true),
+            "Use the backoff helper."
+        );
+    }
+
+    #[test]
+    fn an_interrupt_is_for_the_process_running_when_it_came() {
+        let l = log(vec![
+            created(),
+            start(),
+            session(),
+            say("Now."),
+            interrupt(),
+        ]);
+        assert!(interrupt_requested(&l));
+        let l = log(vec![
+            created(),
+            start(),
+            session(),
+            say("Now."),
+            interrupt(),
+            start(),
+        ]);
+        assert!(!interrupt_requested(&l));
+    }
+
+    #[test]
+    fn interrupts_do_not_count_against_the_start_limit() {
+        let l = log(vec![
+            session(),
+            interrupt(),
+            session(),
+            interrupt(),
+            session(),
+        ]);
+        assert_eq!(unfinished_starts(&l), 1);
     }
 
     #[test]

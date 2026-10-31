@@ -139,6 +139,7 @@ Be explicit, so nobody relies on a guarantee that isn't there:
 | `PolicyDecision` *(built)* | a rule decision, with the rule that decided and its reason (the policy set version, with Cedar) |
 | `ApprovalRequested` / `ApprovalDecided` *(built)* | human gate on a call; `by` is the owner's surface or `timeout` |
 | `CancelRequested` *(built)* | the owner stopped a run from the phone or the API |
+| `InterruptRequested` *(built)* | the owner stopped a harness mid-step to deliver a message at once ("Now") |
 | `SandboxStarted` *(built)* | where the harness executed: the level, and for `container` the image, container name, mounts and egress mode |
 | `SecretRedacted` *(built)* | something about to be recorded contained a secret value; records the secret name and the count, not the value |
 | `MachineRevoked` *(planned)* | appended to every run with pending calls on a revoked machine |

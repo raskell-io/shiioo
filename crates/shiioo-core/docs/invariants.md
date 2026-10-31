@@ -62,7 +62,7 @@ Verification needs the whole prefix; a slice starting after `Seq(0)` fails with 
 |---|---|---|
 | Store-only | `RunCreated`, `LeaseAcquired` | the store itself; refused in any `append` |
 | Execution | `ModelResponseRecorded`, `ToolIntent`, `ToolResult`, `ToolOutcomeUnknown`, `HarnessSessionStarted`, `HarnessResult`, `CapacityObserved`, `RunCompleted`, `RunFailed`, `RunCancelled` | the lease holder, through `append` |
-| External (`is_external`) | `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided`, `CancelRequested` | the server, through `append_external`, no lease |
+| External (`is_external`) | `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided`, `CancelRequested`, `InterruptRequested`, `MailSent` | the server, through `append_external`, no lease |
 | Terminal (`is_terminal`) | `RunCompleted`, `RunFailed`, `RunCancelled` | after one of these nothing is appended, and no lease is granted |
 
 ## Time (`clock.rs`)

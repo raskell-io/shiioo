@@ -242,3 +242,34 @@ async fn messages_are_refused_where_nobody_would_read_them_and_harness_runs_take
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(anonymous.status(), 401);
 }
+
+#[tokio::test]
+async fn now_asks_for_an_interrupt_right_after_the_message() {
+    let office = office().await;
+    let mut spec = HarnessSpec::claude_code();
+    spec.binary = Some("/bin/false".into());
+    let run = office.create(Runtime::Harness(spec), false).await;
+    let resp = office
+        .post(
+            &format!("/v1/runs/{run}/messages"),
+            json!({ "text": "Stop, wrong file.", "now": true }),
+            None,
+        )
+        .await;
+    assert_eq!(resp.status(), 202);
+    let ack: Value = resp.json().await.unwrap_or_else(|e| panic!("{e}"));
+    let log = office.log(run).await;
+    let seq = ack["seq"].as_u64().unwrap_or(0) as usize;
+    assert!(
+        matches!(&log[seq], Payload::UserMessage { content, .. } if content == "Stop, wrong file.")
+    );
+    assert!(matches!(&log[seq + 1], Payload::InterruptRequested { by } if by == "owner"));
+
+    // Without `now`, no interrupt.
+    office.say(run, "And the README.", None).await;
+    let log = office.log(run).await;
+    assert_eq!(
+        Office::count(&log, |p| matches!(p, Payload::InterruptRequested { .. })),
+        1
+    );
+}

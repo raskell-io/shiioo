@@ -87,7 +87,8 @@ square for cancelled.
 - **Log** (`log.js`): your task and messages as "You" turns (a message
   reads "Not read yet" until the agent's next turn or, for a harness, its
   next process); the agent's text as markdown; each tool call as one row
-  with the tool, its main argument, ok / error and duration, the input and
+  with the tool, its main argument, ok / error / stopped (its process
+  ended first) and duration, the input and
   the output (folded to its last 12 lines) inside; rules that did not just
   allow; approvals inline with Allow / Deny while they are the one the run
   waits on; how the run ended (Done · time · cost, Failed, Cancelled).
@@ -103,6 +104,10 @@ square for cancelled.
   `/v1/runs/{id}/messages` with an `Idempotency-Key` made per message and
   kept until it is accepted, so resending after a dropped connection can't
   deliver it twice. ⌘/Ctrl-Enter sends. The hint says when it will be read.
+  While a Claude Code or Codex run is working, **Now** (⌘/Ctrl-Shift-Enter)
+  sends with `"now": true`: the current step is stopped and the session
+  resumed with the message; the log shows "You stopped the current step
+  so this is read now".
   On a finished Claude Code or Codex run the same box is **Follow up**: it
   posts to `/v1/runs/{id}/follow-up` and opens the new run.
 

@@ -164,7 +164,8 @@ the run has already finished`.
 
 The owner writes to a run: `{"text": "…"}` is appended as `UserMessage {
 author: "owner" }` without a lease (`ApiState::send_message`), and `seq` is
-where it landed.
+where it landed. With `"now": true` an `InterruptRequested { by: "owner" }`
+follows it in the same append.
 
 - A parked run becomes runnable and is driven (or, if it is addressed to a
   machine, that node is woken); a run being worked on reads the message at
@@ -177,8 +178,11 @@ where it landed.
   first attempt waits for it. The keys are kept in memory.
 - Claude Code and Codex read the message when their process finishes:
   instead of completing, the worker resumes the session with the message
-  as the prompt (`shiioo-runtime/docs/worker-loop.md`, section 4). The
-  "Now" option that interrupts the process is desk T14.
+  as the prompt (`shiioo-runtime/docs/worker-loop.md`, section 4). With
+  `now`, the worker stops the process within two seconds (SIGINT, then
+  SIGKILL after ten) and resumes the session at once, the prompt saying
+  it was stopped mid-step. A run with no harness process at work (parked,
+  native, between processes) reads the message as without `now`.
 - `400` for an empty text; `404` for an unknown run; `409` for a finished
   run.
 - When a drive ends, the office re-reads the run: a message that arrived

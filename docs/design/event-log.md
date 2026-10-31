@@ -98,6 +98,7 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 | `ApprovalRequested` | `approval_id, call_id?, tool, input, summary, expires_at?` | server (external) | The owner has been asked; the tool call waits. |
 | `ApprovalDecided` | `approval_id, decision: allow\|deny, by, note?` | server (external) | The owner's answer, or `by: timeout`. |
 | `CancelRequested` | `by, reason` | server (external) | The worker stops at its next step and writes `RunCancelled`. |
+| `InterruptRequested` | `by` | server (external) | Follows a `UserMessage` sent with "Now": the worker stops the harness process at work and resumes its session with the message. Ignored when no process is running. |
 | `RunCompleted` | `output` | worker | Terminal. |
 | `RunFailed` | `reason` | worker | Terminal. |
 | `RunCancelled` | `reason` | worker | Terminal. |
@@ -124,7 +125,7 @@ Renewals are not logged: they carry no information a reader needs, and logging t
 
 *(planned)* Office-level events that are not part of a run (node enrolment and revocation such as `MachineRevoked`, config changes, signed checkpoints, archival) go to an office audit log with the same format and chain rules. (Earlier drafts said "project"; the single-owner product has one office, [ADR-0008](../adr/0008-personal-workforce-not-managed-cloud.md).)
 
-**Writes by the server** *(built)*. `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided` and `CancelRequested` (`Payload::is_external`) come from the server (the API, the Telegram bot, the intake), which does not hold the run's lease. They go through `EventStore::append_external(run, payloads)` (`RunHead::append_external`), which takes no lease, accepts only external variants, refuses closed runs, and serializes with the run's head lock like any other write; the events carry the current epoch. The lease holder's next append then gets `SeqConflict`, re-reads the tail and retries (`Session::append` in `shiioo-runtime/src/worker.rs`, up to four times), which is also how it learns of a cancellation or a decision. Workers stay the only writers of execution events.
+**Writes by the server** *(built)*. `UserMessage`, `PolicyDecision`, `ApprovalRequested`, `ApprovalDecided`, `CancelRequested`, `InterruptRequested` and `MailSent` (`Payload::is_external`) come from the server (the API, the Telegram bot, the intake), which does not hold the run's lease. They go through `EventStore::append_external(run, payloads)` (`RunHead::append_external`), which takes no lease, accepts only external variants, refuses closed runs, and serializes with the run's head lock like any other write; the events carry the current epoch. The lease holder's next append then gets `SeqConflict`, re-reads the tail and retries (`Session::append` in `shiioo-runtime/src/worker.rs`, up to four times), which is also how it learns of a cancellation or a decision. Workers stay the only writers of execution events.
 
 ## 4. Blobs *(planned)*
 

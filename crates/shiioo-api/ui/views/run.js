@@ -229,10 +229,12 @@ function messageBox(id) {
     <label class="hint" for="message"></label>
     <textarea id="message" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
     <div class="row"><span class="note">Your message goes into the run's log. The rules still apply to what the agent does next.</span>
+      <button class="btn now" type="submit" data-now hidden title="Stop the current step and deliver this now">Now <kbd>${MOD}⇧↵</kbd></button>
       <button class="btn primary" type="submit"><span class="label">Send</span> <kbd>${MOD}↵</kbd></button></div>
   </form>`);
   const text = form.querySelector("textarea");
-  const send = form.querySelector("button");
+  const send = form.querySelector(".btn.primary");
+  const nowBtn = form.querySelector("[data-now]");
   const label = send.querySelector(".label");
   const hint = form.querySelector(".hint");
   let base = "";
@@ -244,32 +246,36 @@ function messageBox(id) {
   const grow = () => { text.style.height = "auto"; text.style.height = `${Math.min(text.scrollHeight, 200)}px`; };
   text.addEventListener("input", () => { if (!text.value.trim()) key = null; grow(); });
   text.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      form.requestSubmit(e.shiftKey && !nowBtn.hidden ? nowBtn : send);
+    }
     if (e.key === "Escape") text.blur();
   });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = text.value.trim();
     if (!body || send.disabled) return;
+    const now = e.submitter === nowBtn && !followUp;
     key = key || newKey();
-    send.disabled = true;
-    hint.textContent = followUp ? "Starting the follow-up…" : "Sending…";
+    send.disabled = nowBtn.disabled = true;
+    hint.textContent = followUp ? "Starting the follow-up…" : now ? "Stopping the current step…" : "Sending…";
     try {
       const reply = await api(`/v1/runs/${id}/${followUp ? "follow-up" : "messages"}`, {
         method: "POST",
         headers: { "Idempotency-Key": key },
-        body: JSON.stringify({ text: body }),
+        body: JSON.stringify(now ? { text: body, now } : { text: body }),
       });
       key = null;
       if (followUp) { upsert(reply); location.hash = `run=${reply.id}`; return; }
       text.value = "";
       grow();
-      toast("Sent");
+      toast(now ? "Sent. Stopping the current step" : "Sent");
     } catch (err) {
       showError(err);
     }
     hint.textContent = base;
-    send.disabled = false;
+    send.disabled = nowBtn.disabled = false;
     text.focus();
   });
 
@@ -282,10 +288,13 @@ function messageBox(id) {
       if (mode !== followUp) key = null;
       followUp = mode;
       form.hidden = !accepts && !followUp;
+      // Now only means something while a harness is in a step.
+      nowBtn.hidden = !(name && state === "open");
       label.textContent = followUp ? "Follow up" : state === "parked" ? "Reply" : name ? "Send at next turn" : "Send";
       base = followUp ? `Finished. A follow-up continues this ${name} session on the same branch, as a new run.`
         : state === "parked" ? "It is waiting for your reply."
         : state === "needs_attention" ? "It reads this when the run continues."
+        : name && state === "open" ? `Tell ${name} something. It reads it when it finishes its current step, or at once with Now.`
         : name ? `Tell ${name} something. It reads it when it finishes its current step.`
         : "Tell the agent something. It reads it at its next turn.";
       if (!send.disabled) hint.textContent = base;

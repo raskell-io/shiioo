@@ -415,6 +415,10 @@ pub struct DecideBody {
 #[derive(Deserialize)]
 pub struct MessageBody {
     pub text: String,
+    /// Stop a working harness so it reads the message now, instead of
+    /// when its turn ends (`InterruptRequested`). Follow-ups ignore it.
+    #[serde(default)]
+    pub now: bool,
 }
 
 /// Where a message landed in the run's log.
@@ -1388,10 +1392,13 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// a run being worked on reads it at its next turn, a harness when its
     /// process finishes, by resuming the session with it). With `key`, a
     /// repeat returns where the first one landed (`Ok((ack, false))`).
+    /// With `now`, a harness at work is stopped and resumed with it at
+    /// once (`InterruptRequested` after the message).
     pub async fn send_message(
         self: &Arc<Self>,
         run_id: RunId,
         text: &str,
+        now: bool,
         key: Option<String>,
     ) -> Result<(MessageAck, bool), ApiError> {
         let text = text.trim();
@@ -1402,17 +1409,14 @@ impl<S: EventStore + 'static> ApiState<S> {
         if let Some(ack) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
             return Ok((*ack, false));
         }
-        let events = match self
-            .store
-            .append_external(
-                run_id,
-                vec![Payload::UserMessage {
-                    author: "owner".into(),
-                    content: text.to_owned(),
-                }],
-            )
-            .await
-        {
+        let mut payloads = vec![Payload::UserMessage {
+            author: "owner".into(),
+            content: text.to_owned(),
+        }];
+        if now {
+            payloads.push(Payload::InterruptRequested { by: "owner".into() });
+        }
+        let events = match self.store.append_external(run_id, payloads).await {
             Ok(events) => events,
             Err(StoreError::RunClosed(_)) => {
                 return Err(ApiError::Conflict(
@@ -1422,7 +1426,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             Err(e) => return Err(e.into()),
         };
         let ack = MessageAck {
-            seq: events.last().map_or(0, |e| e.seq.0),
+            seq: events.first().map_or(0, |e| e.seq.0),
         };
         if let Some(k) = key {
             keys.insert((run_id, k), ack);
@@ -1462,8 +1466,8 @@ impl<S: EventStore + 'static> ApiState<S> {
                 "the run is still open; send it a message instead".into(),
             ));
         }
-        let original = run_spec(&log)
-            .ok_or_else(|| ApiError::Internal("the run has no spec".into()))?;
+        let original =
+            run_spec(&log).ok_or_else(|| ApiError::Internal("the run has no spec".into()))?;
         if matches!(original.runtime, Runtime::Native) {
             return Err(ApiError::Conflict(
                 "only Claude Code and Codex runs can be followed up; start a new task instead"
@@ -1834,9 +1838,11 @@ fn view_of(run_id: RunId, log: &[Event]) -> RunView {
             Runtime::Harness(h) => h.harness.name().to_owned(),
             Runtime::Native => s.agent.model.clone(),
         }),
-        repo: harness
-            .as_ref()
-            .and_then(|h| h.repo_label.clone().or_else(|| dir_name(h.repo.as_deref()?))),
+        repo: harness.as_ref().and_then(|h| {
+            h.repo_label
+                .clone()
+                .or_else(|| dir_name(h.repo.as_deref()?))
+        }),
         branch: harness
             .as_ref()
             .filter(|h| h.repo.is_some())
@@ -1913,6 +1919,7 @@ pub fn describe(ev: &Event) -> String {
         Payload::ApprovalRequested { summary, .. } => format!("waiting for approval: {summary}"),
         Payload::ApprovalDecided { decision, by, .. } => format!("{decision} by {by}"),
         Payload::CancelRequested { by, reason } => format!("cancel requested by {by}: {reason}"),
+        Payload::InterruptRequested { by } => format!("interrupt requested by {by}"),
         Payload::SandboxStarted { level, detail } => {
             let mut parts = Vec::new();
             if let Some(c) = detail["container"].as_str() {
@@ -2044,7 +2051,10 @@ pub const UI_FILES: &[(&str, &str)] = &[
 /// The dashboard's fonts (`ui/fonts/`, Latin subsets of the brand fonts
 /// in `assets/brand/fonts`), served from the binary like the code.
 pub const UI_FONTS: &[(&str, &[u8])] = &[
-    ("fonts/inter.woff2", include_bytes!("../ui/fonts/inter.woff2")),
+    (
+        "fonts/inter.woff2",
+        include_bytes!("../ui/fonts/inter.woff2"),
+    ),
     (
         "fonts/bricolage.woff2",
         include_bytes!("../ui/fonts/bricolage.woff2"),
@@ -2577,7 +2587,9 @@ async fn post_message<S: EventStore + 'static>(
         .get("idempotency-key")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let (ack, new) = state.send_message(parse_run(&id)?, &body.text, key).await?;
+    let (ack, new) = state
+        .send_message(parse_run(&id)?, &body.text, body.now, key)
+        .await?;
     let code = if new {
         StatusCode::ACCEPTED
     } else {

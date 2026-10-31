@@ -46,6 +46,17 @@ export function createLog(box, { onDecide }) {
     inner.appendChild(row);
   };
 
+  // Calls whose process ended without answering them (interrupted,
+  // crashed, or the run ended) stop spinning.
+  const stopOpen = () => {
+    for (const c of calls.values()) {
+      if (c.done) continue;
+      c.done = true;
+      const x = c.row.querySelector(".exit");
+      x.className = "exit"; x.textContent = "stopped";
+    }
+  };
+
   const markRead = (upTo) => {
     for (const m of unread.filter((m) => m.seq < upTo)) { m.state.textContent = "Read"; unread.splice(unread.indexOf(m), 1); }
   };
@@ -72,7 +83,7 @@ export function createLog(box, { onDecide }) {
         unread.push({ seq: ev.seq, state: msg.querySelector(".state") });
         break;
       }
-      case "sandbox_started": if (harness) markRead(ev.seq); break;
+      case "sandbox_started": if (harness) { markRead(ev.seq); stopOpen(); } break;
       case "harness_session_started": {
         if (firstSession) { firstSession = false; open("agent", agent, ev); }
         else sys(ev, "Picked the session up again");
@@ -95,6 +106,7 @@ export function createLog(box, { onDecide }) {
       case "tool_result": {
         const c = calls.get(p.call_id);
         if (!c) { sys(ev, esc(describe(ev))); break; }
+        c.done = true;
         const exit = c.row.querySelector(".exit");
         exit.className = `exit ${p.is_error ? "bad" : "ok"}`;
         exit.textContent = p.is_error ? "error" : "ok";
@@ -104,7 +116,7 @@ export function createLog(box, { onDecide }) {
       }
       case "tool_outcome_unknown": {
         const c = calls.get(p.call_id);
-        if (c) { const x = c.row.querySelector(".exit"); x.className = "exit"; x.textContent = "unknown"; }
+        if (c) { c.done = true; const x = c.row.querySelector(".exit"); x.className = "exit"; x.textContent = "unknown"; }
         break;
       }
       case "policy_decision":
@@ -127,13 +139,14 @@ export function createLog(box, { onDecide }) {
         break;
       }
       case "cancel_requested": sys(ev, `Cancel requested by ${esc(p.by === "owner" ? "you" : p.by)}`); break;
+      case "interrupt_requested": sys(ev, `${p.by === "owner" ? "You" : esc(p.by)} stopped the current step so this is read now`); break;
       case "run_parked": sys(ev, "Waiting for your reply"); break;
       case "secret_redacted": sys(ev, `Kept secret <code>${esc(p.name)}</code> out of the log`); break;
       case "mail_sent": sys(ev, `Sent mail to ${esc((p.to || []).join(", "))}: ${esc(p.subject)}`); break;
       case "harness_result": cost += Number(p.cost_usd || 0); break;
-      case "run_completed": end(ev, `<b>Done</b> · ${esc(span(ev.recorded_at - started))}${cost >= 0.005 ? ` · $${cost.toFixed(2)}` : ""}`); break;
-      case "run_failed": end(ev, `<b>Failed</b> · ${esc(p.reason)}`, "failed"); break;
-      case "run_cancelled": end(ev, `<b>Cancelled</b>${p.reason ? ` · ${esc(p.reason)}` : ""}`); break;
+      case "run_completed": stopOpen(); end(ev, `<b>Done</b> · ${esc(span(ev.recorded_at - started))}${cost >= 0.005 ? ` · $${cost.toFixed(2)}` : ""}`); break;
+      case "run_failed": stopOpen(); end(ev, `<b>Failed</b> · ${esc(p.reason)}`, "failed"); break;
+      case "run_cancelled": stopOpen(); end(ev, `<b>Cancelled</b>${p.reason ? ` · ${esc(p.reason)}` : ""}`); break;
       case "lease_acquired": case "capacity_observed": case "run_woken": break;
       default: sys(ev, esc(describe(ev)));
     }

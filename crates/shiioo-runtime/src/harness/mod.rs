@@ -16,12 +16,19 @@ use shiioo_core::{CallId, Payload, ToolClass};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
 
 /// Prompt for resuming a session whose process was stopped mid-task.
 pub const CONTINUE_PROMPT: &str = "The process running you was stopped before you finished. \
     Check the current state of the workspace, then continue the task to completion.";
+
+/// Leads the owner's message when they stopped the harness to say it
+/// ("Now" on the desk): the step in progress may not have finished.
+pub const INTERRUPTED_PROMPT: &str = "The owner stopped you mid-step to tell you this. \
+    Your last step may have been cut short, so check the workspace before you rely on it, \
+    then carry on with the task with their message in mind:";
 
 /// What one harness output line means for the run's log.
 #[derive(Debug, Default)]
@@ -419,8 +426,8 @@ impl HarnessDriver for CodexDriver {
     }
 }
 
-/// A running harness: its process and a line reader over its stdout.
-/// Dropping it kills the process.
+/// A running harness: its process (leading its own process group) and a
+/// line reader over its stdout. Dropping it kills the group.
 pub struct HarnessProcess {
     child: Child,
     lines: Lines<BufReader<ChildStdout>>,
@@ -442,6 +449,9 @@ pub enum HarnessError {
 
 impl HarnessProcess {
     pub fn spawn(mut cmd: tokio::process::Command) -> Result<Self, HarnessError> {
+        // Its own process group, so an interrupt reaches the harness and
+        // the tools it runs, as Ctrl-C in a terminal would.
+        cmd.process_group(0);
         let mut child = cmd.spawn().map_err(HarnessError::Spawn)?;
         let stdout = child
             .stdout
@@ -478,7 +488,52 @@ impl HarnessProcess {
         (self.child.wait().await.ok(), stderr.trim().to_owned())
     }
 
+    /// Kills the harness and every tool it started.
     pub async fn kill(&mut self) {
+        if let Some(pid) = self.child.id() {
+            signal_group(pid, "KILL").await;
+        }
         self.child.kill().await.ok();
     }
+
+    /// Stops the process the way Ctrl-C would, so the harness can close
+    /// its turn and save its session; kills the group if it is still
+    /// running after `grace`. Its remaining output is discarded.
+    pub async fn interrupt(&mut self, grace: Duration) {
+        let group = self.child.id();
+        if let Some(pid) = group {
+            signal_group(pid, "INT").await;
+        }
+        let drain = async { while let Ok(Some(_)) = self.lines.next_line().await {} };
+        if tokio::time::timeout(grace, drain).await.is_err() {
+            if let Some(pid) = group {
+                signal_group(pid, "KILL").await;
+            }
+            self.child.kill().await.ok();
+        }
+        self.child.wait().await.ok();
+    }
+}
+
+impl Drop for HarnessProcess {
+    /// A process still running when the worker lets go of it (the office
+    /// is shutting down, the drive was dropped) takes its group with it.
+    fn drop(&mut self) {
+        if let Some(pid) = self.child.id() {
+            let _ = std::process::Command::new("kill")
+                .args(["-s", "KILL", "--", &format!("-{pid}")])
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
+}
+
+/// Sends `signal` to a process group, without `unsafe`: through the
+/// `kill` utility every Unix has.
+async fn signal_group(pgid: u32, signal: &str) {
+    let _ = tokio::process::Command::new("kill")
+        .args(["-s", signal, "--", &format!("-{pgid}")])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
 }

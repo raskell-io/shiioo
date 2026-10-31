@@ -918,6 +918,7 @@ pub fn compact(ev: &Event) -> String {
             ..
         } => format!("approval {approval_id} {decision}"),
         Payload::CancelRequested { by, .. } => format!("cancel by {by}"),
+        Payload::InterruptRequested { by } => format!("interrupt by {by}"),
         Payload::SandboxStarted { level, .. } => format!("sandbox {level}"),
         Payload::SecretRedacted { name, count } => format!("redacted {name} x{count}"),
         Payload::MailSent { subject, .. } => format!("mail sent: {subject}"),

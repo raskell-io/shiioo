@@ -156,6 +156,14 @@ pub enum Payload {
         by: String,
         reason: String,
     },
+    /// The owner wants the run's current harness process stopped so it
+    /// reads their message now (desk "Now"), not when its turn ends. Comes
+    /// right after the `UserMessage`. The worker interrupts the process and
+    /// resumes the session with the message; with no process running, or
+    /// on a native run, it has no effect.
+    InterruptRequested {
+        by: String,
+    },
     /// Where the run's harness executes: the isolation level and what it
     /// was given (image, mounts, egress mode). Written by the worker before
     /// the harness starts.
@@ -226,6 +234,7 @@ impl Payload {
                 | Payload::ApprovalRequested { .. }
                 | Payload::ApprovalDecided { .. }
                 | Payload::CancelRequested { .. }
+                | Payload::InterruptRequested { .. }
                 | Payload::MailSent { .. }
         )
     }

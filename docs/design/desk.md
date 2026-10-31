@@ -1,6 +1,6 @@
 # The desk: the web UI, and working with an employee directly
 
-Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), follow-ups (T15), the message box (T16, without **Now**), and a first pass of the desk itself: tokens and fonts (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
+Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), **Now** (T14), follow-ups (T15), the message box (T16), and a first pass of the desk itself: tokens and fonts (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
 
 Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the dashboard as built), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
 
@@ -212,9 +212,9 @@ One line each, in build order within a phase. "Needs" names what must land first
 | T11 *(built)* | Kernel: `RunParked { waiting_for }` and `RunWoken` payloads, parking ends the lease, the status fold learns `Parked`; the native loop shows messages to the model, parks when `park_on_answer`, answers a message that arrived mid-turn before settling (`context_seq`), and wakes on input | `shiioo-core/src/event.rs`, `shiioo-runtime/src/status.rs` | | Fold and sim tests cover park → message → wake; shared with phase 7a (D11) |
 | T12 *(built)* | `POST /v1/runs/{run}/messages` appending `UserMessage { author: "owner" }` with `Idempotency-Key`; a parked run is driven again | `shiioo-api/src/lib.rs`, `docs/http.md` | T11 | A message to a parked run wakes it once, also when retried |
 | T13 *(built; verified live with Claude Code 2.1.316 and Codex 0.163.0)* | Harness delivery at the turn boundary: when the harness process exits with unread messages, resume the session with them as the prompt; otherwise park instead of completing (D2) | `shiioo-runtime/src/harness/mod.rs`, `worker.rs` | T11 | Scripted-harness test: a message sent mid-turn is the next resume prompt |
-| T14 | **Now** delivery: stop the harness process, resume with the interrupted-turn flag and the message | `harness/mod.rs` | T13 | Real-binary check with Claude Code and Codex: context survives the interrupt |
+| T14 *(built; verified live with Claude Code 2.1 and Codex 0.163: interrupted mid-command, the resumed session still knew what it said before)* | **Now** delivery: stop the harness process, resume with the interrupted-turn flag and the message | `harness/mod.rs` | T13 | Real-binary check with Claude Code and Codex: context survives the interrupt |
 | T15 *(built; verified live with both harnesses, including a follow-up of a follow-up)* | Follow-up on a finished run: `POST /v1/runs/{run}/follow-up` creates a continuation run (same repo, worktree, branch, session; `origin: { run, seq }`) (D3) | `shiioo-api`, `shiioo-runtime/src/spec.rs`, `workspace.rs` | T12 | The new run's harness remembers the earlier session; its spec names the original |
-| T16 *(part built: Send at next turn, Follow up; Now with T14)* | Message box in the run view (Send at next turn / Now) and Follow up on finished runs | `ui/` | T4, T12–T15 | Both work from the desk and the phone |
+| T16 *(built: Send at next turn, Now, Follow up)* | Message box in the run view (Send at next turn / Now) and Follow up on finished runs | `ui/` | T4, T12–T15 | Both work from the desk and the phone |
 
 ### 8d. Taking over, on the office machine
 

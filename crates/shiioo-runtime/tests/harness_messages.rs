@@ -418,3 +418,66 @@ async fn a_silent_harness_is_cancelled_without_waiting_for_output() {
         Some(Payload::RunCancelled { .. })
     ));
 }
+
+#[tokio::test]
+async fn now_stops_the_harness_and_resumes_it_with_the_message() {
+    let fake = Fake::new();
+    let fx = Arc::new(Fixture::new());
+    let run = fx.start(&fake, false).await;
+    let driving = {
+        let fx = Arc::clone(&fx);
+        tokio::spawn(async move { fx.worker("w1").drive(run).await })
+    };
+    for _ in 0..200 {
+        let log = fx.log(run).await;
+        if count(&log, |p| matches!(p, Payload::ModelResponseRecorded { .. })) >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The fake now waits for `go`, silently; the owner does not.
+    let started = std::time::Instant::now();
+    fx.store
+        .append_external(
+            run,
+            vec![
+                Payload::UserMessage {
+                    author: "owner".into(),
+                    content: "Stop, read CHANGELOG.md instead.".into(),
+                },
+                Payload::InterruptRequested { by: "owner".into() },
+            ],
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let outcome = tokio::time::timeout(Duration::from_secs(9), driving)
+        .await
+        .unwrap_or_else(|_| panic!("the interrupt did not stop the harness"))
+        .unwrap_or_else(|e| panic!("{e}"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(outcome, RunOutcome::Completed(ANSWER.into()));
+    assert!(started.elapsed() < Duration::from_secs(6));
+
+    // The second process resumed the same session, told why it stopped.
+    let calls = fake.invocations();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls[1].iter().any(|a| a == SESSION), "{:?}", calls[1]);
+    // The fake records one argument per line, so a multi-line prompt
+    // spans several.
+    assert!(
+        calls[1].join("\n").contains(&format!(
+            "{}\n\nStop, read CHANGELOG.md instead.",
+            shiioo_runtime::harness::INTERRUPTED_PROMPT
+        )),
+        "{:?}",
+        calls[1]
+    );
+    // The interrupted process left no result; only the resumed one did.
+    let log = fx.log(run).await;
+    assert_eq!(
+        count(&log, |p| matches!(p, Payload::HarnessResult { .. })),
+        1
+    );
+    assert!(matches!(log.last(), Some(Payload::RunCompleted { .. })));
+}
