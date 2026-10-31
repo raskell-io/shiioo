@@ -323,7 +323,7 @@ kbd { font: 500 var(--fs-xs) var(--font-ui); border: 1px solid var(--line); bord
   border-radius: var(--r2); background: var(--bg); color: var(--ink); line-height: 1.4; display: block;
   transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .composer textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.composer .row { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); }
+.composer .row { display: flex; align-items: center; justify-content: flex-end; gap: var(--s2); margin-top: var(--s2); }
 .composer .row .note { flex: 1; color: var(--faint); font-size: var(--fs-xs); }
 
 /* aside: approval + diff */

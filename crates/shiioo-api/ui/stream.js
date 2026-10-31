@@ -20,6 +20,8 @@ export async function streamEvents(path, signal, onFrame, lastId, { stopOnTermin
       if (lastId() >= 0) headers["Last-Event-ID"] = String(lastId());
       const res = await fetch(path, { headers, signal });
       if (res.status === 401) { rejectToken(); return; }
+      // No such run (a stale tab, a mistyped link): retrying won't help.
+      if (res.status === 400 || res.status === 404) return;
       if (!res.ok) throw new Error(`stream ${res.status}`);
       backoff = 1000;
       const reader = res.body.getReader();
