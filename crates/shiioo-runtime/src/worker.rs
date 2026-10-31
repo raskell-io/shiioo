@@ -268,6 +268,10 @@ struct Session<'w, S> {
 /// without finishing, before the run is failed.
 const MAX_HARNESS_STARTS: usize = 5;
 
+/// How often a harness run looks for a cancellation while its process
+/// prints nothing (a long build, a hung command).
+const CANCEL_POLL: Duration = Duration::from_secs(2);
+
 impl<S: EventStore + 'static> Session<'_, S> {
     async fn run(&mut self) -> Result<RunOutcome, WorkerError> {
         if let Some(outcome) = self.cancel_if_requested().await? {
@@ -564,9 +568,24 @@ impl<S: EventStore + 'static> Session<'_, S> {
     ) -> Result<Option<RunOutcome>, WorkerError> {
         let mut process = HarnessProcess::spawn(cmd)?;
         let mut lost = self.lease_lost.clone();
+        let mut poll = tokio::time::interval(CANCEL_POLL);
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        poll.tick().await;
         loop {
             let line = tokio::select! {
                 line = process.next_line() => line?,
+                _ = poll.tick() => {
+                    // Output also checks for a cancellation; a silent
+                    // process would otherwise never see one.
+                    self.catch_up().await?;
+                    if cancel_requested(&self.log).is_some() {
+                        process.kill().await;
+                        if let Some(outcome) = self.cancel_if_requested().await? {
+                            return Ok(Some(outcome));
+                        }
+                    }
+                    continue;
+                }
                 () = tokio::time::sleep_until(deadline) => {
                     process.kill().await;
                     return self

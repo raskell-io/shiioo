@@ -166,8 +166,10 @@ this is the loop around them.
    `HookEndpoint` plus run id when the worker was built `with_hooks`.
 5. **Deadline.** `max_minutes` counts from the first event's `recorded_at`
    across all starts; without it the deadline is a year away.
-6. **Loop.** `select!` over the next stdout line, the deadline and the
-   lease-lost watch:
+6. **Loop.** `select!` over the next stdout line, the deadline, the
+   lease-lost watch and a two-second timer (`CANCEL_POLL`) that catches up
+   on the log and kills the process when a cancellation arrived while it
+   printed nothing:
    - line → `driver.interpret(line)` → append each payload; when the
      interpretation carries an outcome (`RunCompleted`/`RunFailed`) return
      it; then `cancel_if_requested` → kill and return `Cancelled`.

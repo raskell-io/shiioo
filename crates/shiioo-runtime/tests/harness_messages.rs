@@ -371,3 +371,50 @@ async fn git(repo: &Path, args: &[&str]) {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[tokio::test]
+async fn a_silent_harness_is_cancelled_without_waiting_for_output() {
+    let fake = Fake::new();
+    std::fs::write(fake.path().join("claude"), "#!/bin/sh\nsleep 30\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let fx = Arc::new(Fixture::new());
+    let run = fx.start(&fake, false).await;
+    let driving = {
+        let fx = Arc::clone(&fx);
+        tokio::spawn(async move { fx.worker("w1").drive(run).await })
+    };
+    // Wait for the process to start, then ask the run to stop.
+    for _ in 0..200 {
+        let log = fx.log(run).await;
+        if count(&log, |p| matches!(p, Payload::SandboxStarted { .. })) == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    fx.store
+        .append_external(
+            run,
+            vec![Payload::CancelRequested {
+                by: "owner".into(),
+                reason: "wrong repo".into(),
+            }],
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let started = std::time::Instant::now();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), driving)
+        .await
+        .unwrap_or_else(|_| panic!("the silent run was not cancelled"))
+        .unwrap_or_else(|e| panic!("{e}"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        outcome,
+        RunOutcome::Cancelled("cancelled by owner: wrong repo".into())
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(matches!(
+        fx.log(run).await.last(),
+        Some(Payload::RunCancelled { .. })
+    ));
+}
