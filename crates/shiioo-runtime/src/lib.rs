@@ -38,8 +38,10 @@ pub use spec::{
     AgentSpec, ContainerSpec, Egress, HarnessBilling, HarnessKind, HarnessSpec, Isolation, Mount,
     OpenshellSpec, Origin, RunSpec, Runtime,
 };
-pub use status::{RunStatus, open_approval, parked, run_status, wake_reason};
+pub use status::{
+    RunStatus, open_approval, parked, run_status, takeover_pending, taken_over, wake_reason,
+};
 pub use tools::{Tool, ToolOutput, Toolbox};
 pub use unconfigured::UnconfiguredProvider;
-pub use worker::{CrashPoint, Faults, RunOutcome, Worker, WorkerError};
+pub use worker::{CrashPoint, Faults, RunOutcome, TakeoverControl, Worker, WorkerError};
 pub use workspace::{Worktree, WorktreeError, branch_for};

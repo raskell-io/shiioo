@@ -21,6 +21,9 @@ export function describe(ev) {
     case "approval_decided": return `${p.decision} by ${p.by}`;
     case "cancel_requested": return `cancel requested by ${p.by}${p.reason ? ": " + p.reason : ""}`;
     case "interrupt_requested": return `interrupt requested by ${p.by}`;
+    case "takeover_requested": return `takeover requested by ${p.by}`;
+    case "takeover_started": return `${p.by} took over at the keyboard`;
+    case "takeover_ended": return `takeover ended (${p.reason})${p.session ? `, session ${p.session}` : ""}`;
     case "sandbox_started": {
       const parts = [p.detail?.container, p.detail?.sandbox, p.detail?.egress?.mode ? `egress ${p.detail.egress.mode}` : null].filter(Boolean);
       return `isolation: ${p.level}${parts.length ? ` (${parts.join(", ")})` : ""}`;

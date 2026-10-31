@@ -1010,6 +1010,7 @@ async fn serve(
             intake_label: config.intake.label.clone(),
             worktrees: Some(data.join("worktrees")),
             mail: mailer,
+            ..ApiOptions::default()
         },
     );
     if let Some(n) = &telegram_notifications {
@@ -1026,6 +1027,11 @@ async fn serve(
         }
     );
     tokio::spawn(Arc::clone(&state).run_scheduler());
+    // A takeover the last office never ended: close it, park the run.
+    {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move { state.end_stale_takeovers().await });
+    }
     if !config.routines.is_empty() || !config.report.schedule.trim().is_empty() {
         println!("routines:\n{}", state.routines_text());
     }
@@ -1522,6 +1528,7 @@ fn status_line(view: &shiioo_api::RunView) -> String {
         RunStatus::Failed { reason } => ("❌", format!(" {reason}")),
         RunStatus::Cancelled { .. } => ("🛑", String::new()),
         RunStatus::Parked { waiting_for } => ("💤", format!(" waiting for {waiting_for}")),
+        RunStatus::TakenOver { .. } => ("⌨️", " you're at the keyboard".to_owned()),
     };
     let task: String = view.task.chars().take(70).collect();
     let place = match (&view.machine, &view.worker) {
@@ -1906,6 +1913,9 @@ impl Notifications for TelegramNotifications {
                 RunStatus::Parked { .. } => {
                     format!("💤 {} waits for your message: {task}", short(run))
                 }
+                RunStatus::TakenOver { .. } => {
+                    format!("⌨️ {} is yours at the keyboard: {task}", short(run))
+                }
             };
             self.notifier
                 .notify(&format!("{text}{}", self.link(run)))
@@ -1987,9 +1997,10 @@ impl shiioo_intake::IntakeSink for IssueSink {
             let run = uuid::Uuid::parse_str(&run_id).ok().map(RunId)?;
             let view = self.state.run_view(run).await.ok()?;
             match view.status {
-                RunStatus::Open | RunStatus::WaitingApproval { .. } | RunStatus::Parked { .. } => {
-                    None
-                }
+                RunStatus::Open
+                | RunStatus::WaitingApproval { .. }
+                | RunStatus::Parked { .. }
+                | RunStatus::TakenOver { .. } => None,
                 RunStatus::Completed { output } => Some(Ok(output)),
                 RunStatus::Failed { reason } => Some(Err(reason)),
                 RunStatus::Cancelled { reason } => Some(Err(reason)),

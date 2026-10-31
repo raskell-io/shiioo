@@ -1,6 +1,6 @@
 # 0013. A WebSocket for the takeover terminal
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-31
 
 ## Context

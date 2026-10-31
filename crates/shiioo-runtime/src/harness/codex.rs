@@ -100,7 +100,58 @@ pub fn command(
             cmd.arg("-C").arg(cwd);
         }
     }
-    cmd.arg("--json").arg("-c").arg("approval_policy=\"never\"");
+    cmd.arg("--json");
+    shared(&mut cmd, spec, agent, hooks);
+    if spec.repo.is_none() {
+        cmd.arg("--skip-git-repo-check");
+    }
+    // Codex has no system-prompt flag; extra instructions ride along with
+    // the task. The prompt is the last argument.
+    cmd.arg(with_instructions(agent, prompt));
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    cmd
+}
+
+/// Codex's own terminal UI for a takeover: `codex resume <thread>` (or a
+/// new session with `prompt`) with the same sandbox, model, hook and
+/// environment as the headless command. Its stdio is the takeover's
+/// terminal, set by whoever spawns it.
+pub fn interactive_command(
+    binary: &Path,
+    spec: &HarnessSpec,
+    agent: &AgentSpec,
+    cwd: &Path,
+    resume: Option<&str>,
+    prompt: Option<&str>,
+    hooks: Option<(&HookEndpoint, &str)>,
+) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.args(&spec.binary_args);
+    cmd.current_dir(cwd);
+    if let Some(thread) = resume {
+        cmd.arg("resume").arg(thread);
+    }
+    cmd.arg("-C").arg(cwd);
+    shared(&mut cmd, spec, agent, hooks);
+    if let (None, Some(prompt)) = (resume, prompt) {
+        cmd.arg(with_instructions(agent, prompt));
+    }
+    cmd.kill_on_drop(true);
+    cmd
+}
+
+/// What headless and interactive runs share: no approval prompts (the
+/// hook decides), the sandbox, the model, the hook and the environment.
+fn shared(
+    cmd: &mut Command,
+    spec: &HarnessSpec,
+    agent: &AgentSpec,
+    hooks: Option<(&HookEndpoint, &str)>,
+) {
+    cmd.arg("-c").arg("approval_policy=\"never\"");
     match sandbox_for(&spec.permission_mode) {
         Sandbox::DangerFullAccess => {
             cmd.arg("--dangerously-bypass-approvals-and-sandbox");
@@ -113,9 +164,6 @@ pub fn command(
     if !agent.model.is_empty() {
         cmd.arg("-m").arg(&agent.model);
     }
-    if spec.repo.is_none() {
-        cmd.arg("--skip-git-repo-check");
-    }
     if let Some((endpoint, run_id)) = hooks {
         cmd.arg("-c")
             .arg("features.hooks=true")
@@ -126,24 +174,19 @@ pub fn command(
             .env("SHIIOO_API_TOKEN", &endpoint.token)
             .env("SHIIOO_RUN_ID", run_id);
     }
-    // Codex has no system-prompt flag; extra instructions ride along with
-    // the task. The prompt is the last argument.
-    let full_prompt = if agent.system.is_empty() {
-        prompt.to_owned()
-    } else {
-        format!("Instructions:\n{}\n\nTask:\n{prompt}", agent.system)
-    };
-    cmd.arg(full_prompt);
     if spec.billing == HarnessBilling::Subscription {
         // Keys in the environment would be used instead of the login.
         cmd.env_remove("OPENAI_API_KEY");
         cmd.env_remove("CODEX_API_KEY");
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    cmd
+}
+
+fn with_instructions(agent: &AgentSpec, prompt: &str) -> String {
+    if agent.system.is_empty() {
+        prompt.to_owned()
+    } else {
+        format!("Instructions:\n{}\n\nTask:\n{prompt}", agent.system)
+    }
 }
 
 /// The binary to run: the spec's, else `SHIIOO_CODEX_BIN`, else `codex`

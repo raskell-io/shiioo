@@ -164,6 +164,28 @@ pub enum Payload {
     InterruptRequested {
         by: String,
     },
+    /// The owner wants to sit at the keyboard (desk "Take over"). A worker
+    /// driving the run stops its harness process and parks the run with
+    /// `waiting_for: "takeover"`, so the takeover can take the lease.
+    TakeoverRequested {
+        by: String,
+    },
+    /// The owner is at the keyboard: the harness runs interactively in the
+    /// run's worktree, resumed from its session, with the same hooks, so
+    /// the rules still judge every tool call. Written by the takeover,
+    /// which holds the run's lease until `TakeoverEnded`.
+    TakeoverStarted {
+        by: String,
+    },
+    /// The takeover is over: `handed_back`, `detached` (nobody attached
+    /// for too long), `exited` (the harness quit) or `office_restarted`.
+    /// `session` is the harness session the next process resumes, when
+    /// the takeover found it. What happened in between is in the events
+    /// before this one, imported from the harness's own session file.
+    TakeoverEnded {
+        reason: String,
+        session: Option<String>,
+    },
     /// Where the run's harness executes: the isolation level and what it
     /// was given (image, mounts, egress mode). Written by the worker before
     /// the harness starts.
@@ -235,6 +257,7 @@ impl Payload {
                 | Payload::ApprovalDecided { .. }
                 | Payload::CancelRequested { .. }
                 | Payload::InterruptRequested { .. }
+                | Payload::TakeoverRequested { .. }
                 | Payload::MailSent { .. }
         )
     }

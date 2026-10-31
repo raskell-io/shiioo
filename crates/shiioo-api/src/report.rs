@@ -35,7 +35,10 @@ impl<S: EventStore + 'static> ApiState<S> {
                 RunStatus::Completed { .. } => finished.push(*run),
                 RunStatus::Failed { .. } | RunStatus::Cancelled { .. } => failed.push(*run),
                 RunStatus::NeedsAttention { .. } => attention.push(*run),
-                RunStatus::Open | RunStatus::WaitingApproval { .. } | RunStatus::Parked { .. } => {}
+                RunStatus::Open
+                | RunStatus::WaitingApproval { .. }
+                | RunStatus::Parked { .. }
+                | RunStatus::TakenOver { .. } => {}
             }
         }
         let waiting: Vec<&RunView> = runs

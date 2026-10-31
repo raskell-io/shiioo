@@ -130,45 +130,78 @@ pub fn command(
     resume: Option<&str>,
     hooks: Option<(&HookEndpoint, &str)>,
 ) -> Command {
-    let (model, system, tools, max_turns) = (
-        agent.model.as_str(),
-        agent.system.as_str(),
-        agent.tools.as_slice(),
-        agent.max_turns,
-    );
     let mut cmd = Command::new(binary);
     cmd.args(&spec.binary_args);
     // The prompt goes right after --print: later options take variable
     // numbers of values and would swallow a trailing positional.
-    let permission_mode = if hooks.is_some() {
-        "default"
-    } else {
-        spec.permission_mode.as_str()
-    };
     cmd.current_dir(cwd)
         .arg("--print")
         .arg(prompt)
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
-        .arg("--permission-mode")
-        .arg(permission_mode)
-        .arg("--setting-sources")
-        .arg(&spec.setting_sources)
         .arg("--max-turns")
-        .arg(max_turns.to_string());
-    if !model.is_empty() {
-        cmd.arg("--model").arg(model);
-    }
-    if !system.is_empty() {
-        cmd.arg("--append-system-prompt").arg(system);
-    }
-    if !tools.is_empty() {
-        cmd.arg("--allowedTools");
-        cmd.args(tools);
-    }
+        .arg(agent.max_turns.to_string());
     if let Some(budget) = spec.max_budget_usd {
         cmd.arg("--max-budget-usd").arg(budget.to_string());
+    }
+    shared(&mut cmd, spec, agent, resume, hooks);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    cmd
+}
+
+/// The same harness with its own terminal UI, for a takeover: the same
+/// model, instructions, tools, permission mode, hooks and environment as
+/// the headless command, resuming `resume` (or starting with `prompt`).
+/// Its stdio is the takeover's terminal, set by whoever spawns it.
+pub fn interactive_command(
+    binary: &Path,
+    spec: &HarnessSpec,
+    agent: &AgentSpec,
+    cwd: &Path,
+    resume: Option<&str>,
+    prompt: Option<&str>,
+    hooks: Option<(&HookEndpoint, &str)>,
+) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.args(&spec.binary_args);
+    cmd.current_dir(cwd);
+    // A positional prompt must come first, as with --print.
+    if let (None, Some(prompt)) = (resume, prompt) {
+        cmd.arg(prompt);
+    }
+    shared(&mut cmd, spec, agent, resume, hooks);
+    cmd.kill_on_drop(true);
+    cmd
+}
+
+/// What headless and interactive runs share: permission mode, settings,
+/// model, instructions, tools, the session to resume, the hook and the
+/// environment.
+fn shared(
+    cmd: &mut Command,
+    spec: &HarnessSpec,
+    agent: &AgentSpec,
+    resume: Option<&str>,
+    hooks: Option<(&HookEndpoint, &str)>,
+) {
+    let permission_mode = if hooks.is_some() {
+        "default"
+    } else {
+        spec.permission_mode.as_str()
+    };
+    cmd.arg("--permission-mode")
+        .arg(permission_mode)
+        .arg("--setting-sources")
+        .arg(&spec.setting_sources);
+    if !agent.model.is_empty() {
+        cmd.arg("--model").arg(&agent.model);
+    }
+    if !agent.system.is_empty() {
+        cmd.arg("--append-system-prompt").arg(&agent.system);
     }
     if let Some(session) = resume {
         cmd.arg("--resume")
@@ -182,6 +215,11 @@ pub fn command(
             .env("SHIIOO_API_TOKEN", &endpoint.token)
             .env("SHIIOO_RUN_ID", run_id);
     }
+    // Last: it takes any number of values.
+    if !agent.tools.is_empty() {
+        cmd.arg("--allowedTools");
+        cmd.args(&agent.tools);
+    }
     // A Claude Code started from inside another one (as Shiioo itself may
     // be) must not inherit the parent session's identity.
     for key in SESSION_ENV {
@@ -191,11 +229,6 @@ pub fn command(
         cmd.env_remove("ANTHROPIC_API_KEY");
         cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    cmd
 }
 
 /// The binary to run: the spec's, else `SHIIOO_CLAUDE_BIN`, else `claude`

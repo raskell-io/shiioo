@@ -51,6 +51,7 @@ pub mod report;
 pub mod roles;
 pub mod routines;
 pub mod schedule;
+pub mod takeover;
 
 pub use artifacts::Artifact;
 use axum::extract::{Path, Query, Request, State};
@@ -157,6 +158,12 @@ pub struct ApiOptions {
     pub worktrees: Option<PathBuf>,
     /// Sends mail for `POST /v1/mail/send`. None: the office has no mail.
     pub mail: Option<Arc<dyn MailSender>>,
+    /// Where the harnesses keep their session files, for importing what
+    /// happened during a takeover. None = `HOME` and the harnesses' own
+    /// environment variables.
+    pub harness_homes: Option<shiioo_runtime::harness::transcript::Homes>,
+    /// How long a takeover nobody is attached to keeps its terminal (D6).
+    pub takeover_detach: std::time::Duration,
 }
 
 impl Default for ApiOptions {
@@ -177,6 +184,8 @@ impl Default for ApiOptions {
             intake_label: "shiioo".into(),
             worktrees: None,
             mail: None,
+            harness_homes: None,
+            takeover_detach: std::time::Duration::from_secs(30 * 60),
         }
     }
 }
@@ -348,6 +357,8 @@ pub struct ApiState<S> {
     /// Woken when a run addressed to a machine appears, so long-polling
     /// nodes hear about it at once.
     work_notify: tokio::sync::Notify,
+    /// Runs the owner has taken over in this process.
+    takeovers: takeover::Takeovers,
 }
 
 /// A run as the API and the bot present it.
@@ -511,6 +522,7 @@ impl<S: EventStore + 'static> ApiState<S> {
             started_at: routines::now_ms(),
             machines: Mutex::new(machines),
             work_notify: tokio::sync::Notify::new(),
+            takeovers: takeover::Takeovers::default(),
         })
     }
 
@@ -805,11 +817,12 @@ impl<S: EventStore + 'static> ApiState<S> {
             | RunStatus::NeedsAttention { reason } => PlanStatus::Failed {
                 reason: reason.clone(),
             },
-            RunStatus::Open | RunStatus::WaitingApproval { .. } | RunStatus::Parked { .. } => {
-                PlanStatus::Failed {
+            RunStatus::Open
+            | RunStatus::WaitingApproval { .. }
+            | RunStatus::Parked { .. }
+            | RunStatus::TakenOver { .. } => PlanStatus::Failed {
                     reason: "the planning run stopped without finishing".into(),
-                }
-            }
+                },
         };
         let text = plans::plan_text(plan);
         self.save_plans(&plans);
@@ -1405,6 +1418,11 @@ impl<S: EventStore + 'static> ApiState<S> {
         if text.is_empty() {
             return Err(ApiError::BadRequest("the message is empty".into()));
         }
+        if self.takeovers.is_live(run_id) {
+            return Err(ApiError::Conflict(
+                "you're at the keyboard: type into the terminal, or hand back first".into(),
+            ));
+        }
         let mut keys = self.message_keys.lock().await;
         if let Some(ack) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
             return Ok((*ack, false));
@@ -1699,6 +1717,10 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// or fails, then tells the owner. A lost lease is retried a few times:
     /// on one machine that means the lease expired (the laptop slept).
     fn spawn_drive(self: &Arc<Self>, run_id: RunId) {
+        // The owner is at the keyboard; the takeover holds the run.
+        if self.takeovers.is_live(run_id) {
+            return;
+        }
         if !lock(&self.active).insert(run_id) {
             return;
         }
@@ -1742,6 +1764,12 @@ impl<S: EventStore + 'static> ApiState<S> {
         let Ok(view) = self.run_view(run_id).await else {
             return;
         };
+        // Stopped for a takeover: the owner is the one who asked.
+        if matches!(&view.status, RunStatus::TakenOver { .. })
+            || matches!(&view.status, RunStatus::Parked { waiting_for } if waiting_for == "takeover")
+        {
+            return;
+        }
         // A finished planning run becomes a plan; the owner hears about
         // the plan, not about the run.
         let plan = self.plan_finished(run_id, &view.status);
@@ -1785,7 +1813,7 @@ fn now_ms() -> Timestamp {
 }
 
 /// The run's spec, from its first event.
-fn run_spec(log: &[Event]) -> Option<RunSpec> {
+pub(crate) fn run_spec(log: &[Event]) -> Option<RunSpec> {
     match log.first().map(|e| &*e.payload) {
         Some(Payload::RunCreated { spec }) => serde_json::from_value(spec.clone()).ok(),
         _ => None,
@@ -1920,6 +1948,12 @@ pub fn describe(ev: &Event) -> String {
         Payload::ApprovalDecided { decision, by, .. } => format!("{decision} by {by}"),
         Payload::CancelRequested { by, reason } => format!("cancel requested by {by}: {reason}"),
         Payload::InterruptRequested { by } => format!("interrupt requested by {by}"),
+        Payload::TakeoverRequested { by } => format!("takeover requested by {by}"),
+        Payload::TakeoverStarted { by } => format!("{by} took over at the keyboard"),
+        Payload::TakeoverEnded { reason, session } => match session {
+            Some(s) => format!("takeover ended ({reason}), session {s}"),
+            None => format!("takeover ended ({reason})"),
+        },
         Payload::SandboxStarted { level, detail } => {
             let mut parts = Vec::new();
             if let Some(c) = detail["container"].as_str() {
@@ -1974,6 +2008,8 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
         .route("/v1/runs/{id}/messages", post(post_message::<S>))
         .route("/v1/runs/{id}/follow-up", post(post_follow_up::<S>))
+        .route("/v1/runs/{id}/takeover", post(takeover::post_takeover::<S>))
+        .route("/v1/runs/{id}/hand-back", post(takeover::post_hand_back::<S>))
         .route("/v1/runs/{id}/lease", post(acquire_lease::<S>))
         .route("/v1/runs/{id}/lease/renew", post(renew_lease::<S>))
         .route("/v1/machines", get(machines_list::<S>))
@@ -2015,6 +2051,11 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
             get(|| async { Json(json!({ "status": "ok" })) }),
         )
         .route("/v1/machines/enroll", post(enroll_machine::<S>))
+        // The ticket from `POST …/takeover` is this route's credential.
+        .route(
+            "/v1/runs/{id}/terminal",
+            get(takeover::terminal_socket::<S>),
+        )
         .route("/", get(ui_index))
         .route("/ui", get(ui_index))
         .route("/ui/{*path}", get(ui_file))
@@ -2050,6 +2091,11 @@ pub const UI_FILES: &[(&str, &str)] = &[
     ("views/run.js", include_str!("../ui/views/run.js")),
     ("views/runs.js", include_str!("../ui/views/runs.js")),
     ("views/side.js", include_str!("../ui/views/side.js")),
+    ("views/terminal.js", include_str!("../ui/views/terminal.js")),
+    ("vendor/xterm-addon-fit.mjs", include_str!("../ui/vendor/xterm-addon-fit.mjs")),
+    ("vendor/xterm-addon-webgl.mjs", include_str!("../ui/vendor/xterm-addon-webgl.mjs")),
+    ("vendor/xterm.css", include_str!("../ui/vendor/xterm.css")),
+    ("vendor/xterm.mjs", include_str!("../ui/vendor/xterm.mjs")),
 ];
 
 /// The dashboard's fonts (`ui/fonts/`, Latin subsets of the brand fonts
@@ -2062,6 +2108,10 @@ pub const UI_FONTS: &[(&str, &[u8])] = &[
     (
         "fonts/bricolage.woff2",
         include_bytes!("../ui/fonts/bricolage.woff2"),
+    ),
+    (
+        "fonts/jetbrains-mono.woff2",
+        include_bytes!("../ui/fonts/jetbrains-mono.woff2"),
     ),
 ];
 
@@ -2080,7 +2130,7 @@ async fn ui_file(Path(path): Path<String>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let content_type = match path.rsplit('.').next() {
-        Some("js") => "text/javascript; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         _ => "application/octet-stream",
     };
@@ -2918,13 +2968,13 @@ impl<S: EventStore> OfficeFeed<S> {
     }
 }
 
-fn parse_run(id: &str) -> Result<RunId, ApiError> {
+pub(crate) fn parse_run(id: &str) -> Result<RunId, ApiError> {
     uuid::Uuid::parse_str(id)
         .map(RunId)
         .map_err(|_| ApiError::BadRequest(format!("not a run id: {id}")))
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 

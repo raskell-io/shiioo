@@ -47,6 +47,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 clap = { version = "4", features = ["derive", "env"] }
 axum = "0.8"
+pty-process = { version = "0.5", features = ["async"] }
 futures-util = "0.3"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "migrate", "macros"] }
 redb = "4"

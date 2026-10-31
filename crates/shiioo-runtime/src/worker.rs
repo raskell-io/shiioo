@@ -1,5 +1,7 @@
 use crate::context;
 use crate::harness::claude_code::HookEndpoint;
+use crate::harness::terminal::Terminal;
+use crate::harness::transcript::{Homes, Snapshot};
 use crate::harness::{self, HarnessDriver, HarnessError, HarnessProcess};
 use crate::machine::{CallStatus, Invocation, LocalMachine, MachineError};
 use crate::model::{
@@ -9,7 +11,9 @@ use crate::redact::Redactor;
 use crate::sandbox::{Sandbox, SandboxContext};
 use crate::secrets::{self, NoSecrets, SecretSource};
 use crate::spec::{HarnessSpec, RunSpec, Runtime};
-use crate::status::{as_text, parked, unresolved_unknown, wake_reason};
+use crate::status::{
+    as_text, parked, taken_over, takeover_pending, unresolved_unknown, wake_reason,
+};
 use crate::tools::ToolOutput;
 use crate::workspace::{self, WorktreeError};
 use serde_json::{Value, json};
@@ -202,6 +206,65 @@ impl<S: EventStore + 'static> Worker<S> {
         }
     }
 
+    /// Puts the owner at the keyboard: waits for the run's lease (a worker
+    /// driving it parks when it sees `TakeoverRequested`), starts the
+    /// harness's own terminal UI resumed from the run's session, with the
+    /// same hooks and environment as a headless process, and holds the
+    /// lease until `control.end` says why it is over or the harness exits.
+    /// Then the session file's new lines are imported as events, and the
+    /// run is parked for the owner's next message.
+    pub async fn take_over(
+        &self,
+        run_id: RunId,
+        by: &str,
+        control: TakeoverControl,
+    ) -> Result<RunOutcome, WorkerError> {
+        let deadline = tokio::time::Instant::now() + TAKEOVER_WAIT;
+        // Its own identity: a holder may take its lease again, and the
+        // worker driving the run (same process, same id) must park first.
+        let holder = WorkerId(format!("{}/takeover", self.id.0));
+        let lease = loop {
+            match self
+                .store
+                .acquire_lease(run_id, holder.clone(), self.ttl_ms)
+                .await
+            {
+                Ok(lease) => break lease,
+                Err(StoreError::LeaseHeld { .. }) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                Err(StoreError::LeaseHeld { .. }) => {
+                    return Err(WorkerError::Spec(
+                        "the run's worker did not let go of it; try again".into(),
+                    ));
+                }
+                Err(StoreError::RunClosed(_)) => {
+                    return Err(WorkerError::Spec("the run has already finished".into()));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+        let log = self.store.read(run_id, Seq(0)).await?;
+        let spec = parse_spec(&log)?;
+        let lease = Arc::new(Mutex::new(lease));
+        let (_heartbeat, lease_lost) =
+            Heartbeat::start(Arc::clone(&self.store), Arc::clone(&lease), self.ttl_ms);
+        let mut session = Session {
+            worker: self,
+            run_id,
+            lease,
+            lease_lost,
+            log,
+            spec,
+        };
+        match session.take_over(by, control).await {
+            Err(WorkerError::Store(StoreError::Fenced { .. } | StoreError::LeaseExpired(_))) => {
+                Ok(RunOutcome::LostLease)
+            }
+            other => other,
+        }
+    }
+
     async fn closed_outcome(&self, run_id: RunId) -> Result<RunOutcome, WorkerError> {
         let log = self.store.read(run_id, Seq(0)).await?;
         Ok(match log.last().map(|e| &*e.payload) {
@@ -212,6 +275,25 @@ impl<S: EventStore + 'static> Worker<S> {
         })
     }
 }
+
+/// How a takeover is steered from outside (the API).
+pub struct TakeoverControl {
+    /// Gets the terminal once the harness runs.
+    pub ready: tokio::sync::oneshot::Sender<Arc<Terminal>>,
+    /// Becomes `Some(reason)` when the takeover should end: `handed_back`,
+    /// `detached`.
+    pub end: watch::Receiver<Option<String>>,
+    /// The terminal's first size, columns × rows.
+    pub size: (u16, u16),
+    /// Where the harnesses keep their session files.
+    pub homes: Homes,
+}
+
+/// How long a takeover waits for a worker to stop and let go of the run.
+const TAKEOVER_WAIT: Duration = Duration::from_secs(30);
+
+/// How long an ended takeover's harness gets to save its session.
+const TAKEOVER_STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// Renews the lease every `ttl / 3` in the background while the worker is
 /// busy (model calls can outlast a lease). Stops on drop, and on the first
@@ -268,6 +350,13 @@ struct Session<'w, S> {
 /// without finishing, before the run is failed.
 const MAX_HARNESS_STARTS: usize = 5;
 
+/// A harness's workspace, ready for a process (`Session::prepare`).
+struct Prepared {
+    spec: HarnessSpec,
+    cwd: std::path::PathBuf,
+    sandbox: Sandbox,
+}
+
 /// How often a harness run looks for a cancellation while its process
 /// prints nothing (a long build, a hung command).
 const CANCEL_POLL: Duration = Duration::from_secs(2);
@@ -296,6 +385,15 @@ impl<S: EventStore + 'static> Session<'_, S> {
                     ));
                 }
             }
+        }
+        // A takeover that never ended: the office stopped while the owner
+        // was at the keyboard. Its process is gone; the run waits for them.
+        if taken_over(&self.log).is_some() {
+            return self.end_stale_takeover().await;
+        }
+        // The owner wants the keyboard: give way before starting anything.
+        if takeover_pending(&self.log) {
+            return self.park_for_takeover().await;
         }
         if let Runtime::Harness(spec) = self.spec.runtime.clone() {
             // A message the harness has not seen when it finishes is
@@ -433,51 +531,6 @@ impl<S: EventStore + 'static> Session<'_, S> {
     /// own tools; Shiioo records what it sees. A session that was started
     /// by a previous worker is resumed rather than started again.
     async fn run_harness(&mut self, spec: &HarnessSpec) -> Result<Option<RunOutcome>, WorkerError> {
-        // The repository as this machine has it: by label when the spec
-        // names one this machine knows, else by the spec's path.
-        let repo = match (&spec.repo_label, &spec.repo) {
-            (Some(label), _) if self.worker.repos.contains_key(label) => {
-                self.worker.repos.get(label).cloned()
-            }
-            (_, Some(path)) if path.join(".git").exists() => Some(path.clone()),
-            (label, Some(path)) => {
-                return self
-                    .fail(format!(
-                        "repository {} is not available on this machine ({} does not exist; \
-                         add it to [repos] here)",
-                        label.as_deref().unwrap_or("?"),
-                        path.display()
-                    ))
-                    .await
-                    .map(Some);
-            }
-            (_, None) => None,
-        };
-        let spec = &HarnessSpec {
-            repo: repo.clone(),
-            ..spec.clone()
-        };
-        // A follow-up works in the worktree, branch and sandbox state of
-        // the run it continues.
-        let workspace_run = self.spec.workspace_run(self.run_id);
-        let cwd = match &repo {
-            Some(repo) => {
-                let root = self.worker.machine.worktrees_root().ok_or_else(|| {
-                    WorkerError::Spec("this machine has no worktree directory for repo runs".into())
-                })?;
-                workspace::ensure(root, repo, workspace_run).await?.path
-            }
-            None => self.worker.machine.workspace().to_path_buf(),
-        };
-        let own_session = self.log.iter().rev().find_map(|e| match &*e.payload {
-            Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
-            _ => None,
-        });
-        // A follow-up's first process resumes the session it continues,
-        // with the follow-up's task as the prompt.
-        let resumed = own_session.is_some();
-        let session =
-            own_session.or_else(|| self.spec.origin.as_ref().and_then(|o| o.session.clone()));
         // Starts since the session last finished cleanly: resumes after a
         // crash, not deliveries of the owner's messages.
         let unfinished = unfinished_starts(&self.log);
@@ -489,32 +542,17 @@ impl<S: EventStore + 'static> Session<'_, S> {
                 .await
                 .map(Some);
         }
-        // The harness's environment: secrets are resolved here and only
-        // here; a reference nobody can resolve is the owner's to fix.
-        let env = match secrets::resolve_env(&spec.env, &*self.worker.secrets) {
-            Ok(env) => env,
+        let Prepared { spec, cwd, sandbox } = match self.prepare(spec).await? {
+            Ok(prepared) => prepared,
             Err(reason) => return self.fail(reason).await.map(Some),
         };
-        let ctx = SandboxContext {
-            run_id: workspace_run,
-            harness: spec.harness,
-            cwd: &cwd,
-            repo: spec.repo.as_deref(),
-            sandboxes_root: self.worker.machine.sandboxes_root(),
-            hooks: self.worker.hooks.as_ref(),
-            env: &env,
-            secrets: &*self.worker.secrets,
-            binary_override: spec.binary.as_deref(),
-        };
-        let sandbox = match Sandbox::prepare(&spec.isolation, &ctx).await {
-            Ok(sandbox) => sandbox,
-            Err(e) => {
-                return self
-                    .fail(format!("{} isolation: {e}", spec.isolation.level()))
-                    .await
-                    .map(Some);
-            }
-        };
+        let spec = &spec;
+        let own_session = last_session(&self.log);
+        // A follow-up's first process resumes the session it continues,
+        // with the follow-up's task as the prompt.
+        let resumed = own_session.is_some();
+        let session =
+            own_session.or_else(|| self.spec.origin.as_ref().and_then(|o| o.session.clone()));
         // Where the harness runs is on the record before it starts. This
         // event also marks what the process is told: messages before it
         // go into its prompt, messages after it are unread.
@@ -532,13 +570,7 @@ impl<S: EventStore + 'static> Session<'_, S> {
             hooks.as_ref().map(|h| (h, run_id.as_str())),
         );
         let cmd = sandbox.wrap(cmd);
-        // Everything the harness could print that must not be recorded:
-        // the office's secrets and the API token it was handed.
-        let mut redactable = self.worker.secrets.all();
-        if let Some(h) = &hooks {
-            redactable.push(("shiioo-api-token".into(), h.token.clone()));
-        }
-        let redactor = Redactor::new(redactable);
+        let redactor = self.redactor(hooks.as_ref());
         // The time budget counts from the run's first event, so resumes
         // share it. A far-future deadline stands in for "no limit".
         let deadline = match spec.max_minutes {
@@ -559,6 +591,81 @@ impl<S: EventStore + 'static> Session<'_, S> {
             .await;
         sandbox.teardown().await;
         result
+    }
+
+    /// The run's workspace for a harness: its repository as this machine
+    /// has it, the worktree (a follow-up's is the run it continues), the
+    /// environment with secrets resolved, and the sandbox. `Err(reason)`
+    /// is the owner's to fix (a missing repository, an unresolvable secret).
+    async fn prepare(
+        &mut self,
+        spec: &HarnessSpec,
+    ) -> Result<Result<Prepared, String>, WorkerError> {
+        // The repository as this machine has it: by label when the spec
+        // names one this machine knows, else by the spec's path.
+        let repo = match (&spec.repo_label, &spec.repo) {
+            (Some(label), _) if self.worker.repos.contains_key(label) => {
+                self.worker.repos.get(label).cloned()
+            }
+            (_, Some(path)) if path.join(".git").exists() => Some(path.clone()),
+            (label, Some(path)) => {
+                return Ok(Err(format!(
+                    "repository {} is not available on this machine ({} does not exist; \
+                     add it to [repos] here)",
+                    label.as_deref().unwrap_or("?"),
+                    path.display()
+                )));
+            }
+            (_, None) => None,
+        };
+        let spec = HarnessSpec {
+            repo: repo.clone(),
+            ..spec.clone()
+        };
+        // A follow-up works in the worktree, branch and sandbox state of
+        // the run it continues.
+        let workspace_run = self.spec.workspace_run(self.run_id);
+        let cwd = match &repo {
+            Some(repo) => {
+                let root = self.worker.machine.worktrees_root().ok_or_else(|| {
+                    WorkerError::Spec("this machine has no worktree directory for repo runs".into())
+                })?;
+                workspace::ensure(root, repo, workspace_run).await?.path
+            }
+            None => self.worker.machine.workspace().to_path_buf(),
+        };
+        // The harness's environment: secrets are resolved here and only
+        // here; a reference nobody can resolve is the owner's to fix.
+        let env = match secrets::resolve_env(&spec.env, &*self.worker.secrets) {
+            Ok(env) => env,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        let ctx = SandboxContext {
+            run_id: workspace_run,
+            harness: spec.harness,
+            cwd: &cwd,
+            repo: spec.repo.as_deref(),
+            sandboxes_root: self.worker.machine.sandboxes_root(),
+            hooks: self.worker.hooks.as_ref(),
+            env: &env,
+            secrets: &*self.worker.secrets,
+            binary_override: spec.binary.as_deref(),
+        };
+        let sandbox = match Sandbox::prepare(&spec.isolation, &ctx).await {
+            Ok(sandbox) => sandbox,
+            Err(e) => return Ok(Err(format!("{} isolation: {e}", spec.isolation.level()))),
+        };
+        Ok(Ok(Prepared { spec, cwd, sandbox }))
+    }
+
+    /// Everything the harness could print that must not be recorded: the
+    /// office's secrets and the API token it was handed.
+    fn redactor(&self, hooks: Option<&HookEndpoint>) -> Redactor {
+        let mut redactable = self.worker.secrets.all();
+        if let Some(h) = hooks {
+            redactable.push(("shiioo-api-token".into(), h.token.clone()));
+        }
+        Redactor::new(redactable)
     }
 
     /// Runs the harness process and records its output until it ends.
@@ -592,6 +699,10 @@ impl<S: EventStore + 'static> Session<'_, S> {
                     if interrupt_requested(&self.log) {
                         process.interrupt(INTERRUPT_GRACE).await;
                         return Ok(None);
+                    }
+                    if takeover_pending(&self.log) {
+                        process.interrupt(INTERRUPT_GRACE).await;
+                        return self.park_for_takeover().await.map(Some);
                     }
                     continue;
                 }
@@ -660,6 +771,10 @@ impl<S: EventStore + 'static> Session<'_, S> {
             if interrupt_requested(&self.log) {
                 process.interrupt(INTERRUPT_GRACE).await;
                 return Ok(None);
+            }
+            if takeover_pending(&self.log) {
+                process.interrupt(INTERRUPT_GRACE).await;
+                return self.park_for_takeover().await.map(Some);
             }
         }
         // Output ended without a result: the process died or was killed.
@@ -879,6 +994,196 @@ impl<S: EventStore + 'static> Session<'_, S> {
         self.log.extend(events);
     }
 
+    /// The takeover itself, holding the lease (`Worker::take_over`).
+    async fn take_over(
+        &mut self,
+        by: &str,
+        control: TakeoverControl,
+    ) -> Result<RunOutcome, WorkerError> {
+        let TakeoverControl {
+            ready,
+            mut end,
+            size,
+            homes,
+        } = control;
+        let refuse = |reason: &str| Err(WorkerError::Spec(reason.to_owned()));
+        if self.log.last().is_some_and(|e| e.payload.is_terminal()) {
+            return refuse("the run has already finished");
+        }
+        let Runtime::Harness(spec) = self.spec.runtime.clone() else {
+            return self
+                .give_up_takeover("only Claude Code and Codex runs can be taken over")
+                .await;
+        };
+        if spec.isolation.level() != "worktree" {
+            return self
+                .give_up_takeover("taking over a run in a container or sandbox is not built yet")
+                .await;
+        }
+        let mut start = Vec::new();
+        // One the office never ended (it was restarted) is over now.
+        if taken_over(&self.log).is_some() {
+            start.push(Payload::TakeoverEnded {
+                reason: "office_restarted".into(),
+                session: None,
+            });
+        }
+        if parked(&self.log).is_some() {
+            start.push(Payload::RunWoken {
+                reason: "takeover".into(),
+            });
+        }
+        start.push(Payload::TakeoverStarted { by: by.to_owned() });
+        self.append(start).await?;
+
+        let Prepared { spec, cwd, sandbox } = match self.prepare(&spec).await? {
+            Ok(prepared) => prepared,
+            Err(reason) => {
+                self.end_takeover(&format!("failed: {reason}"), None)
+                    .await?;
+                return refuse(&reason);
+            }
+        };
+        let session = last_session(&self.log)
+            .or_else(|| self.spec.origin.as_ref().and_then(|o| o.session.clone()));
+        // A run whose harness never got going starts at the keyboard with
+        // its task.
+        let prompt = session.is_none().then(|| self.spec.task.clone());
+        let hooks = sandbox.hooks();
+        let run_id = self.run_id.to_string();
+        let cmd = harness::interactive_command(
+            &spec,
+            &self.spec.agent,
+            &cwd,
+            session.as_deref(),
+            prompt.as_deref(),
+            hooks.as_ref().map(|h| (h, run_id.as_str())),
+        );
+        let cmd = sandbox.wrap(cmd);
+        let snapshot = Snapshot::take(spec.harness, homes, &cwd, session.as_deref());
+        let terminal = match Terminal::spawn(cmd, size.0, size.1) {
+            Ok(terminal) => terminal,
+            Err(e) => {
+                sandbox.teardown().await;
+                let reason = format!("starting the harness: {e}");
+                self.end_takeover(&format!("failed: {reason}"), None)
+                    .await?;
+                return refuse(&reason);
+            }
+        };
+        ready.send(Arc::clone(&terminal)).ok();
+
+        let mut exited = terminal.exited();
+        let mut lost = self.lease_lost.clone();
+        let mut poll = tokio::time::interval(CANCEL_POLL);
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let reason = loop {
+            // Owned values out of the watches: their guards can't be held
+            // across an await.
+            let ended = async {
+                end.wait_for(Option::is_some)
+                    .await
+                    .ok()
+                    .and_then(|r| r.clone())
+            };
+            let quit = async { exited.wait_for(|e| *e).await.is_ok() };
+            tokio::select! {
+                r = ended => break r.unwrap_or_else(|| "handed_back".into()),
+                true = quit => break "exited".to_owned(),
+                _ = lost.changed() => {
+                    terminal.stop(TAKEOVER_STOP_GRACE).await;
+                    sandbox.teardown().await;
+                    return Ok(RunOutcome::LostLease);
+                }
+                _ = poll.tick() => {
+                    self.catch_up().await?;
+                    if cancel_requested(&self.log).is_some() {
+                        break "cancelled".to_owned();
+                    }
+                }
+            }
+        };
+        terminal.stop(TAKEOVER_STOP_GRACE).await;
+        sandbox.teardown().await;
+
+        // On the record: what was said and done at the keyboard, from the
+        // harness's own session file, redacted like any harness output.
+        let imported = snapshot.import();
+        let redactor = self.redactor(hooks.as_ref());
+        let payloads = redactor.redact_payloads(imported.payloads);
+        if !payloads.is_empty() {
+            self.append(payloads).await?;
+        }
+        let session = imported.session.or(session);
+        if reason == "cancelled" {
+            self.append(vec![Payload::TakeoverEnded {
+                reason: reason.clone(),
+                session,
+            }])
+            .await?;
+            if let Some(outcome) = self.cancel_if_requested().await? {
+                return Ok(outcome);
+            }
+            return Ok(RunOutcome::Cancelled(reason));
+        }
+        self.end_takeover(&reason, session).await?;
+        Ok(RunOutcome::Parked("input".into()))
+    }
+
+    /// `TakeoverEnded` and park: the run waits for the owner's next word.
+    async fn end_takeover(
+        &mut self,
+        reason: &str,
+        session: Option<String>,
+    ) -> Result<(), WorkerError> {
+        self.append(vec![
+            Payload::TakeoverEnded {
+                reason: reason.to_owned(),
+                session,
+            },
+            Payload::RunParked {
+                waiting_for: "input".into(),
+                wake_at: None,
+            },
+        ])
+        .await
+    }
+
+    /// A takeover that can't start: answers the request (so no worker
+    /// waits for it) and leaves the run parked.
+    async fn give_up_takeover(&mut self, reason: &str) -> Result<RunOutcome, WorkerError> {
+        self.end_takeover(&format!("failed: {reason}"), None)
+            .await?;
+        Err(WorkerError::Spec(reason.to_owned()))
+    }
+
+    /// Parks the run so a takeover can take its lease.
+    async fn park_for_takeover(&mut self) -> Result<RunOutcome, WorkerError> {
+        self.append(vec![Payload::RunParked {
+            waiting_for: "takeover".into(),
+            wake_at: None,
+        }])
+        .await?;
+        Ok(RunOutcome::Parked("takeover".into()))
+    }
+
+    /// Closes a takeover whose office went away mid-way and leaves the run
+    /// parked for the owner; nothing runs headless on its own.
+    async fn end_stale_takeover(&mut self) -> Result<RunOutcome, WorkerError> {
+        self.append(vec![
+            Payload::TakeoverEnded {
+                reason: "office_restarted".into(),
+                session: None,
+            },
+            Payload::RunParked {
+                waiting_for: "input".into(),
+                wake_at: None,
+            },
+        ])
+        .await?;
+        Ok(RunOutcome::Parked("input".into()))
+    }
+
     /// If the owner asked for cancellation, closes the run with
     /// `RunCancelled` and reports it.
     async fn cancel_if_requested(&mut self) -> Result<Option<RunOutcome>, WorkerError> {
@@ -1004,6 +1309,19 @@ fn harness_seen(log: &[Event]) -> usize {
         .map_or(0, |i| i + 1)
 }
 
+/// The harness session the run's next process resumes: the last one a
+/// process started or a takeover ended in.
+pub(crate) fn last_session(log: &[Event]) -> Option<String> {
+    log.iter().rev().find_map(|e| match &*e.payload {
+        Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
+        Payload::TakeoverEnded {
+            session: Some(session),
+            ..
+        } => Some(session.clone()),
+        _ => None,
+    })
+}
+
 /// What a harness process is told, given the log up to and including the
 /// `SandboxStarted` written for it: the task, the owner's messages since
 /// the previous process started, or, after a crash, a request to continue.
@@ -1034,6 +1352,13 @@ fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
         ),
         None => (0, log.len()),
     };
+    // After a takeover the session holds what was said at the keyboard;
+    // only what came after the hand back (the owner's note) is new.
+    let handed_back = log[from..to]
+        .iter()
+        .rposition(|e| matches!(*e.payload, Payload::TakeoverEnded { .. }))
+        .map(|i| from + i);
+    let from = handed_back.map_or(from, |i| i + 1);
     let messages: Vec<String> = log[from..to]
         .iter()
         .filter_map(|e| match &*e.payload {
@@ -1051,6 +1376,16 @@ fn harness_prompt(log: &[Event], task: &str, resumed: bool) -> String {
         .rev()
         .take_while(|e| !matches!(*e.payload, Payload::HarnessSessionStarted { .. }))
         .any(|e| matches!(*e.payload, Payload::HarnessResult { .. }));
+    if resumed && handed_back.is_some() {
+        return if messages.is_empty() {
+            harness::HANDED_BACK_PROMPT.to_owned()
+        } else {
+            format!(
+                "{} As they handed back, they wrote:\n\n{messages}",
+                harness::HANDED_BACK_PROMPT
+            )
+        };
+    }
     match (resumed, finished, messages.is_empty()) {
         (false, _, true) => task.to_owned(),
         (false, _, false) => format!("{task}\n\n{messages}"),
@@ -1074,7 +1409,9 @@ fn unfinished_starts(log: &[Event]) -> usize {
         .take_while(|e| {
             !matches!(
                 *e.payload,
-                Payload::HarnessResult { .. } | Payload::InterruptRequested { .. }
+                Payload::HarnessResult { .. }
+                    | Payload::InterruptRequested { .. }
+                    | Payload::TakeoverEnded { .. }
             )
         })
         .filter(|e| matches!(*e.payload, Payload::HarnessSessionStarted { .. }))

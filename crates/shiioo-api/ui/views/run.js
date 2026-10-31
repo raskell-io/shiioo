@@ -10,6 +10,7 @@ import { getRun, upsert, watch } from "../office.js";
 import { liveStream } from "../stream.js";
 import { renderDiff } from "./diff.js";
 import { createLog } from "./log.js";
+import { openTerminal } from "./terminal.js";
 
 /** Room the side panel needs beside the log; narrower, it slides over. */
 const INLINE_ASIDE = 1000;
@@ -24,6 +25,16 @@ export function createRunView(id) {
         <div class="actions"></div>
       </header>
       <div class="log-wrap"><div class="log" tabindex="0" aria-label="Log"></div><button class="jump" type="button">Jump to latest ↓</button></div>
+      <div class="term-wrap" hidden>
+        <div class="term-bar" role="status">
+          <span class="kb" aria-hidden="true">⌨</span>
+          <span class="term-text"></span>
+          <span class="grow"></span>
+          <form class="carry" hidden><input type="text" placeholder="A note for the agent (optional)" aria-label="Note for the agent"><button class="btn primary" type="submit">Hand back</button></form>
+          <span class="term-actions"></span>
+        </div>
+        <div class="term-box"></div>
+      </div>
     </div>
     <aside class="aside" hidden aria-label="Approval and diff">
       <div class="aside-h"><h2>Approval &amp; diff</h2>
@@ -47,6 +58,10 @@ export function createRunView(id) {
   let lastId = -1;
   let active = false;
   let saved = null; // the log's scroll while hidden: { top, follow }
+  let term = null;      // this view's terminal, while at the keyboard
+  let termState = null; // connecting | live | reconnecting | ended
+  let termText = "";
+  let handingBack = false;
   const events = [];
 
   // ---- log ------------------------------------------------------------
@@ -175,6 +190,7 @@ export function createRunView(id) {
     ].filter(Boolean);
     $(".crumbs").innerHTML = crumbs.join(`<span class="sep">·</span>`);
     renderActions(st);
+    renderTerminal(st);
     composer.update(st, harness);
     if (!raw) log.setStatus(view.status);
     renderAsk();
@@ -183,6 +199,91 @@ export function createRunView(id) {
     if (st === "waiting_approval" && active && !asideOpen && !asideTouched && root.clientWidth >= INLINE_ASIDE) setAside(true);
     if (asideOpen && diffStale) loadDiff();
   };
+
+  // ---- takeover --------------------------------------------------------
+  const termWrap = $(".term-wrap");
+  const carry = $(".carry");
+  /** Whether "Take over" makes sense: a Claude Code or Codex run that
+   * hasn't finished, on this machine, in a plain worktree. */
+  const canTakeOver = () => {
+    const st = view?.status.state;
+    return Boolean(view) && ["claude-code", "codex"].includes(harness || view.runtime) && !view.machine
+      && (!isolation || isolation === "worktree") && isOpen(st) && st !== "taken_over";
+  };
+  const takeOver = async () => {
+    if (term || !view) return;
+    termState = "connecting";
+    termText = "Starting the terminal…";
+    paint();
+    try {
+      term = await openTerminal($(".term-box"), id, {
+        onState: (state, text = "") => {
+          termState = state; termText = text;
+          if (state === "live") term?.focus();
+          if (state === "ended") {
+            const t = term;
+            setTimeout(() => { t?.dispose(); if (term === t) { term = null; termState = null; handingBack = false; paint(); } }, 1200);
+          }
+          paint();
+        },
+      });
+      if (termState === "ended") { term?.dispose(); term = null; }
+    } catch (e) { showError(e); termState = null; }
+    paint();
+  };
+  const handBack = async (resume, note) => {
+    if (handingBack) return;
+    handingBack = true;
+    paint();
+    try {
+      const v = await api(`/v1/runs/${id}/hand-back`, { method: "POST", body: JSON.stringify(resume ? { resume, note } : {}) });
+      upsert(v);
+      toast(resume ? "Handed back. It carries on" : "Handed back");
+    } catch (err) { showError(err); handingBack = false; paint(); }
+  };
+  carry.addEventListener("submit", (e) => { e.preventDefault(); handBack(true, carry.querySelector("input").value.trim()); });
+  carry.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); carry.hidden = true; term?.focus(); renderTerminal(view?.status.state); } });
+
+  const renderTerminal = (st) => {
+    const atKeyboard = Boolean(term) || termState === "connecting";
+    const elsewhere = st === "taken_over" && !atKeyboard;
+    const show = atKeyboard || elsewhere;
+    termWrap.hidden = !show;
+    $(".log-wrap").hidden = show && atKeyboard;
+    root.classList.toggle("at-keyboard", atKeyboard);
+    if (!show) { carry.hidden = true; return; }
+    const text = $(".term-text");
+    const actions = $(".term-actions");
+    const key = `${atKeyboard}|${elsewhere}|${termState}|${handingBack}|${carry.hidden}|${termText}`;
+    if (termWrap.dataset.key === key) return;
+    termWrap.dataset.key = key;
+    termWrap.classList.toggle("elsewhere", elsewhere);
+    if (elsewhere) {
+      text.innerHTML = `<b>Taken over</b> in another window or on another device. The rules still judge every command.`;
+      actions.innerHTML = "";
+      const join = el(`<button class="btn primary" type="button">Join the terminal</button>`);
+      join.addEventListener("click", takeOver);
+      actions.appendChild(join);
+      return;
+    }
+    const where = termState === "live" ? `<b>You're at the keyboard.</b> ${esc(who(harness || view?.runtime))} runs in its own terminal; the rules still judge every command.`
+      : termState === "ended" ? `<b>Takeover ended.</b> ${esc(endedText(termText))}`
+      : esc(termText || "Starting the terminal…");
+    text.innerHTML = where;
+    actions.innerHTML = "";
+    if (termState === "ended" || !carry.hidden) return;
+    const resume = el(`<button class="btn" type="button" title="Hand back and let it carry on, with an optional note"${handingBack ? " disabled" : ""}>Hand back, carry on</button>`);
+    resume.addEventListener("click", () => { carry.hidden = false; renderTerminal(view?.status.state); carry.querySelector("input").focus(); });
+    const back = el(`<button class="btn primary" type="button" title="Hand back and leave it waiting for your next message"${handingBack ? " disabled" : ""}>${handingBack ? "Handing back…" : "Hand back"}</button>`);
+    back.addEventListener("click", () => handBack(false));
+    actions.append(resume, back);
+  };
+  const endedText = (reason) => ({
+    ended: "The log below has what happened at the keyboard.",
+    handed_back: "The log below has what happened at the keyboard.",
+    exited: "The agent's terminal closed.",
+    detached: "Nobody was attached for too long.",
+  }[reason] || reason || "");
 
   const cancel = async () => {
     try { await api(`/v1/runs/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason: "from the desk" }) }); toast("Cancelling…"); return true; }
@@ -195,7 +296,7 @@ export function createRunView(id) {
 
   const renderActions = (st) => {
     const actions = $(".actions");
-    const key = `${st}|${raw}|${asideOpen}|${Boolean(view?.repo)}`;
+    const key = `${st}|${raw}|${asideOpen}|${Boolean(view?.repo)}|${canTakeOver()}|${Boolean(term)}`;
     if (actions.dataset.key === key) return;
     actions.dataset.key = key;
     actions.innerHTML = "";
@@ -215,6 +316,11 @@ export function createRunView(id) {
     if (st === "open") {
       const btn = el(`<button class="btn quiet" type="button" title="Start a worker on it if none is working">Resume</button>`);
       btn.addEventListener("click", async () => { btn.disabled = true; await resume(); btn.disabled = false; });
+      actions.appendChild(btn);
+    }
+    if (canTakeOver() && !term) {
+      const btn = el(`<button class="btn" type="button" title="Sit at the agent's own terminal; the rules still apply">Take over <kbd>T</kbd></button>`);
+      btn.addEventListener("click", takeOver);
       actions.appendChild(btn);
     }
     actions.appendChild(el(`<span class="grow"></span>`));
@@ -264,13 +370,16 @@ export function createRunView(id) {
     },
     destroy() {
       this.deactivate();
+      // The takeover goes on without this window (it ends itself if
+      // nobody joins for a while).
+      term?.dispose();
       stream.stop();
       clearTimeout(refreshTimer);
       unwatch();
       root.remove();
     },
     /** Where the keyboard goes when the pane is focused. */
-    focus() { logBox.focus({ preventScroll: true }); },
+    focus() { if (term) term.focus(); else logBox.focus({ preventScroll: true }); },
     focusReply() { return composer.focus(); },
     toggleAside() { asideTouched = true; setAside(!asideOpen); },
     /** Esc: closes the side panel; false when there was nothing to close. */
@@ -288,6 +397,11 @@ export function createRunView(id) {
     cancel,
     resume,
     toggleRaw,
+    canTakeOver,
+    takeOver,
+    /** This window shows the takeover's terminal. */
+    hasTerminal() { return Boolean(term); },
+    handBack,
   };
 }
 
@@ -356,6 +470,7 @@ function messageBox(id) {
     /** Puts the cursor in the box; false when the run takes no messages. */
     focus() { if (form.hidden) return false; text.focus(); return true; },
     update(state, harness) {
+      if (state === "taken_over") { form.hidden = true; return; }
       const accepts = ["open", "waiting_approval", "needs_attention", "parked"].includes(state);
       const name = harness === "codex" ? "Codex" : harness === "claude-code" ? "Claude Code" : null;
       const mode = !accepts && name !== null;

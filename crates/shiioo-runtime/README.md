@@ -34,7 +34,7 @@ shiioo-core  ──►  shiioo-runtime  ──►  shiioo-api  ──►  shiioo
 | Module | What it holds |
 | --- | --- |
 | `worker` | `Worker`, `RunOutcome`, `WorkerError`, `Faults`/`CrashPoint` (test crash injection). The loop itself. |
-| `harness` | `HarnessDriver` trait, `HarnessProcess`, `CONTINUE_PROMPT`, `driver_for`; submodules `claude_code` and `codex`. |
+| `harness` | `HarnessDriver` trait, `HarnessProcess`, `CONTINUE_PROMPT`, `INTERRUPTED_PROMPT`, `HANDED_BACK_PROMPT`, `driver_for`, `interactive_command`; submodules `claude_code` and `codex`, `terminal` (a harness under a pseudo-terminal, for takeovers) and `transcript` (importing a takeover from the harness's session file). |
 | `spec` | `RunSpec`, `AgentSpec`, `Runtime`, `HarnessSpec`, `HarnessKind`, `HarnessBilling`, `Origin`: the `spec` stored in `RunCreated` (`park_on_answer` for conversations, `origin` for follow-ups). |
 | `machine` | `LocalMachine`, `Invocation`, `CallStatus`, `MachineError`: executes tools behind a fenced journal. |
 | `tools` | `Tool`, `Toolbox`, `ToolOutput`; built-ins `read_file`, `write_file`, `shell`. |
@@ -128,6 +128,11 @@ cargo test -p shiioo-runtime
   (a shell script replaying the JSONL fixtures in `tests/fixtures/`) run
   through `/bin/sh` via `HarnessSpec.binary_args`; covers recording,
   kill-and-resume, dying harnesses and worktree creation.
+- `tests/takeover.rs`: a fake interactive harness under a real terminal
+  (keystrokes in, output out, the hook environment), its session file
+  imported at hand back; a working harness and a same-process worker give
+  way to a takeover; a takeover the office never ended is closed and the
+  run parked.
 - `tests/container.rs` (ignored by default, `-- --ignored`): the `container`
   level against a real Docker daemon, with a fake harness in `alpine:3` and
   in Shiioo's harness image behind the egress proxy.

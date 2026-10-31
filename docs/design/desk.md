@@ -1,6 +1,6 @@
 # The desk: the web UI, and working with an employee directly
 
-Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), **Now** (T14), follow-ups (T15), the message box (T16), and the desk's layout and keyboard: tabs and split panes (T4), the command palette and shortcuts (T5), tokens, fonts and the `#kit` page with AA contrast checked (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. ADR-0013 (the takeover terminal, T17) is proposed. Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
+Status: **partly built** (phase 8). Built: parked runs and messages (T11–T13), **Now** (T14), follow-ups (T15), the message box (T16), and the desk's layout and keyboard: tabs and split panes (T4), the command palette and shortcuts (T5), tokens, fonts and the `#kit` page with AA contrast checked (T28), the sidebar (T3), the structured log (T29) and the diff panel (T30), each marked in section 9. Taking over a run on the office machine (8d, T17–T24) is built and verified live with both harnesses, except the raw terminal stream as a blob (D4). Decisions marked **D1**…**D16** are open unless marked settled; the rest follows from the picture.
 
 Related: [api.md](api.md) (the endpoints the desk uses), [`shiioo-api/docs/dashboard.md`](../../crates/shiioo-api/docs/dashboard.md) (the dashboard as built), [conversation.md](conversation.md) (phase 7, which shares the parked-run work), [execution.md §1](execution.md#1-run-states-partly-built) (parked runs), [governance.md](governance.md) (rules and approvals), [runtimes-and-providers.md](runtimes-and-providers.md) (the harness drivers), [ADR-0004](../adr/0004-rest-and-sse-api.md) (REST and SSE).
 
@@ -147,15 +147,15 @@ Take over replaces the log pane with the harness's own terminal, a banner "you a
 | D1 | How the sidebar stays live | *Settled, built:* office-wide resumable SSE, `GET /v1/events/stream`, one `RunView` snapshot per change ([api.md §3.2](api.md#32-office-stream-built-for-runs-machines-planned)) |
 | D2 | When a message reaches a busy harness run | Next turn boundary by default; **Now** interrupts |
 | D3 | Follow-up on a finished run | A continuation run on the same branch and session, linked by `origin` |
-| D4 | Keep the raw terminal stream as well as the imported transcript | Yes, capped and redacted, as a blob |
-| D5 | Does `ask` become `allow` while the owner is at the keyboard | No |
-| D6 | How long a detached takeover waits before ending itself | 30 minutes, then hand back to parked |
+| D4 | Keep the raw terminal stream as well as the imported transcript | Yes, capped and redacted, as a blob, once blobs are built; until then the imported transcript is the record |
+| D5 | Does `ask` become `allow` while the owner is at the keyboard | *Settled, built:* no |
+| D6 | How long a detached takeover waits before ending itself | *Settled, built:* 30 minutes, then parked (`TakeoverEnded { reason: detached }`) |
 | D7 | Takeover on remote nodes | After the office machine, once the node transport streams |
-| D8 | Terminal transport | One WebSocket endpoint, recorded in an ADR amending 0004 |
-| D9 | Auth for a takeover | Office token plus a single-use attach ticket |
+| D8 | Terminal transport | *Settled, built:* one WebSocket endpoint, [ADR-0013](../adr/0013-a-websocket-for-the-takeover-terminal.md) |
+| D9 | Auth for a takeover | *Settled, built:* office token for `POST …/takeover`, which returns a single-use, 30-second ticket for the socket |
 | D10 | A build step for the UI | No; native ES modules, embedded per file |
 | D11 | Order with phase 7 (conversation) | Build the shared parked-run kernel once, in whichever phase comes first; 8a and 8b do not depend on it |
-| D12 | The monospace face for logs, diffs and the terminal | Bundle one OFL face (JetBrains Mono or Iosevka) next to Inter, so every machine renders the same |
+| D12 | The monospace face for logs, diffs and the terminal | *Settled:* JetBrains Mono (OFL), bundled next to Inter as a subset with the box-drawing, block and symbol ranges the harnesses' terminal UIs draw with (`ui/fonts/jetbrains-mono.woff2`, source in `assets/brand/fonts`) |
 | D13 | Syntax highlighting without a build step | A small vendored highlighter (Prism core plus a handful of languages) or a server-side highlighter in the diff endpoint |
 | D14 | The native toolkit | Decide after a spike (T42). Lead candidate GPUI (GPU-drawn, Zed's toolkit, Zed already embeds `alacritty_terminal` in it); Iced as the more conventional alternative; a web view shell (Tauri) is the fallback, not the goal |
 | D15 | How web and native share the sidebar logic | The Rust office model in `shiioo-client` is the reference; the JS desk is tested against the same event fixtures and expected states (no WASM, so no build step) |
@@ -220,14 +220,14 @@ One line each, in build order within a phase. "Needs" names what must land first
 
 | | Task | Where | Needs | Done when |
 |---|---|---|---|---|
-| T17 *(proposed: [ADR-0013](../adr/0013-a-websocket-for-the-takeover-terminal.md), waiting for the owner)* | ADR-0013: a WebSocket for the takeover terminal, amending ADR-0004 for one endpoint (D8) | `docs/adr/` | | Accepted by the owner |
-| T18 | Events `TakeoverStarted { by }` and `TakeoverEnded { reason, transcript_blob? }` | `shiioo-core/src/event.rs`, `docs/design/event-log.md` | T11 | Payload round-trip and hash tests |
-| T19 | Interactive driver mode: the harness command without `--print` / `exec`, same hook flags and environment, under a PTY, resumed from the run's session; holds the run's lease while attached | `shiioo-runtime/src/harness/` (new `interactive.rs`), `claude_code.rs`, `codex.rs` | T18 | A test with a fake harness binary gets keystrokes in and output out; the hook env is set |
-| T20 | `POST /v1/runs/{run}/takeover` returning a single-use, short-lived attach ticket; `GET /v1/runs/{run}/terminal?ticket=…` WebSocket with binary PTY frames and a resize control frame (D9) | `shiioo-api` | T17, T19 | Used or expired ticket refused; detach and re-attach keeps the session |
-| T21 | Transcript import at the end: read the harness session file (Claude Code JSONL, Codex rollout) into the log as messages and tool calls; raw stream as a capped, redacted blob (D4) | `shiioo-runtime/src/harness/`, `redact.rs` | T19 | `shiioo log <run>` reads through a takeover; secrets in the stream are redacted |
-| T22 | Hand back (park, or resume headless with a note), detached-takeover timeout (D6), and restart recovery (`TakeoverEnded { reason: office_restarted }`, run left parked) | `shiioo-runtime/src/worker.rs`, `shiioo-api` | T20, T21 | Kill the office mid-takeover: after restart the run is parked and nothing drives it |
-| T23 | Terminal view in the desk (U11): vendored xterm.js with its WebGL renderer and licence, the desk font and theme, Take over / Hand back, the "rules active" banner, approvals in the side panel (D5) | `ui/`, `ui/vendor/` | T4, T20 | Live check with Claude Code: an `ask` command shows a card in the desk and a Telegram message; first answer wins |
-| T24 | Live verification with both real harnesses and the security note: the shell escape bypasses the hook and is recorded | `docs/design/security.md`, `README.md` status table | T22, T23 | Status table row "built, verified live" |
+| T17 *(built: [ADR-0013](../adr/0013-a-websocket-for-the-takeover-terminal.md) accepted)* | ADR-0013: a WebSocket for the takeover terminal, amending ADR-0004 for one endpoint (D8) | `docs/adr/` | | Accepted by the owner |
+| T18 *(built: `TakeoverRequested`, `TakeoverStarted { by }`, `TakeoverEnded { reason, session }`; no `transcript_blob` while blobs are planned)* | Events `TakeoverStarted { by }` and `TakeoverEnded { reason, transcript_blob? }` | `shiioo-core/src/event.rs`, `docs/design/event-log.md` | T11 | Payload round-trip and hash tests |
+| T19 *(built: `harness::interactive_command`, `harness/terminal.rs`, `Worker::take_over`)* | Interactive driver mode: the harness command without `--print` / `exec`, same hook flags and environment, under a PTY, resumed from the run's session; holds the run's lease while attached | `shiioo-runtime/src/harness/` (new `interactive.rs`), `claude_code.rs`, `codex.rs` | T18 | A test with a fake harness binary gets keystrokes in and output out; the hook env is set |
+| T20 *(built: `src/takeover.rs`, tests/takeover.rs)* | `POST /v1/runs/{run}/takeover` returning a single-use, short-lived attach ticket; `GET /v1/runs/{run}/terminal?ticket=…` WebSocket with binary PTY frames and a resize control frame (D9) | `shiioo-api` | T17, T19 | Used or expired ticket refused; detach and re-attach keeps the session |
+| T21 *(part built: the session-file import for both harnesses, redacted; the raw stream as a blob waits for blobs, D4)* | Transcript import at the end: read the harness session file (Claude Code JSONL, Codex rollout) into the log as messages and tool calls; raw stream as a capped, redacted blob (D4) | `shiioo-runtime/src/harness/`, `redact.rs` | T19 | `shiioo log <run>` reads through a takeover; secrets in the stream are redacted |
+| T22 *(built)* | Hand back (park, or resume headless with a note), detached-takeover timeout (D6), and restart recovery (`TakeoverEnded { reason: office_restarted }`, run left parked) | `shiioo-runtime/src/worker.rs`, `shiioo-api` | T20, T21 | Kill the office mid-takeover: after restart the run is parked and nothing drives it |
+| T23 *(built: xterm.js 6 vendored with its WebGL renderer and a DOM fallback, JetBrains Mono, theme from the tokens, Take over / Join / Hand back / Hand back and carry on)* | Terminal view in the desk (U11): vendored xterm.js with its WebGL renderer and licence, the desk font and theme, Take over / Hand back, the "rules active" banner, approvals in the side panel (D5) | `ui/`, `ui/vendor/` | T4, T20 | Live check with Claude Code: an `ask` command shows a card in the desk and a Telegram message; first answer wins |
+| T24 *(built; verified live with Claude Code 2.1.316 and Codex 0.163.0)* | Live verification with both real harnesses and the security note: the shell escape bypasses the hook and is recorded | `docs/design/security.md`, `README.md` status table | T22, T23 | Status table row "built, verified live" |
 
 ### 8e. Takeover in containers and on nodes
 

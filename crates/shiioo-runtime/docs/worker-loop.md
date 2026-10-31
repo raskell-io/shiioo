@@ -39,6 +39,12 @@ parked?  ──yes──►  message since?  ──yes──►  append RunWoken
         │                ▼
         │           Parked (nothing written)
         ▼
+takeover never ended?  ──yes──►  append TakeoverEnded { office_restarted }, RunParked { input }
+        │no
+        ▼
+takeover requested?  ──yes──►  append RunParked { takeover }  ──►  Parked
+        │no
+        ▼
 spec.runtime is Harness?  ──yes──►  run_harness (section 4)
         │no
         ▼
@@ -223,7 +229,61 @@ The permission events (`PermissionRequested`, `ApprovalRequested`,
 the worker. The worker never blocks on them; the harness process does, inside
 its hook.
 
-## 6. Outcomes at a glance
+## 6. Takeover
+
+`Worker::take_over(run, by, TakeoverControl)` puts the owner at the
+harness's own terminal UI (`shiioo-api` starts it for
+`POST /v1/runs/{id}/takeover`; see desk R10–R13 and ADR-0013).
+
+1. **Giving way.** The API appends `TakeoverRequested`. A worker driving
+   the run sees it at its next check (each harness line and the two-second
+   timer, `status::takeover_pending`), stops its process like an interrupt
+   (SIGINT to the group, SIGKILL after 10 s) and appends `RunParked {
+   waiting_for: "takeover" }`, which ends its lease. A drive that starts
+   while the request is pending parks the same way. `run_status` reads such
+   a run as `Open`: it isn't waiting for the owner.
+2. **The lease.** The takeover acquires the lease as `<worker id>/takeover`,
+   a holder of its own: the store lets a holder take its lease again, and
+   the office's workers share the takeover's process. It retries while the
+   lease is held, for up to 30 s.
+3. **Start.** `RunWoken { takeover }` if parked (and `TakeoverEnded {
+   office_restarted }` first if an earlier takeover never ended), then
+   `TakeoverStarted { by }`. The workspace is prepared as for a headless
+   process (`Session::prepare`: repository, worktree, secrets, sandbox);
+   only the `worktree` level is supported. `harness::interactive_command`
+   builds the harness without `--print`/`exec`, resuming the run's last
+   session (`last_session`: the newest `HarnessSessionStarted` or
+   `TakeoverEnded.session`, else `origin.session`) or, with none, starting
+   with the task. `harness::terminal::Terminal` spawns it under a
+   pseudo-terminal as the leader of its own session (`TERM=xterm-256color`),
+   keeps the last 64 KiB of output for late viewers and fans out the rest.
+4. **While it runs** the takeover holds the lease (heartbeat as usual).
+   Hook decisions and approvals are appended by the API as for any harness
+   run. It ends when `control.end` says why (`handed_back`, `detached`), the
+   harness exits (`exited`), the lease is lost (outcome `LostLease`, nothing
+   appended), or a `CancelRequested` arrives (seen on the two-second timer).
+5. **End.** The harness gets SIGTERM and 5 s before SIGKILL. A
+   `transcript::Snapshot` taken before the start is compared with the
+   session files now (`harness/transcript.rs`): the lines added since, in
+   the session's file or a new one for the same working directory, are
+   appended as `UserMessage { owner }`, `ModelResponseRecorded`,
+   `ToolIntent` and `ToolResult`, redacted like headless output. Claude
+   Code lines are told apart by `uuid`, Codex rollout lines by their text;
+   Claude Code's sidechain and meta lines and Codex's polling calls (`wait`,
+   `write_stdin`) are left out, and Claude Code's `!` shell escape reads
+   `! <command>`. Then `TakeoverEnded { reason, session }` and `RunParked {
+   input }`; a cancelled takeover writes `RunCancelled` instead of parking.
+6. **After.** The next headless process resumes `TakeoverEnded.session` and
+   is told the owner worked in the session and handed back
+   (`HANDED_BACK_PROMPT`), with the messages after the hand back (the
+   owner's note) and none from before it: those are in the session already.
+   `TakeoverEnded` also resets the start budget.
+
+A takeover the office never ended (it stopped mid-way) is closed by the
+next drive of the run, which the office does at startup
+(`ApiState::end_stale_takeovers`, retrying until the old lease expires).
+
+## 7. Outcomes at a glance
 
 | `RunOutcome` | Terminal event | Reached by |
 | --- | --- | --- |

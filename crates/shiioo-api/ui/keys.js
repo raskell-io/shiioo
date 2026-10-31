@@ -22,6 +22,8 @@ export function installKeys() {
       return;
     }
     if (overlay()) return;
+    // In the agent's terminal every key is the agent's (Esc interrupts it).
+    if (e.target instanceof Element && e.target.closest(".xterm")) return;
     if (e.key === "Escape") {
       if (typing(e.target)) { e.target.blur(); desk.focusedView()?.focus(); return; }
       if (desk.focusedView()?.escape()) e.preventDefault();

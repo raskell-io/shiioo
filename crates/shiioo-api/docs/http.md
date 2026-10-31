@@ -88,7 +88,8 @@ All runs, most recently updated first.
 `status` is the runtime's `RunStatus`, tagged by `state`: `open`,
 `completed {output}`, `failed {reason}`, `needs_attention {reason}`,
 `waiting_approval {approval_id, summary}`, `parked {waiting_for}`,
-`cancelled {reason}`. `updated_at` and `created_at` are the last and first
+`taken_over {by}` (the owner is at the keyboard), `cancelled {reason}`. A
+run parked only so a takeover can start reads `open`. `updated_at` and `created_at` are the last and first
 event's times in ms since the epoch. `runtime` is `claude-code`, `codex`
 or the native model; `repo` (a harness run's repository label, else its
 directory name) and `branch` (a follow-up's is the one it continues) are
@@ -205,6 +206,66 @@ closed; the new run's view carries `origin` (the run it continues).
   resume), and while another run still works on the same branch.
 - `diff` and the artifact routes of a follow-up read the shared branch and
   worktree.
+
+### `POST /v1/runs/{id}/takeover` → `201 Created`, a ticket
+
+Puts the owner at the run's own terminal ([ADR-0013](../../../docs/adr/0013-a-websocket-for-the-takeover-terminal.md),
+`ApiState::take_over` in `src/takeover.rs`). Optional body `{"cols": 120,
+"rows": 32}`, the terminal's first size. Answer:
+
+```json
+{"ticket": "…", "expires_in": 30, "terminal": "/v1/runs/{id}/terminal?ticket=…"}
+```
+
+- The first call starts the takeover: an approval the run waits on is
+  denied (`by: owner`, note "taken over at the keyboard"), then
+  `TakeoverRequested { by: owner }` is appended and a takeover is started
+  in the background. A worker driving the run stops its harness (SIGINT,
+  as for **Now**) and parks it with `waiting_for: "takeover"`; the
+  takeover then takes the lease and starts the harness's own terminal UI
+  in the run's worktree, resumed from its session, with the same hooks and
+  environment as a headless process (`shiioo-runtime/docs/worker-loop.md`,
+  section 6).
+- Later calls while it is under way join it: each returns a fresh ticket.
+- A ticket is single use and expires after 30 seconds.
+- `409` for a finished run (follow it up first), a native run, a run
+  addressed to another machine, and a run isolated in a container or an
+  OpenShell sandbox (8e); `404` for an unknown run.
+
+### `GET /v1/runs/{id}/terminal?ticket=<ticket>` → WebSocket
+
+The terminal. Not behind the bearer token (browsers can't set headers on a
+WebSocket); the ticket is the credential, and a used, expired or foreign
+ticket gets `401` before the upgrade.
+
+- Binary frames carry the terminal's bytes both ways: what the harness
+  draws, and keystrokes.
+- Text frames are JSON control messages: from the client
+  `{"type":"resize","cols":…,"rows":…}` (and `{"type":"input","data":"…"}`,
+  equivalent to a binary frame); from the office
+  `{"type":"status","text":…}` while the harness starts and
+  `{"type":"ended","reason":…}` before it closes.
+- On connect the office sends the last 64 KiB of output first, so a
+  viewer can redraw; then everything live. Any number of viewers can be
+  attached at once and all of them type into the same terminal.
+- Closing the socket detaches; the harness keeps running. A takeover with
+  no viewer for `ApiOptions::takeover_detach` (30 minutes) ends itself
+  (`TakeoverEnded { reason: "detached" }`).
+
+### `POST /v1/runs/{id}/hand-back` → `200`, `RunView`
+
+Ends the takeover: the harness gets SIGTERM (SIGKILL after 5 s), what
+happened at the keyboard is imported from its session file, and
+`TakeoverEnded { reason: "handed_back", session }` and `RunParked { input }`
+are appended. Body `{"resume": true, "note": "…"}` then wakes the run with
+the note as the owner's message (default "Carry on with the task."), so a
+headless process resumes the same session; without `resume` it waits for
+the next message. Answers with the run once the takeover has ended (up to
+20 s). `409` when nobody is at the keyboard.
+
+While a takeover is under way, `POST /v1/runs/{id}/messages` answers `409`
+(type into the terminal, or hand back first), and `cancel` ends the
+takeover and the run.
 
 ### `GET /v1/runs/{id}/diff` → `200`, `text/plain`
 

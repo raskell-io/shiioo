@@ -6,6 +6,8 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod terminal;
+pub mod transcript;
 
 use crate::spec::{AgentSpec, HarnessKind, HarnessSpec};
 use crate::tools::digest_hex;
@@ -30,6 +32,11 @@ pub const INTERRUPTED_PROMPT: &str = "The owner stopped you mid-step to tell you
     Your last step may have been cut short, so check the workspace before you rely on it, \
     then carry on with the task with their message in mind:";
 
+/// Leads the first prompt after a takeover: the owner worked in this
+/// session at the keyboard, then handed back (with their note, if any).
+pub const HANDED_BACK_PROMPT: &str = "The owner worked with you directly in this session and has \
+    handed back. Check the workspace for what changed, then carry on with the task.";
+
 /// What one harness output line means for the run's log.
 #[derive(Debug, Default)]
 pub struct Interpretation {
@@ -53,6 +60,39 @@ pub trait HarnessDriver: Send {
         hooks: Option<(&HookEndpoint, &str)>,
     ) -> Command;
     fn interpret(&mut self, line: &str) -> Result<Interpretation, HarnessError>;
+}
+
+/// The harness's own terminal UI, for a takeover: the same flags, hooks
+/// and environment as its headless command, resuming `resume` (or
+/// starting with `prompt`).
+pub fn interactive_command(
+    spec: &HarnessSpec,
+    agent: &AgentSpec,
+    cwd: &Path,
+    resume: Option<&str>,
+    prompt: Option<&str>,
+    hooks: Option<(&HookEndpoint, &str)>,
+) -> Command {
+    match spec.harness {
+        HarnessKind::ClaudeCode => claude_code::interactive_command(
+            &claude_code::binary(spec),
+            spec,
+            agent,
+            cwd,
+            resume,
+            prompt,
+            hooks,
+        ),
+        HarnessKind::Codex => codex::interactive_command(
+            &codex::binary(spec),
+            spec,
+            agent,
+            cwd,
+            resume,
+            prompt,
+            hooks,
+        ),
+    }
 }
 
 /// The driver for a spec, ready to run in `cwd`.
@@ -530,7 +570,7 @@ impl Drop for HarnessProcess {
 
 /// Sends `signal` to a process group, without `unsafe`: through the
 /// `kill` utility every Unix has.
-async fn signal_group(pgid: u32, signal: &str) {
+pub(crate) async fn signal_group(pgid: u32, signal: &str) {
     let _ = tokio::process::Command::new("kill")
         .args(["-s", signal, "--", &format!("-{pgid}")])
         .stderr(std::process::Stdio::null())

@@ -66,7 +66,7 @@ export const exact = (ms) => new Date(ms).toLocaleString();
 /** The state as the mark and pill show it. */
 export function kind(st) {
   switch (st) {
-    case "open": return "working";
+    case "open": case "taken_over": return "working";
     case "waiting_approval": case "needs_attention": case "parked": return "waiting";
     case "completed": return "done";
     case "failed": return "failed";
@@ -75,13 +75,14 @@ export function kind(st) {
   }
 }
 export const needsYou = (st) => kind(st) === "waiting";
-export const isOpen = (st) => st === "open" || needsYou(st);
+export const isOpen = (st) => st === "open" || st === "taken_over" || needsYou(st);
 
 const LABEL = {
   open: "Working",
   waiting_approval: "Needs your approval",
   needs_attention: "Needs attention",
   parked: "Waiting for you",
+  taken_over: "At the keyboard",
   completed: "Done",
   failed: "Failed",
   cancelled: "Cancelled",

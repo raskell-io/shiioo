@@ -26,12 +26,14 @@ keyboard, through single keys and the ⌘K palette.
 | `ui/describe.js` | ~40 | One line per event, mirroring the server's `describe()`; the run view's **Raw** mode and the fallback for unknown events. |
 | `ui/views/side.js` | ~150 | The sidebar: Needs you, runs grouped by repository, unread marks, capacity meters, connection state, theme switch; the page title and favicon. |
 | `ui/views/runs.js` | ~120 | Home (an overview on a desk, the run list on a phone) and the new-task sheet. |
-| `ui/views/run.js` | ~385 | One run as an instance a pane mounts: header, actions, the log, the message box, the side panel (approval card and diff). |
+| `ui/views/run.js` | ~500 | One run as an instance a pane mounts: header, actions, the log or the takeover terminal, the message box, the side panel (approval card and diff). |
 | `ui/views/log.js` | ~250 | The structured log: turns, tool-call rows, inline approvals, how the run ended; a small markdown renderer. |
 | `ui/views/diff.js` | ~90 | Parses the branch diff into files and renders the file list and hunks. |
 | `ui/views/kit.js` | ~180 | `#kit`: every component in both themes, drawn by the real code, with a live contrast table. |
 | `ui/app.css` | ~540 | Tokens (two colour sets, spacing, radius, elevation, motion, type) and every component. |
-| `ui/fonts/*.woff2` | | Latin subsets of Inter and Bricolage Grotesque from `assets/brand/fonts`, served from `UI_FONTS`. |
+| `ui/views/terminal.js` | ~170 | The takeover terminal: loads xterm.js on first use, draws with the desk's font and theme colours, attaches over the ticketed WebSocket and rejoins after a drop. |
+| `ui/vendor/xterm*.mjs`, `xterm.css` | | xterm.js 6.0 with its fit and WebGL add-ons, vendored unchanged from npm with their MIT licence in a header. |
+| `ui/fonts/*.woff2` | | Latin subsets of Inter and Bricolage Grotesque, and JetBrains Mono with box drawing and the symbols terminal UIs use, from `assets/brand/fonts`; served from `UI_FONTS`. |
 
 ## Token
 
@@ -108,6 +110,7 @@ cursor and no sheet is open:
 | J | Next run that needs you |
 | H | Home in the focused pane |
 | A | Go to the approval (opens the panel, focuses Allow; Enter answers) |
+| T | Take over: sit at the agent's own terminal |
 | R | Write to the run, reply, or follow up |
 | D | Approval and diff panel |
 | L | Raw log |
@@ -185,6 +188,34 @@ square for cancelled.
   On a finished Claude Code or Codex run the same box is **Follow up**: it
   posts to `/v1/runs/{id}/follow-up` and opens the new run.
 
+## Taking over
+
+**Take over** (T) on a Claude Code or Codex run that is still open, on
+this machine and in a plain worktree, puts you at the agent's own terminal
+in place of the log ([http.md](http.md), `POST …/takeover`). A working
+agent first stops its current step; the terminal then shows the harness's
+own UI resumed from the run's session, so its history is on screen.
+
+- A teal bar above it says you're at the keyboard and that the rules still
+  judge every command. An `ask` command waits for you exactly as in a
+  headless run: the card appears in the side panel (and on the phone).
+- **Hand back** ends it and leaves the run waiting for your next message;
+  **Hand back, carry on** takes an optional note and lets it continue
+  headless in the same session. The log then shows what happened at the
+  keyboard, imported from the harness's session file, between "You took
+  over" and "You handed back".
+- Keys typed in the terminal are the agent's: Esc interrupts it, single-key
+  shortcuts are off; ⌘K still opens the palette, which has Hand back.
+- Closing the tab or the pane detaches; the agent keeps its terminal for
+  30 minutes. Another window or the phone shows "Taken over" with **Join**,
+  which attaches to the same terminal (each attach redeems a fresh ticket,
+  and a dropped connection rejoins by itself).
+- xterm.js draws with WebGL; `localStorage.shiioo_term_renderer = "dom"`
+  switches to its DOM renderer on a GPU that draws it badly. The colours
+  follow the desk's theme.
+- Claude Code asks once whether to trust a new worktree; its preselected
+  answer is "No, exit", so choose "Yes".
+
 ## Live log
 
 The log is a hand-rolled SSE client built on `fetch` rather than
@@ -215,8 +246,9 @@ pairs the kit shows. One attention colour is used only for "needs you":
 (`--accent`) is for selection, primary actions and working. Spacing is a
 4 px scale (`--s1`…`--s10`), radii `--r1`…`--r3`, elevation `--e1`/`--e2`,
 motion `--t-fast`/`--t-med` (zero under `prefers-reduced-motion`). Inter
-for the interface, Bricolage Grotesque for the brand, the system monospace
-for code (D12 picks a bundled one).
+for the interface, Bricolage Grotesque for the brand, JetBrains Mono for
+logs, diffs and the terminal (a subset with box drawing and the symbols
+terminal UIs use).
 Below 760 px the sidebar goes and the layout is one column with phone-sized
 targets.
 

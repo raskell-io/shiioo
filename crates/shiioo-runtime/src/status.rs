@@ -26,6 +26,11 @@ pub enum RunStatus {
     Cancelled {
         reason: String,
     },
+    /// The owner is at the keyboard (`TakeoverStarted` without
+    /// `TakeoverEnded`). No headless worker drives it.
+    TakenOver {
+        by: String,
+    },
     /// Holds no lease and waits for `waiting_for` (`input`: a message).
     /// A run that was parked and has since received input is `Open` again.
     Parked {
@@ -50,14 +55,48 @@ pub fn run_status(log: &[Event]) -> RunStatus {
                 summary,
             },
             (None, Some(reason)) => RunStatus::NeedsAttention { reason },
+            (None, None) if let Some(by) = taken_over(log) => {
+                RunStatus::TakenOver { by: by.to_owned() }
+            }
             (None, None) => match parked(log) {
-                Some((_, waiting_for)) if wake_reason(log).is_none() => RunStatus::Parked {
-                    waiting_for: waiting_for.to_owned(),
-                },
+                // Parked only so a takeover can take the lease: not
+                // waiting for the owner.
+                Some((_, waiting_for))
+                    if waiting_for != "takeover" && wake_reason(log).is_none() =>
+                {
+                    RunStatus::Parked {
+                        waiting_for: waiting_for.to_owned(),
+                    }
+                }
                 _ => RunStatus::Open,
             },
         },
     }
+}
+
+/// Who is at the keyboard, while a takeover is under way.
+pub fn taken_over(log: &[Event]) -> Option<&str> {
+    for ev in log.iter().rev() {
+        match &*ev.payload {
+            Payload::TakeoverEnded { .. } => return None,
+            Payload::TakeoverStarted { by } => return Some(by),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A `TakeoverRequested` that no takeover has answered yet: the worker
+/// should stop and park so the takeover can take the lease.
+pub fn takeover_pending(log: &[Event]) -> bool {
+    for ev in log.iter().rev() {
+        match &*ev.payload {
+            Payload::TakeoverStarted { .. } | Payload::TakeoverEnded { .. } => return false,
+            Payload::TakeoverRequested { .. } => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The index of the `RunParked` the run is parked at, and what it waits

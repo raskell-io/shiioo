@@ -140,7 +140,13 @@ Be explicit, so nobody relies on a guarantee that isn't there:
 | `ApprovalRequested` / `ApprovalDecided` *(built)* | human gate on a call; `by` is the owner's surface or `timeout` |
 | `CancelRequested` *(built)* | the owner stopped a run from the phone or the API |
 | `InterruptRequested` *(built)* | the owner stopped a harness mid-step to deliver a message at once ("Now") |
+| `TakeoverRequested` / `TakeoverStarted` / `TakeoverEnded` *(built)* | the owner sat at the harness's own terminal; what happened there is imported from the harness's session file before `TakeoverEnded` |
 | `SandboxStarted` *(built)* | where the harness executed: the level, and for `container` the image, container name, mounts and egress mode |
 | `SecretRedacted` *(built)* | something about to be recorded contained a secret value; records the secret name and the count, not the value |
 | `MachineRevoked` *(planned)* | appended to every run with pending calls on a revoked machine |
 | checkpoint log entries *(planned)* | signed Merkle roots and their external anchors |
+
+## Taking over a run *(built)*
+
+The takeover terminal ([ADR-0013](../adr/0013-a-websocket-for-the-takeover-terminal.md)) is interactive control of an agent, so it gets its own credential: `POST /v1/runs/{run}/takeover` needs the office token and returns a single-use ticket that expires after 30 seconds, and the WebSocket accepts only that ticket. The token never appears in the socket's URL, so it can't leak from a proxy log or the browser history. The harness runs with the same hook as a headless process: every tool call the agent makes is judged by the rules, and an `ask` waits for the owner as always (D5: being at the keyboard doesn't turn `ask` into `allow`). Two things are not judged, and the docs say so plainly. Commands the owner runs through the harness's own shell escape (Claude Code's `!`) are the owner's own; they bypass the hook, and the imported transcript records them (`! <command>` and its output). Keystrokes are not events; the record is what the agent said and did, from its session file.
+

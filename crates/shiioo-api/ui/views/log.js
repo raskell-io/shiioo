@@ -140,7 +140,18 @@ export function createLog(box, { onDecide }) {
       }
       case "cancel_requested": sys(ev, `Cancel requested by ${esc(p.by === "owner" ? "you" : p.by)}`); break;
       case "interrupt_requested": sys(ev, `${p.by === "owner" ? "You" : esc(p.by)} stopped the current step so this is read now`); break;
-      case "run_parked": sys(ev, "Waiting for your reply"); break;
+      case "takeover_requested": sys(ev, "You asked for the keyboard; the agent stops its current step"); break;
+      case "takeover_started": stopOpen(); sys(ev, `<b>You took over at the keyboard.</b> What you and the agent do there follows when you hand back.`, "keyboard"); break;
+      case "takeover_ended": {
+        markRead(ev.seq);
+        stopOpen();
+        const why = { handed_back: "You handed back", detached: "The takeover ended: nobody was attached for a while",
+          exited: "The takeover ended: the agent's terminal closed", office_restarted: "The takeover ended: the office restarted",
+          cancelled: "The takeover ended: the run was cancelled" }[p.reason] || `The takeover ended: ${esc(p.reason)}`;
+        sys(ev, `<b>${esc(why)}.</b>`, "keyboard");
+        break;
+      }
+      case "run_parked": if (p.waiting_for !== "takeover") sys(ev, "Waiting for your reply"); break;
       case "secret_redacted": sys(ev, `Kept secret <code>${esc(p.name)}</code> out of the log`); break;
       case "mail_sent": sys(ev, `Sent mail to ${esc((p.to || []).join(", "))}: ${esc(p.subject)}`); break;
       case "harness_result": cost += Number(p.cost_usd || 0); break;

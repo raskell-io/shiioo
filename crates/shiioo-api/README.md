@@ -42,7 +42,8 @@ shiioo-rules ─┘
 | `src/routines.rs` | `Routine`, `RoutineState`, `due`: scheduled runs and what already fired. |
 | `src/report.rs` | `ApiState::report`: the morning report, counted from the record and the repositories. |
 | `src/plans.rs` | `Plan`, `Plans`, `IssueCreator`, the planner's task and plan parsing: the chief of staff. |
-| `ui/` | The dashboard (the desk): `index.html`, `app.css`, native ES modules (`app.js`, `core.js`, `office.js`, `views/…`) and two fonts, embedded into the binary (`UI_FILES`, `UI_FONTS`) and served at `/` and `/ui/{path}`. See [docs/dashboard.md](docs/dashboard.md). |
+| `src/takeover.rs` | `Takeovers`, `ApiState::take_over` / `hand_back` / `end_stale_takeovers`, the terminal WebSocket: taking over a run (ADR-0013). |
+| `ui/` | The dashboard (the desk): `index.html`, `app.css`, native ES modules (`app.js`, `core.js`, `desk.js`, `office.js`, `views/…`), vendored xterm.js (`vendor/`) and three fonts, embedded into the binary (`UI_FILES`, `UI_FONTS`) and served at `/` and `/ui/{path}`. See [docs/dashboard.md](docs/dashboard.md). |
 
 ## Public API
 
@@ -90,6 +91,9 @@ Full request and response shapes are in [docs/http.md](docs/http.md).
 | `GET /v1/events/stream` | yes | SSE of every run's `RunView` as it changes |
 | `POST /v1/runs/{id}/messages` | yes | the owner writes to a run (`Idempotency-Key` honoured) |
 | `POST /v1/runs/{id}/follow-up` | yes | continue a finished harness run in a new run |
+| `POST /v1/runs/{id}/takeover` | yes | take over a run (or join the takeover); returns a single-use ticket |
+| `GET /v1/runs/{id}/terminal?ticket=` | the ticket | the takeover's terminal, a WebSocket |
+| `POST /v1/runs/{id}/hand-back` | yes | end the takeover; park the run, or wake it with a note |
 | `POST /v1/runs/{id}/resume` | yes | drive an open run again |
 | `POST /v1/runs/{id}/cancel` | yes | ask the run to stop at its next step |
 | `POST /v1/runs/{id}/permissions` | yes | the harness hook asks "may I?" |
@@ -128,6 +132,10 @@ cargo test -p shiioo-api
 - `tests/follow_up.rs`: a follow-up resumes the session and names the
   original, retries return the same run, chains stay on one branch, and
   follow-ups are refused for open, native and busy runs.
+- `tests/takeover.rs`: a takeover over a real WebSocket: typing and output,
+  single-use tickets, a second viewer joining, messages refused meanwhile,
+  hand back; a takeover nobody watches ends itself; hand back with a note
+  wakes the run; native and unknown runs are refused.
 - `tests/company.rs`: roles, plans (proposed from a scripted planner, approved
   into issues through a fake creator), routines fired on demand and the report,
   over HTTP.

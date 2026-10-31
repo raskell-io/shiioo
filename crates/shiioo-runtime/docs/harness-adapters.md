@@ -214,6 +214,28 @@ on the next start, with the continue prompt or the owner's messages.
 started in the worktree instead. Verified with Codex 0.163: a message sent
 mid-run and a follow-up both resume the same thread.
 
+## Interactive mode (takeover)
+
+`harness::interactive_command` builds each harness's own terminal UI for a
+takeover (`worker-loop.md` section 6). It shares every flag with the
+headless command through `shared()` (permission mode, setting sources,
+model, instructions, tools, the hook and its environment, the cleaned
+environment) and leaves out what only print mode has:
+
+- Claude Code: `claude [prompt] --permission-mode … --setting-sources …
+  [--model] [--append-system-prompt] [--resume <session>] [--settings
+  <hook>] [--allowedTools …]`, without `--print`, `--output-format`,
+  `--verbose`, `--max-turns` and `--max-budget-usd`.
+- Codex: `codex [resume <thread>] -C <worktree> -c approval_policy="never"
+  <sandbox> [-m] <hook config> [prompt]`, without `exec` and `--json`.
+
+Its stdio is the takeover's pseudo-terminal. Verified with Claude Code
+2.1.316 and Codex 0.163.0: both resume the run's session and show its
+history; an `ask` command waits on the hook, appears as an approval in the
+desk, and a deny from the desk reaches the agent. Claude Code asks once
+whether to trust a new worktree (headless mode never asks); the
+preselected answer is "No, exit".
+
 ## Adding an adapter
 
 1. Add a `HarnessKind` variant in `spec.rs` and a module under `harness/`.
