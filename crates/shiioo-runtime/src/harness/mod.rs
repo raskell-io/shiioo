@@ -152,6 +152,7 @@ impl HarnessDriver for ClaudeCodeDriver {
                 out.payloads.push(Payload::ModelResponseRecorded {
                     model: message["model"].as_str().unwrap_or_default().to_owned(),
                     response: message.clone(),
+                    context_seq: None,
                 });
                 for block in message["content"].as_array().into_iter().flatten() {
                     if block["type"] != "tool_use" {
@@ -322,6 +323,7 @@ impl HarnessDriver for CodexDriver {
                             "model": self.model,
                             "content": [{ "type": "text", "text": text }],
                         }),
+                        context_seq: None,
                     });
                 }
                 ItemKind::CommandExecution {

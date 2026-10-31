@@ -28,7 +28,9 @@ use std::sync::{Arc, Mutex};
 const TTL_MS: u64 = 30_000;
 /// After this many lives, faults stop so the run can finish.
 const FAULTY_LIVES: usize = 25;
-const MAX_LIVES: usize = 40;
+const MAX_LIVES: usize = 50;
+/// Seeds the RNG for the owner's messages (`Scenario::conversation`).
+const TALK_STREAM: u64 = 0x7A1C_0FFE_E5EE_D5ED;
 
 const CRASH_POINTS: [CrashPoint; 5] = [
     CrashPoint::AfterModelResponse,
@@ -121,6 +123,11 @@ pub struct Scenario {
     /// Tool-calling turns; a final answer follows them.
     pub turns: Vec<Vec<PlannedCall>>,
     pub final_text: String,
+    /// The run parks after each answer (`park_on_answer`) and the owner
+    /// replies; otherwise it completes, and messages arrive mid-run.
+    pub conversation: bool,
+    /// How many messages the owner sends (0–3).
+    pub messages: usize,
 }
 
 impl Scenario {
@@ -143,11 +150,16 @@ impl Scenario {
                     .collect()
             })
             .collect();
+        // Drawn from their own stream, so adding them left every older
+        // seed's turns, faults and races exactly as they were.
+        let mut talk = Rng::new(seed ^ TALK_STREAM);
         Self {
             seed,
             backend,
             turns,
             final_text: format!("done (seed {seed})"),
+            conversation: talk.chance(33),
+            messages: talk.below(4) as usize,
         }
     }
 
@@ -173,6 +185,11 @@ impl Scenario {
             })
             .collect();
         script.push(ScriptedProvider::answer(&self.final_text));
+        // One answer per message the owner may send, and one spare for a
+        // message that lands after an answer but before the run settles.
+        for n in 1..=self.messages + 1 {
+            script.push(ScriptedProvider::answer(&format!("reply {n}")));
+        }
         script
     }
 
@@ -239,6 +256,9 @@ pub struct Report {
     pub restarts: usize,
     pub stale_replays: usize,
     pub needs_attention: bool,
+    /// Owner messages delivered, and times the run parked.
+    pub messages: usize,
+    pub parks: usize,
 }
 
 /// A broken invariant, with everything needed to reproduce it.
@@ -331,6 +351,9 @@ struct Sim<S> {
     hit_mid_execution: Option<CallId>,
     stale: Option<Stale>,
     report: Report,
+    /// Decides when mid-run messages arrive; separate from `rng` so the
+    /// lives of older seeds stay the same.
+    talk: Rng,
 }
 
 impl<S: EventStore + 'static> Sim<S> {
@@ -374,6 +397,7 @@ impl<S: EventStore + 'static> Sim<S> {
             run: RunId::new(),
             hit_mid_execution: None,
             stale: None,
+            talk: Rng::new(seed ^ TALK_STREAM ^ 1),
         })
     }
 
@@ -401,6 +425,8 @@ impl<S: EventStore + 'static> Sim<S> {
 
     async fn run(mut self) -> Result<Report, Violation> {
         let spec = RunSpec {
+            origin: None,
+            park_on_answer: self.scenario.conversation,
             task: format!("scenario {}", self.scenario.seed),
             agent: AgentSpec {
                 model: "scripted".into(),
@@ -419,6 +445,13 @@ impl<S: EventStore + 'static> Sim<S> {
         let mut outcome = None;
         for life in 0..MAX_LIVES {
             self.report.lives = life + 1;
+            // Outside a conversation the owner writes while the run works.
+            if !self.scenario.conversation
+                && self.report.messages < self.scenario.messages
+                && self.talk.chance(30)
+            {
+                self.say().await?;
+            }
             if self.rng.chance(15) {
                 self.restart_machine().await?;
             }
@@ -451,6 +484,14 @@ impl<S: EventStore + 'static> Sim<S> {
                 self.clock.advance_ms(TTL_MS + 1);
             }
             self.maybe_replay_stale().await?;
+            if matches!(outcome, Some(RunOutcome::Parked(_))) {
+                self.report.parks += 1;
+                // The owner answers; the next life must wake the run.
+                if self.report.messages < self.scenario.messages {
+                    self.say().await?;
+                    outcome = None;
+                }
+            }
             if outcome.is_some() {
                 break;
             }
@@ -461,6 +502,26 @@ impl<S: EventStore + 'static> Sim<S> {
             None => Err(self
                 .violation(format!("run did not finish within {MAX_LIVES} lives"))
                 .await),
+        }
+    }
+
+    /// The owner sends the next message, without a lease.
+    async fn say(&mut self) -> Result<(), Violation> {
+        self.report.messages += 1;
+        let text = format!("message {}", self.report.messages);
+        match self
+            .store
+            .append_external(
+                self.run,
+                vec![Payload::UserMessage {
+                    author: "owner".into(),
+                    content: text,
+                }],
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(self.violation(format!("sending a message: {e}")).await),
         }
     }
 
@@ -620,6 +681,57 @@ impl<S: EventStore + 'static> Sim<S> {
             }
         }
 
+        // A parked run holds no lease: until a worker takes it again only
+        // external input follows RunParked, and that worker's first own
+        // event is RunWoken, after a message.
+        let mut parked_at: Option<usize> = None;
+        let mut lease_since_park = false;
+        let mut message_since_park = false;
+        for (i, ev) in log.iter().enumerate() {
+            let p = &*ev.payload;
+            if let Some(at) = parked_at {
+                match p {
+                    Payload::LeaseAcquired { .. } => lease_since_park = true,
+                    Payload::UserMessage { .. } => message_since_park = true,
+                    _ if p.is_external() => {}
+                    Payload::RunWoken { .. } if lease_since_park && message_since_park => {
+                        parked_at = None;
+                    }
+                    _ => {
+                        problems.push(format!(
+                            "#{i} {} follows the park at #{at} without a wake",
+                            compact(ev)
+                        ));
+                        parked_at = None;
+                    }
+                }
+            }
+            if matches!(p, Payload::RunParked { .. }) {
+                parked_at = Some(i);
+                lease_since_park = false;
+                message_since_park = false;
+            }
+        }
+        // Every message the owner sent was seen by a later model call.
+        let unanswered: Vec<usize> = log
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(*e.payload, Payload::UserMessage { .. }))
+            .map(|(m, _)| m)
+            .filter(|&m| {
+                !log.iter().enumerate().skip(m + 1).any(|(r, e)| {
+                    matches!(&*e.payload, Payload::ModelResponseRecorded { context_seq, .. }
+                        if context_seq.map_or(r, |s| s.0 as usize) > m)
+                })
+            })
+            .collect();
+        let last_answer = log.iter().rev().find_map(|e| match &*e.payload {
+            Payload::ModelResponseRecorded { response, .. } => {
+                response["content"][0]["text"].as_str().map(str::to_owned)
+            }
+            _ => None,
+        });
+
         // Side effects at most once.
         for call in self.scenario.calls().filter(|c| c.tool == ToolKind::Charge) {
             let n = self.executions.get(&call.id);
@@ -655,9 +767,43 @@ impl<S: EventStore + 'static> Sim<S> {
                     )),
                 }
             }
+            RunOutcome::Parked(waiting_for) => {
+                if !self.scenario.conversation {
+                    problems.push("parked, but the run was not a conversation".into());
+                }
+                if self.report.messages != self.scenario.messages {
+                    problems.push(format!(
+                        "stopped parked after {} of {} messages",
+                        self.report.messages, self.scenario.messages
+                    ));
+                }
+                if waiting_for != "input"
+                    || !matches!(
+                        log.last().map(|e| &*e.payload),
+                        Some(Payload::RunParked { .. })
+                    )
+                {
+                    problems.push(format!(
+                        "parked for {waiting_for:?}, but the log does not end with RunParked"
+                    ));
+                }
+                if !unanswered.is_empty() {
+                    problems.push(format!("messages at {unanswered:?} were never answered"));
+                }
+            }
             RunOutcome::Completed(text) => {
-                if *text != self.scenario.final_text {
-                    problems.push(format!("completed with {text:?}"));
+                if self.scenario.conversation {
+                    problems.push("a conversation completed instead of parking".into());
+                }
+                if Some(text) != last_answer.as_ref() {
+                    problems.push(format!(
+                        "completed with {text:?}, but the last answer was {last_answer:?}"
+                    ));
+                }
+                if !unanswered.is_empty() {
+                    problems.push(format!(
+                        "completed with messages at {unanswered:?} unanswered"
+                    ));
                 }
                 if let Some(hit) = &self.hit_mid_execution {
                     problems.push(format!(
@@ -775,6 +921,8 @@ pub fn compact(ev: &Event) -> String {
         Payload::SandboxStarted { level, .. } => format!("sandbox {level}"),
         Payload::SecretRedacted { name, count } => format!("redacted {name} x{count}"),
         Payload::MailSent { subject, .. } => format!("mail sent: {subject}"),
+        Payload::RunParked { waiting_for, .. } => format!("parked for {waiting_for}"),
+        Payload::RunWoken { reason } => format!("woken by {reason}"),
         Payload::RunCancelled { .. } => "cancelled".to_owned(),
         Payload::RunCompleted { .. } => "completed".to_owned(),
         Payload::RunFailed { reason } => format!("failed: {reason}"),

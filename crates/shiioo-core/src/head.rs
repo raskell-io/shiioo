@@ -128,11 +128,19 @@ impl RunHead {
                 actual: self.next_seq,
             });
         }
+        let parks = payloads.last().is_some_and(Payload::is_parking);
         let mut next = self.clone();
         let events = payloads
             .into_iter()
             .map(|p| next.seal(lease.epoch, now, p))
             .collect::<Result<Vec<_>, _>>()?;
+        if parks {
+            // A parked run holds no lease. The epoch stays current, so the
+            // parker is refused (expired) and the next grant gets a new one.
+            if let Some(held) = next.lease.as_mut() {
+                held.expires_at = now;
+            }
+        }
         *self = next;
         Ok(events)
     }
@@ -205,6 +213,11 @@ fn validate_batch(payloads: &[Payload]) -> Result<(), StoreError> {
     if payloads.iter().rev().skip(1).any(Payload::is_terminal) {
         return Err(StoreError::InvalidPayload(
             "a terminal event must be the last in its batch",
+        ));
+    }
+    if payloads.iter().rev().skip(1).any(Payload::is_parking) {
+        return Err(StoreError::InvalidPayload(
+            "RunParked ends the lease and must be the last in its batch",
         ));
     }
     Ok(())

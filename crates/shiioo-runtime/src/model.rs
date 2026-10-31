@@ -31,6 +31,9 @@ pub struct Turn {
     pub assistant: Vec<Value>,
     /// Results of the tool calls that response asked for, in call order.
     pub results: Vec<ToolResultBlock>,
+    /// Messages from the owner that arrived after this response; they go
+    /// to the model with the results, as the next user turn.
+    pub messages: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

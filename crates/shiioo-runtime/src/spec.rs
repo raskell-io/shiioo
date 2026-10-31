@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use shiioo_core::{RunId, Seq};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -13,6 +14,37 @@ pub struct RunSpec {
     /// selector. None: the office's own machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// Native runtime: when the agent answers without calling a tool, park
+    /// the run for the owner's next message (`RunParked { input }`) instead
+    /// of completing it. A conversation is a run that parks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub park_on_answer: bool,
+    /// A follow-up: the finished run this one continues, in its worktree
+    /// and branch and, for a harness, its session (`docs/design/desk.md` R9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+}
+
+impl RunSpec {
+    /// The run whose worktree, branch and sandbox state this run uses:
+    /// its own, or for a follow-up the first run of the chain.
+    pub fn workspace_run(&self, run_id: RunId) -> RunId {
+        self.origin.as_ref().map_or(run_id, |o| o.workspace)
+    }
+}
+
+/// Where a follow-up run comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Origin {
+    /// The finished run it continues.
+    pub run: RunId,
+    /// That run's last event when the follow-up was made.
+    pub seq: Seq,
+    /// The first run of the chain: its worktree and branch are shared.
+    pub workspace: RunId,
+    /// The harness session to resume, if the chain started one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// The agent working on a run. Inline for now; versioned agent definitions

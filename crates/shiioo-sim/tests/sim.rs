@@ -30,7 +30,7 @@ fn crash_recovery_holds_for_every_seed() {
     let total = |f: fn(&Report) -> usize| reports.iter().map(f).sum::<usize>();
     println!(
         "{} seeds: {} lives, {} crashes, {} races, {} machine restarts, {} stale replays fenced, \
-         {} runs stopped for a human",
+         {} runs stopped for a human, {} owner messages, {} parks",
         seeds.len(),
         total(|r| r.lives),
         total(|r| r.crashes),
@@ -38,6 +38,8 @@ fn crash_recovery_holds_for_every_seed() {
         total(|r| r.restarts),
         total(|r| r.stale_replays),
         reports.iter().filter(|r| r.needs_attention).count(),
+        total(|r| r.messages),
+        total(|r| r.parks),
     );
 
     if let Some(first) = failures.first() {
@@ -53,6 +55,8 @@ fn crash_recovery_holds_for_every_seed() {
     if seeds.len() >= 100 {
         assert!(total(|r| r.crashes) > 0, "no crashes were simulated");
         assert!(total(|r| r.races) > 0, "no races were simulated");
+        assert!(total(|r| r.messages) > 0, "no owner messages were sent");
+        assert!(total(|r| r.parks) > 0, "no run parked");
         assert!(
             total(|r| r.restarts) > 0,
             "no machine restarts were simulated"

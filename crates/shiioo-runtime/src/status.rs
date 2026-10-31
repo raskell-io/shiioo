@@ -26,6 +26,11 @@ pub enum RunStatus {
     Cancelled {
         reason: String,
     },
+    /// Holds no lease and waits for `waiting_for` (`input`: a message).
+    /// A run that was parked and has since received input is `Open` again.
+    Parked {
+        waiting_for: String,
+    },
 }
 
 pub fn run_status(log: &[Event]) -> RunStatus {
@@ -45,9 +50,37 @@ pub fn run_status(log: &[Event]) -> RunStatus {
                 summary,
             },
             (None, Some(reason)) => RunStatus::NeedsAttention { reason },
-            (None, None) => RunStatus::Open,
+            (None, None) => match parked(log) {
+                Some((_, waiting_for)) if wake_reason(log).is_none() => RunStatus::Parked {
+                    waiting_for: waiting_for.to_owned(),
+                },
+                _ => RunStatus::Open,
+            },
         },
     }
+}
+
+/// The index of the `RunParked` the run is parked at, and what it waits
+/// for, unless a worker has written `RunWoken` since.
+pub fn parked(log: &[Event]) -> Option<(usize, &str)> {
+    for (i, ev) in log.iter().enumerate().rev() {
+        match &*ev.payload {
+            Payload::RunWoken { .. } => return None,
+            Payload::RunParked { waiting_for, .. } => return Some((i, waiting_for)),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Why a parked run should be taken up again, if it should: `input` when
+/// a message arrived after it parked. `None` for a run that is not parked.
+pub fn wake_reason(log: &[Event]) -> Option<&'static str> {
+    let (at, _) = parked(log)?;
+    log[at..]
+        .iter()
+        .any(|e| matches!(*e.payload, Payload::UserMessage { .. }))
+        .then_some("input")
 }
 
 /// The oldest approval request without a decision, if any.

@@ -97,6 +97,7 @@ async fn state_survives_reopen() -> Result<(), StoreError> {
             vec![Payload::ModelResponseRecorded {
                 model: "m".into(),
                 response: json!({ "ratio": 0.1 + 0.2 }),
+                context_seq: None,
             }],
         )
         .await?;

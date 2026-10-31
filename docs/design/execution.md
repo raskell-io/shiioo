@@ -4,7 +4,7 @@ How runs move from created to finished: run states, the scheduler, the worker lo
 
 ## 1. Run states *(partly built)*
 
-A run's state is not stored anywhere; it is a fold over its log. Today the fold is `shiioo_runtime::status::run_status` and yields `Open | WaitingApproval | NeedsAttention | Completed | Failed | Cancelled` (used by the API, the dashboard and the bot). The finer states below (Pending, Parked) arrive with the scheduler.
+A run's state is not stored anywhere; it is a fold over its log. Today the fold is `shiioo_runtime::status::run_status` and yields `Open | WaitingApproval | NeedsAttention | Parked | Completed | Failed | Cancelled` (used by the API, the dashboard and the bot). **Parked is built** for input: a run parks with `RunParked { waiting_for: input }` (the native loop, when `RunSpec::park_on_answer`), parking ends the lease, a `UserMessage` makes it `Open` again, and the worker that takes it writes `RunWoken` (`status::parked`, `status::wake_reason`; [`worker-loop.md`](../../crates/shiioo-runtime/docs/worker-loop.md)). Nothing schedules the wake yet: whoever appends the message drives the run (T12 in [desk.md](desk.md)). Pending, timers and approvals as a parked wait arrive with the scheduler.
 
 ```
                  ┌───────────── input / approval / tool / timer ─────────────┐

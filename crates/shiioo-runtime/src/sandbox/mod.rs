@@ -23,6 +23,8 @@ use tokio::process::Command;
 
 /// What a sandbox needs to know about the run it isolates.
 pub struct SandboxContext<'a> {
+    /// The run whose sandbox state this is: the run itself, or for a
+    /// follow-up the first run of its chain.
     pub run_id: RunId,
     pub harness: HarnessKind,
     /// The directory the harness works in (the run's worktree, or the

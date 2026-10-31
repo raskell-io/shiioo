@@ -185,20 +185,27 @@ fn messages(transcript: &Transcript) -> Vec<Value> {
     let mut out = vec![json!({ "role": "user", "content": transcript.task })];
     for turn in &transcript.turns {
         out.push(json!({ "role": "assistant", "content": turn.assistant }));
-        if !turn.results.is_empty() {
-            let results: Vec<Value> = turn
-                .results
-                .iter()
-                .map(|r| {
-                    json!({
-                        "type": "tool_result",
-                        "tool_use_id": r.call_id,
-                        "content": r.content,
-                        "is_error": r.is_error,
-                    })
+        // Tool results first (the API requires them right after the
+        // tool_use turn), then the owner's messages as text.
+        let content: Vec<Value> = turn
+            .results
+            .iter()
+            .map(|r| {
+                json!({
+                    "type": "tool_result",
+                    "tool_use_id": r.call_id,
+                    "content": r.content,
+                    "is_error": r.is_error,
                 })
-                .collect();
-            out.push(json!({ "role": "user", "content": results }));
+            })
+            .chain(
+                turn.messages
+                    .iter()
+                    .map(|m| json!({ "type": "text", "text": m })),
+            )
+            .collect();
+        if !content.is_empty() {
+            out.push(json!({ "role": "user", "content": content }));
         }
     }
     out
@@ -248,6 +255,7 @@ mod tests {
                         is_error: true,
                     },
                 ],
+                messages: vec![],
             }],
         };
         let tools = [ToolSpec {

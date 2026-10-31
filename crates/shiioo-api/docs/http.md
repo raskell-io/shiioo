@@ -77,14 +77,23 @@ All runs, most recently updated first.
   "task": "…",
   "next_seq": 14,
   "status": {"state": "waiting_approval", "approval_id": "…", "summary": "Bash: git push"},
-  "updated_at": 1761300000000
+  "updated_at": 1761300000000,
+  "created_at": 1761299000000,
+  "runtime": "claude-code",
+  "repo": "sango",
+  "branch": "shiioo/6f1d2a3b"
 }
 ```
 
 `status` is the runtime's `RunStatus`, tagged by `state`: `open`,
 `completed {output}`, `failed {reason}`, `needs_attention {reason}`,
-`waiting_approval {approval_id, summary}`, `cancelled {reason}`.
-`updated_at` is the last event's time in ms since the epoch.
+`waiting_approval {approval_id, summary}`, `parked {waiting_for}`,
+`cancelled {reason}`. `updated_at` and `created_at` are the last and first
+event's times in ms since the epoch. `runtime` is `claude-code`, `codex`
+or the native model; `repo` (a harness run's repository label, else its
+directory name) and `branch` (a follow-up's is the one it continues) are
+left out for runs without a repository. Also optional: `worker`, `machine`,
+and `origin` for a follow-up.
 
 ### `GET /v1/runs/{id}/events?from=<seq>` → `200`, `[Event]`
 
@@ -111,6 +120,34 @@ data: {"seq":7,"epoch":1,"payload":{"type":"tool_intent",…},…}
 - The stream ends after a terminal event (`run_completed`, `run_failed`,
   `run_cancelled`).
 
+### `GET /v1/events/stream` → `text/event-stream`
+
+The office-wide stream, for the dashboard's run list and any client that
+shows every run.
+
+```
+event: run
+id: 1793350706007
+data: {"id":"3bc1…","task":"…","next_seq":2,"status":{"state":"open"},"updated_at":1793350706007,…}
+
+event: ready
+data: {}
+
+```
+
+- First a pass over every run (oldest change first), closed by one `ready`
+  frame; then a `run` frame whenever a run is created or its log grows.
+  Each `run` frame carries the run's whole `RunView`, so a client keeps the
+  latest per `id`; plans, routines and intake runs are runs and appear here.
+- The frame id is the view's `updated_at`. With `Last-Event-ID` the first
+  pass only sends runs updated at or after it: a reconnect can repeat a run,
+  never miss one. A non-numeric id is a `400`.
+- Writes are announced by `Notifying::subscribe_all` (a broadcast of run
+  ids); bursts are gathered for 100 ms so a streaming harness turn sends a
+  run once, not once per event. A subscriber that lags rescans every run,
+  and a 10 s rescan covers writes from other processes.
+- Keep-alive comments while idle; the stream does not end on its own.
+
 ### `POST /v1/runs/{id}/resume` → `202 Accepted`
 
 Starts a worker for an open run (status `open` or `waiting_approval`). Any
@@ -122,6 +159,48 @@ Optional body `{"reason": "…"}`. Appends `CancelRequested { by: "owner",
 reason }`; the worker notices at its next step (next harness line or next
 native turn) and appends `RunCancelled`. A run that already closed → `409
 the run has already finished`.
+
+### `POST /v1/runs/{id}/messages` → `202 Accepted`, `{"seq": n}`
+
+The owner writes to a run: `{"text": "…"}` is appended as `UserMessage {
+author: "owner" }` without a lease (`ApiState::send_message`), and `seq` is
+where it landed.
+
+- A parked run becomes runnable and is driven (or, if it is addressed to a
+  machine, that node is woken); a run being worked on reads the message at
+  its next turn, and answers it before completing or parking (see
+  `shiioo-runtime/docs/worker-loop.md`). An open run that nobody drives is
+  picked up.
+- With `Idempotency-Key`, a repeat for the same run returns the first
+  message's `seq` with `200` and appends nothing. Sends are serialized
+  while the key is checked and the message appended, so a retry racing the
+  first attempt waits for it. The keys are kept in memory.
+- Claude Code and Codex read the message when their process finishes:
+  instead of completing, the worker resumes the session with the message
+  as the prompt (`shiioo-runtime/docs/worker-loop.md`, section 4). The
+  "Now" option that interrupts the process is desk T14.
+- `400` for an empty text; `404` for an unknown run; `409` for a finished
+  run.
+- When a drive ends, the office re-reads the run: a message that arrived
+  while the drive was ending (and so did not start another) wakes it then.
+
+### `POST /v1/runs/{id}/follow-up` → `201 Created`, the new run's `RunView`
+
+Continues a finished Claude Code or Codex run (`ApiState::follow_up`): a
+new run whose spec is the original's with `task` set to `{"text": "…"}`
+and `origin: { run, seq, workspace, session }`. It works in the worktree
+and branch of `workspace` (the first run of the chain, so a follow-up of a
+follow-up stays on one branch) and its harness resumes `session` (the last
+one the chain recorded) with the text as the prompt. The original stays
+closed; the new run's view carries `origin` (the run it continues).
+
+- With `Idempotency-Key`, a repeat for the same run returns the run the
+  first one started with `200`. The keys are kept in memory.
+- `400` for an empty text; `404` for an unknown run; `409` while the run is
+  open (send it a message instead), for a native run (it has no session to
+  resume), and while another run still works on the same branch.
+- `diff` and the artifact routes of a follow-up read the shared branch and
+  worktree.
 
 ### `GET /v1/runs/{id}/diff` → `200`, `text/plain`
 
@@ -312,8 +391,9 @@ Sorted by provider. Empty until a harness has reported a rate-limit event.
 ## Health and static files
 
 - `GET /v1/health` → `{"status":"ok"}`.
-- `GET /` and `GET /ui` → `index.html` (`text/html`); `GET /ui/app.js`
-  (`text/javascript`); `GET /ui/app.css` (`text/css`).
+- `GET /` and `GET /ui` → `index.html` (`text/html`); `GET /ui/{path}` →
+  one of the files in `UI_FILES` (`text/javascript` for `.js`, `text/css`
+  for `.css`), `404` for anything else.
 
 ## Event descriptions
 

@@ -35,14 +35,14 @@ shiioo-core  ──►  shiioo-runtime  ──►  shiioo-api  ──►  shiioo
 | --- | --- |
 | `worker` | `Worker`, `RunOutcome`, `WorkerError`, `Faults`/`CrashPoint` (test crash injection). The loop itself. |
 | `harness` | `HarnessDriver` trait, `HarnessProcess`, `CONTINUE_PROMPT`, `driver_for`; submodules `claude_code` and `codex`. |
-| `spec` | `RunSpec`, `AgentSpec`, `Runtime`, `HarnessSpec`, `HarnessKind`, `HarnessBilling`: the `spec` stored in `RunCreated`. |
+| `spec` | `RunSpec`, `AgentSpec`, `Runtime`, `HarnessSpec`, `HarnessKind`, `HarnessBilling`, `Origin`: the `spec` stored in `RunCreated` (`park_on_answer` for conversations, `origin` for follow-ups). |
 | `machine` | `LocalMachine`, `Invocation`, `CallStatus`, `MachineError`: executes tools behind a fenced journal. |
 | `tools` | `Tool`, `Toolbox`, `ToolOutput`; built-ins `read_file`, `write_file`, `shell`. |
 | `workspace` | `Worktree`, `ensure`, `remove`, `branch_for`: one git worktree and branch per repo run. |
 | `sandbox` | `Sandbox`, `SandboxContext`, `SandboxError`; submodules `container` (Docker/Podman per run), `egress` (the allow-listing proxy sidecar) and `openshell` (experimental). [docs/sandboxes.md](docs/sandboxes.md). |
 | `secrets` | `SecretSource` trait, `NoSecrets`, `resolve_env`: `secret:<name>` references in a harness's environment. |
 | `redact` | `Redactor`: replaces known secret values (raw, base64, URL-encoded) in everything recorded, adds `SecretRedacted` events. |
-| `status` | `RunStatus`, `run_status`, `open_approval`: fold a log into one state. |
+| `status` | `RunStatus`, `run_status`, `open_approval`, `parked`, `wake_reason`: fold a log into one state, including parked runs and what wakes them. |
 | `model` | `ModelProvider` trait, `ModelRequest`/`ModelResponse`, `Transcript`, `ToolCall`, `StopReason`, `Usage`. |
 | `anthropic` | `AnthropicProvider`, the native runtime's Messages API client. |
 | `scripted` | `ScriptedProvider`, canned responses for tests. |

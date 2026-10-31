@@ -34,6 +34,11 @@ through `src/worker.rs` and names every outcome.
 cancel requested?  ──yes──►  append RunCancelled  ──►  Cancelled
         │no
         ▼
+parked?  ──yes──►  message since?  ──yes──►  append RunWoken { input }
+        │no              │no
+        │                ▼
+        │           Parked (nothing written)
+        ▼
 spec.runtime is Harness?  ──yes──►  run_harness (section 4)
         │no
         ▼
@@ -50,6 +55,13 @@ runs before any work and again at the top of every native turn, and the
 harness path checks it after every line the harness prints. Cancellation is
 therefore noticed at the run's next step, not instantly.
 
+**Parked runs.** `drive` reads the log before taking the lease: a run whose
+latest `RunParked` has no `RunWoken` after it and no `UserMessage` since
+(`status::parked`, `status::wake_reason`) returns `Parked` without taking a
+lease, so a spurious wake-up costs nothing. With a message, the worker takes
+the lease (the parker's ended when it parked, see `RunHead::append`) and
+writes `RunWoken { reason: "input" }` before anything else.
+
 ## 3. Native runtime
 
 The native loop is Shiioo's own agent loop: model provider plus Shiioo tools
@@ -61,15 +73,27 @@ on the machine. One iteration:
 3. `context::transcript(spec, log)` rebuilds the conversation: each
    `ModelResponseRecorded` becomes an assistant turn, each `ToolResult`
    attaches to its call (a later result for the same call replaces an
-   earlier one), and a `ToolOutcomeUnknown` becomes an error block telling
-   the model the machine stopped while that call was running.
+   earlier one), a `ToolOutcomeUnknown` becomes an error block telling
+   the model the machine stopped while that call was running, and each
+   `UserMessage` becomes text in the next user turn, after the tool
+   results (`Turn::messages`; before the first response it is added to the
+   task). A message recorded before a response whose request did not
+   include it (`context_seq` at or before it: sent while the model was
+   busy) is placed after that response, not before it.
 4. `provider.complete(ModelRequest { model, transcript, tools })`.
-5. Append `ModelResponseRecorded { model, response }`.
+5. Append `ModelResponseRecorded { model, response, context_seq }`, where
+   `context_seq` is the log length the transcript was built from.
    Crash point `AfterModelResponse`.
 6. `act_on(response)`:
    - `StopReason::Refusal` → `RunFailed("the model declined the request")`.
    - `StopReason::MaxTokens` → `RunFailed("the response hit max_tokens before finishing")`.
-   - No tool calls → `RunCompleted { output: response.text() }`.
+   - No tool calls → `settle`: `RunCompleted { output: response.text() }`,
+     or `RunParked { waiting_for: "input" }` when `spec.park_on_answer` (a
+     conversation). `settle` first catches up, and if a `UserMessage` came
+     after the latest response's `context_seq` it appends nothing and the
+     loop runs another turn, so the model answers the owner first. The
+     append names the seq it expects, so a message can't slip in between
+     the check and the write.
    - Otherwise `call_tool` for every `ToolCall` that has no `ToolIntent`
      yet.
 
@@ -116,14 +140,26 @@ this is the loop around them.
    on branch `shiioo/<first 8 chars of run id>`. A machine without a
    worktrees root fails the run with `this machine has no worktree directory
    for repo runs`. Without a repo the harness runs in `machine.workspace()`.
-2. **Start budget.** `starts` = number of `HarnessSessionStarted` events in
-   the log. At `MAX_HARNESS_STARTS` (5) the run fails with `harness stopped
-   without finishing N times`.
-3. **Prompt.** First start: the task. Later starts: `CONTINUE_PROMPT` ("The
-   process running you was stopped before you finished. Check the current
-   state of the workspace, then continue the task to completion.") together
-   with the last recorded session id, so the harness resumes its own
-   conversation.
+   A follow-up (`RunSpec.origin`) uses `spec.workspace_run(run_id)`, the
+   first run of its chain, for the worktree, the branch and the sandbox's
+   per-run state, so it continues where that run left off.
+2. **Start budget.** `unfinished_starts` = `HarnessSessionStarted` events
+   since the last `HarnessResult` (resumes after a crash, not deliveries of
+   messages). At `MAX_HARNESS_STARTS` (5) the run fails with `harness
+   stopped without finishing N times`.
+3. **Marker and prompt.** `SandboxStarted` is appended before every process
+   starts, and marks what that process is told (`harness_prompt`): messages
+   before it are in its prompt, messages after it are unread. First start:
+   the task, plus any messages sent before it. After the session finished
+   cleanly (a `HarnessResult` since its start): the owner's messages since
+   the previous start. After a crash: `CONTINUE_PROMPT` ("The process
+   running you was stopped before you finished. Check the current state of
+   the workspace, then continue the task to completion."), followed by
+   "While you were stopped, the owner wrote:" and the messages, if any.
+   Every later start passes the last recorded session id, so the harness
+   resumes its own conversation. A follow-up's first start resumes
+   `origin.session` instead, with its task as the prompt (it is a first
+   start for this run).
 4. **Command.** `driver_for(spec, agent, cwd)` picks the adapter (Codex also
    gets its `--version` probed) and `driver.command(spec, agent, cwd, prompt,
    resume, hooks)` builds the `tokio::process::Command`. `hooks` is the
@@ -135,6 +171,13 @@ this is the loop around them.
    - line → `driver.interpret(line)` → append each payload; when the
      interpretation carries an outcome (`RunCompleted`/`RunFailed`) return
      it; then `cancel_if_requested` → kill and return `Cancelled`.
+   - a successful finish is not appended directly: the `HarnessResult` is,
+     then `settle` appends `RunCompleted` (or `RunParked { input }` when
+     `park_on_answer`) only if no message came after this process's
+     `SandboxStarted` (`harness_seen`). Otherwise the process is let exit,
+     `run_harness` returns `None`, and `Session::run` calls it again: a new
+     sandbox, a new marker, and the session resumed with the messages as
+     its prompt.
    - deadline → kill, `RunFailed("time budget of N minutes exceeded")`.
    - lease lost → kill, `LostLease`.
 7. **End of output without an outcome.** `HarnessError::ExitedEarly { status,
@@ -171,6 +214,7 @@ its hook.
 | `Cancelled(reason)` | `RunCancelled` | a `CancelRequested` seen at the next step |
 | `NeedsAttention(reason)` | none (run stays open) | a side-effecting tool whose outcome the journal cannot settle |
 | `LostLease` | none | fence or expired lease; another worker owns the run |
+| `Parked(waiting_for)` | none (`RunParked`; the run stays open) | a `park_on_answer` run answered; or `drive` on a parked run with no new message |
 
 Crash injection (`Faults { crash_at: Some(CrashPoint) }`) exists only for
 tests; `tests/crash_recovery.rs` kills a worker at every point and checks the

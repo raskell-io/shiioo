@@ -182,6 +182,7 @@ async fn a_tool_call_turn_round_trips() {
                 content: "a.rs\nb.rs".into(),
                 is_error: false,
             }],
+            messages: vec![],
         }],
     };
     let resp = provider

@@ -32,6 +32,7 @@ macro_rules! conformance_suite {
             external_append_rejects_execution_events,
             external_append_rejects_closed_runs,
             lists_runs,
+            parking_releases_the_lease,
         );
     };
     (@cases $setup:path; $($case:ident),* $(,)?) => {
@@ -51,6 +52,7 @@ fn model_step(n: u64) -> Payload {
     Payload::ModelResponseRecorded {
         model: "test-model".into(),
         response: json!({ "turn": n, "ratio": 0.1 + 0.2, "text": "héllo\n\"quoted\"" }),
+        context_seq: None,
     }
 }
 
@@ -467,5 +469,57 @@ pub async fn lists_runs<S: EventStore>(store: &S, _: &ManualClock) -> Result<(),
     let mut expected = vec![a, b];
     expected.sort();
     assert_eq!(runs, expected);
+    Ok(())
+}
+
+/// A worker that parks gives up its lease in the same write: another
+/// worker can take the run at once, and the parker is refused afterwards.
+pub async fn parking_releases_the_lease<S: EventStore>(
+    store: &S,
+    _: &ManualClock,
+) -> Result<(), StoreError> {
+    let run = store.create_run(json!({})).await?;
+    let w1 = store.acquire_lease(run, "w1".into(), TTL).await?;
+    let parked = Payload::RunParked {
+        waiting_for: "input".into(),
+        wake_at: None,
+    };
+
+    // Nothing may follow RunParked in its batch.
+    let err = store
+        .append(&w1, Seq(2), vec![parked.clone(), model_step(1)])
+        .await;
+    assert!(matches!(err, Err(StoreError::InvalidPayload(_))), "{err:?}");
+
+    store
+        .append(&w1, Seq(2), vec![model_step(1), parked])
+        .await?;
+    let err = store.append(&w1, Seq(4), vec![model_step(2)]).await;
+    assert_eq!(err, Err(StoreError::LeaseExpired(Epoch(1))));
+    assert!(store.renew_lease(&w1, TTL).await.is_err());
+
+    // Input arrives without a lease; w2 takes the run without waiting
+    // for w1's TTL and wakes it.
+    store
+        .append_external(
+            run,
+            vec![Payload::UserMessage {
+                author: "owner".into(),
+                content: "go on".into(),
+            }],
+        )
+        .await?;
+    let w2 = store.acquire_lease(run, "w2".into(), TTL).await?;
+    assert_eq!(w2.epoch, Epoch(2));
+    store
+        .append(
+            &w2,
+            Seq(6),
+            vec![Payload::RunWoken {
+                reason: "input".into(),
+            }],
+        )
+        .await?;
+    assert_eq!(verify_chain(&store.read(run, Seq(0)).await?), Ok(()));
     Ok(())
 }

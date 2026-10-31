@@ -111,6 +111,8 @@ impl Fixture {
         harness.binary_args = vec![fake.binary().to_string_lossy().into_owned()];
         harness.repo = repo;
         let spec = RunSpec {
+            origin: None,
+            park_on_answer: false,
             task: "Read README.md and report its first line.".into(),
             agent: AgentSpec {
                 model: String::new(),

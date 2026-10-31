@@ -22,7 +22,7 @@ It is built for one owner with an always-on machine (a Mac Studio, say), not for
 - **The office is one binary.** `shiioo` is the server (the record, the rules, the API and dashboard, the Telegram bot, the workers) and the node that runs the agents, in one process on your machine. Its data is one directory with an embedded database. No Postgres, no containers.
 - **The record is the only state.** Every run is an append-only, hash-chained event log: each model message, tool call, result, rule verdict and approval. Workers are stateless and hold fenced leases, so a crash, a sleeping laptop or a lost connection means the run resumes from its log, and a side effect never silently happens twice.
 - **Rules first, you second.** `rules.toml` says what agents may do without asking (allow / ask / deny per tool, command, path and repo). Before every tool call the harness asks Shiioo; most calls are decided at once, the rest wait for your tap. A dead server means deny, never an unguarded agent.
-- **Your phone is the interface.** Telegram for delegating, approving and being told when something finished or needs you; a mobile dashboard over Tailscale for the live log, the diff and the buttons. No public address anywhere: the bot long-polls, the dashboard sits on your tailnet.
+- **Your phone is the interface, the desk is the big screen.** Telegram for delegating, approving and being told when something finished or needs you; a web dashboard over Tailscale for the live log, the diff and the buttons, one column on the phone and a three-column desk on a wide screen. You can also talk to an agent directly: send it a message mid-run, answer a run that waits for you, or follow up on a finished one. No public address anywhere: the bot long-polls, the dashboard sits on your tailnet.
 
 ## Status
 
@@ -33,7 +33,8 @@ It is built for one owner with an always-on machine (a Mac Studio, say), not for
 | Codex as a harness, same approval hook | built, verified with the real binary |
 | Rules (`rules.toml`), approvals via the harness hook, cancellation | built, verified live |
 | Telegram bot: `/run`, `/status`, `/log`, `/cancel`, `/capacity`, Allow / Deny buttons, notifications | built; tested against a fake Telegram server, live check pending |
-| Mobile dashboard: run list, live log, diff, approvals, cancel | built, verified in a browser |
+| The desk (web dashboard): what needs you in a sidebar, runs by repository, a conversation-style live log, the diff and approval side by side, light and dark, a phone layout | built, verified in a browser |
+| Talking to an agent: messages mid-run (read at its next turn), runs that park for your reply, follow-ups that continue a finished Claude Code or Codex run on its branch and session | built; harness delivery tested with fakes, live check pending |
 | `shiioo install`: login service, keep-awake, token handling | built (macOS launchd; Linux systemd unit untested) |
 | Capacity broker across subscription windows, `[[employees]]`, `/capacity` | built (Codex reports no windows in headless mode yet) |
 | Local models through `ollama/…`, `lmstudio/…`, `openai/…` names | built; untested against a live Ollama |
@@ -94,7 +95,7 @@ shiioo --workspace ~/shiioo-office resume <run-id>     # after Ctrl-C or kill -9
 | [`shiioo-runtime`](crates/shiioo-runtime) | Workers, the native agent loop, the Claude Code and Codex harness drivers, built-in tools, the local machine with its call journal, worktrees. |
 | [`shiioo-rules`](crates/shiioo-rules) | The owner's allow / ask / deny rules. |
 | [`shiioo-providers`](crates/shiioo-providers) | OpenAI-compatible model provider (Ollama, LM Studio, MLX, OpenAI) and the prefix router. |
-| [`shiioo-api`](crates/shiioo-api) | HTTP API and resumable SSE, the approval flow, the capacity tracker and employee broker, the mobile dashboard. |
+| [`shiioo-api`](crates/shiioo-api) | HTTP API and resumable SSE, the approval flow, the capacity tracker and employee broker, the dashboard (the desk). |
 | [`shiioo-telegram`](crates/shiioo-telegram) | Telegram Bot API client, owner-gated command loop, approval buttons, notifications. |
 | [`shiioo-intake`](crates/shiioo-intake) | GitHub-issue intake through `gh`. |
 | [`shiioo-sim`](crates/shiioo-sim) | Seeded simulation of worker crashes, lease races and machine restarts against the kernel's guarantees. |

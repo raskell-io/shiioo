@@ -68,11 +68,16 @@ pub fn classify(path: &str) -> (&'static str, &'static str) {
 }
 
 impl<S: EventStore + 'static> ApiState<S> {
-    /// The repository and worktree of a run on this machine, if it has one.
-    async fn run_paths(&self, run_id: RunId) -> Result<(PathBuf, Option<PathBuf>), ApiError> {
+    /// The repository, worktree and branch of a run on this machine, if it
+    /// has one. A follow-up's are those of the run it continues.
+    async fn run_paths(
+        &self,
+        run_id: RunId,
+    ) -> Result<(PathBuf, Option<PathBuf>, String), ApiError> {
         let log = self.store.read(run_id, Seq(0)).await?;
         let spec = crate::run_spec(&log)
             .ok_or_else(|| ApiError::NotFound("run has no spec".into()))?;
+        let workspace = spec.workspace_run(run_id);
         if let Some(machine) = spec.machine {
             return Err(ApiError::Conflict(format!(
                 "this run worked on {machine}; its files are there, not in the office"
@@ -87,16 +92,15 @@ impl<S: EventStore + 'static> ApiState<S> {
             .options
             .worktrees
             .as_ref()
-            .map(|root| root.join(run_id.to_string()))
+            .map(|root| root.join(workspace.to_string()))
             .filter(|p| p.exists());
-        Ok((repo, worktree))
+        Ok((repo, worktree, branch_for(workspace)))
     }
 
     /// What the run produced: the branch's changes against HEAD, plus
     /// untracked files in the worktree.
     pub async fn artifacts(&self, run_id: RunId) -> Result<Vec<Artifact>, ApiError> {
-        let (repo, worktree) = self.run_paths(run_id).await?;
-        let branch = branch_for(run_id);
+        let (repo, worktree, branch) = self.run_paths(run_id).await?;
         let mut out = Vec::new();
         let diff = git(&repo, &["diff", "--name-status", &format!("HEAD...{branch}")]).await?;
         for line in diff.lines() {
@@ -154,7 +158,7 @@ impl<S: EventStore + 'static> ApiState<S> {
         if path.split('/').any(|p| p == "..") || path.starts_with('/') {
             return Err(ApiError::BadRequest("path must be inside the repository".into()));
         }
-        let (repo, worktree) = self.run_paths(run_id).await?;
+        let (repo, worktree, branch) = self.run_paths(run_id).await?;
         let (_, content_type) = classify(path);
         if let Some(wt) = &worktree {
             let full = wt.join(path);
@@ -168,7 +172,6 @@ impl<S: EventStore + 'static> ApiState<S> {
                     .map_err(|e| ApiError::Failed(format!("{path}: {e}")));
             }
         }
-        let branch = branch_for(run_id);
         let out = tokio::process::Command::new("git")
             .arg("-C")
             .arg(&repo)

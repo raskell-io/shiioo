@@ -52,6 +52,7 @@ pub mod roles;
 pub mod routines;
 pub mod schedule;
 
+pub use artifacts::Artifact;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -60,23 +61,22 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::Stream;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use shiioo_core::{Event, EventStore, Lease, Payload, RunId, Seq, StoreError, Timestamp, WorkerId};
-use shiioo_rules::{Decision, PermissionRequest, RuleSet};
-use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
-use shiioo_runtime::{
-    AgentSpec, HarnessSpec, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
-    open_approval, run_status,
-};
 pub use isolation::IsolationPolicy;
-pub use artifacts::Artifact;
 pub use machines::{Machine, Machines};
 pub use mail::{MailOutcome, MailRequest, MailSender};
 pub use plans::{IssueCreator, Plan, PlanItem, PlanStatus, Plans};
 pub use roles::Role;
 pub use routines::{Routine, RoutineState};
 pub use schedule::Schedule;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use shiioo_core::{Event, EventStore, Lease, Payload, RunId, Seq, StoreError, Timestamp, WorkerId};
+use shiioo_rules::{Decision, PermissionRequest, RuleSet};
+use shiioo_runtime::harness::claude_code::HOOK_TIMEOUT_SECS;
+use shiioo_runtime::{
+    AgentSpec, HarnessSpec, Origin, RunOutcome, RunSpec, RunStatus, Runtime, Worker, branch_for,
+    open_approval, run_status, wake_reason,
+};
 use shiioo_store::Notifying;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -324,6 +324,13 @@ pub struct ApiState<S> {
     /// `Idempotency-Key` → run, so a retried create doesn't start a second
     /// run. In memory for now: it does not survive a restart.
     idempotency: Mutex<HashMap<String, RunId>>,
+    /// `(run, Idempotency-Key)` → where that message landed. Held across
+    /// the append, so a retry racing the first attempt waits for it
+    /// instead of appending twice. In memory, like `idempotency`.
+    message_keys: tokio::sync::Mutex<HashMap<(RunId, String), MessageAck>>,
+    /// Follow-ups by `(run, Idempotency-Key)`: a retried follow-up gets
+    /// the run the first one started.
+    follow_up_keys: tokio::sync::Mutex<HashMap<(RunId, String), RunId>>,
     /// Runs this process is driving, so a resume doesn't start a second
     /// worker in the same process (the lease would refuse it anyway).
     active: Mutex<HashSet<RunId>>,
@@ -359,6 +366,22 @@ pub struct RunView {
     /// The machine the run is addressed to, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// For a follow-up, the run it continues.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RunId>,
+    /// When the run was created, in ms since the epoch.
+    #[serde(default)]
+    pub created_at: u64,
+    /// Who works on it: `claude-code`, `codex`, or the native model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    /// The repository a harness run works on: its label, else the
+    /// directory name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// The branch a repository run works on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// What a harness asks before a tool call (Claude Code `PreToolUse` input).
@@ -387,6 +410,17 @@ pub struct DecideBody {
     pub decision: String,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MessageBody {
+    pub text: String,
+}
+
+/// Where a message landed in the run's log.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageAck {
+    pub seq: u64,
 }
 
 #[derive(Deserialize, Default)]
@@ -419,7 +453,10 @@ impl<S: EventStore + 'static> ApiState<S> {
             .and_then(|path| match Plans::load(&path) {
                 Ok(plans) => Some(plans),
                 Err(e) => {
-                    eprintln!("plans: cannot read {}: {e}; starting without", path.display());
+                    eprintln!(
+                        "plans: cannot read {}: {e}; starting without",
+                        path.display()
+                    );
                     None
                 }
             })
@@ -446,7 +483,10 @@ impl<S: EventStore + 'static> ApiState<S> {
             .and_then(|path| match Machines::load(&path) {
                 Ok(m) => Some(m),
                 Err(e) => {
-                    eprintln!("machines: cannot read {}: {e}; starting without", path.display());
+                    eprintln!(
+                        "machines: cannot read {}: {e}; starting without",
+                        path.display()
+                    );
                     None
                 }
             })
@@ -458,6 +498,8 @@ impl<S: EventStore + 'static> ApiState<S> {
             default_agent,
             options,
             idempotency: Mutex::new(HashMap::new()),
+            message_keys: tokio::sync::Mutex::new(HashMap::new()),
+            follow_up_keys: tokio::sync::Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             plans: Mutex::new(plans),
@@ -498,7 +540,14 @@ impl<S: EventStore + 'static> ApiState<S> {
     ) -> Result<String, ApiError> {
         let mut machines = lock(&self.machines);
         let token = machines
-            .enroll(enrollment_token, name, labels, capabilities, version, now_ms().0)
+            .enroll(
+                enrollment_token,
+                name,
+                labels,
+                capabilities,
+                version,
+                now_ms().0,
+            )
             .map_err(ApiError::BadRequest)?;
         self.save_machines(&machines);
         Ok(token)
@@ -506,7 +555,9 @@ impl<S: EventStore + 'static> ApiState<S> {
 
     /// The machine a bearer token belongs to, if it is a machine's.
     pub fn machine_for_token(&self, token: &str) -> Option<String> {
-        lock(&self.machines).authenticate(token).map(|m| m.name.clone())
+        lock(&self.machines)
+            .authenticate(token)
+            .map(|m| m.name.clone())
     }
 
     pub fn machine_heartbeat(
@@ -580,7 +631,10 @@ impl<S: EventStore + 'static> ApiState<S> {
             if selector != machine && !labels.contains(&selector) {
                 continue;
             }
-            if matches!(run_status(&log), RunStatus::Open | RunStatus::WaitingApproval { .. }) {
+            if matches!(
+                run_status(&log),
+                RunStatus::Open | RunStatus::WaitingApproval { .. }
+            ) {
                 out.push(run_id);
             }
         }
@@ -636,8 +690,11 @@ impl<S: EventStore + 'static> ApiState<S> {
                         .join(", ")
                 ))
             })?;
-        let (mut runtime, mut agent, employee) =
-            self.assign_with(&role.employee, repo, isolation.or(role.isolation.as_deref()))?;
+        let (mut runtime, mut agent, employee) = self.assign_with(
+            &role.employee,
+            repo,
+            isolation.or(role.isolation.as_deref()),
+        )?;
         role.apply(&mut runtime, &mut agent);
         Ok((runtime, agent, format!("{employee} as @{}", role.name)))
     }
@@ -677,6 +734,8 @@ impl<S: EventStore + 'static> ApiState<S> {
             agent.tools = plans::planner_tools();
         }
         let spec = RunSpec {
+            origin: None,
+            park_on_answer: false,
             task: plans::planner_task(repo_label, goal),
             agent,
             runtime,
@@ -708,7 +767,10 @@ impl<S: EventStore + 'static> ApiState<S> {
         if let Some(dir) = &self.options.data_dir
             && let Err(e) = plans.save(&plans::plans_file(dir))
         {
-            eprintln!("plans: cannot write {}: {e}", plans::plans_file(dir).display());
+            eprintln!(
+                "plans: cannot write {}: {e}",
+                plans::plans_file(dir).display()
+            );
         }
     }
 
@@ -728,7 +790,10 @@ impl<S: EventStore + 'static> ApiState<S> {
                     PlanStatus::Proposed
                 }
                 Err(reason) => PlanStatus::Failed {
-                    reason: format!("{reason}; the planner said: {}", one_line(&Value::from(output.as_str()), 300)),
+                    reason: format!(
+                        "{reason}; the planner said: {}",
+                        one_line(&Value::from(output.as_str()), 300)
+                    ),
                 },
             },
             RunStatus::Failed { reason }
@@ -736,9 +801,11 @@ impl<S: EventStore + 'static> ApiState<S> {
             | RunStatus::NeedsAttention { reason } => PlanStatus::Failed {
                 reason: reason.clone(),
             },
-            RunStatus::Open | RunStatus::WaitingApproval { .. } => PlanStatus::Failed {
-                reason: "the planning run stopped without finishing".into(),
-            },
+            RunStatus::Open | RunStatus::WaitingApproval { .. } | RunStatus::Parked { .. } => {
+                PlanStatus::Failed {
+                    reason: "the planning run stopped without finishing".into(),
+                }
+            }
         };
         let text = plans::plan_text(plan);
         self.save_plans(&plans);
@@ -801,7 +868,10 @@ impl<S: EventStore + 'static> ApiState<S> {
         })?;
         let plan = {
             let plans = lock(&self.plans);
-            plans.find(id_or_prefix).cloned().map_err(ApiError::NotFound)?
+            plans
+                .find(id_or_prefix)
+                .cloned()
+                .map_err(ApiError::NotFound)?
         };
         if !matches!(plan.status, PlanStatus::Proposed) {
             return Err(ApiError::Conflict(format!(
@@ -837,7 +907,10 @@ impl<S: EventStore + 'static> ApiState<S> {
                 };
             }
             self.save_plans(&plans);
-            plans.find(&plan.run_id).map(plans::plan_text).unwrap_or_default()
+            plans
+                .find(&plan.run_id)
+                .map(plans::plan_text)
+                .unwrap_or_default()
         };
         match failure {
             Some(why) => Err(ApiError::Failed(format!(
@@ -881,6 +954,8 @@ impl<S: EventStore + 'static> ApiState<S> {
         };
         let run_id = self
             .start_run(RunSpec {
+                origin: None,
+                park_on_answer: false,
                 task: routine.task.clone(),
                 agent,
                 runtime,
@@ -889,7 +964,9 @@ impl<S: EventStore + 'static> ApiState<S> {
             .await?;
         {
             let mut state = lock(&self.routine_state);
-            state.last_fired.insert(routine.name.clone(), routines::now_ms());
+            state
+                .last_fired
+                .insert(routine.name.clone(), routines::now_ms());
             self.save_routine_state(&state);
         }
         Ok((
@@ -933,7 +1010,11 @@ impl<S: EventStore + 'static> ApiState<S> {
         for r in self.options.routines.iter().filter(|r| r.enabled) {
             let line = match r.parsed() {
                 Ok(schedule) => {
-                    let anchor = state.last_fired.get(&r.name).copied().unwrap_or(self.started_at);
+                    let anchor = state
+                        .last_fired
+                        .get(&r.name)
+                        .copied()
+                        .unwrap_or(self.started_at);
                     let next = routines::ms_to_local(anchor)
                         .map(|a| schedule.next_after(a.max(now.min(a))))
                         .map(|n| if n < now { schedule.next_after(now) } else { n });
@@ -941,7 +1022,9 @@ impl<S: EventStore + 'static> ApiState<S> {
                         "⏰ {}: {schedule}, next {}{}",
                         r.name,
                         next.map_or_else(|| "?".to_owned(), schedule::humanize),
-                        r.repo.as_deref().map_or(String::new(), |repo| format!(" on {repo}"))
+                        r.repo
+                            .as_deref()
+                            .map_or(String::new(), |repo| format!(" on {repo}"))
                     )
                 }
                 Err(e) => format!("⏰ {}: {e}", r.name),
@@ -963,17 +1046,17 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// The scheduler: checks every 30 seconds what is due and fires it.
     /// Runs until the future is dropped.
     pub async fn run_scheduler(self: Arc<Self>) {
-        let report_schedule = self
-            .options
-            .report
-            .as_deref()
-            .and_then(|r| match schedule::parse(r) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    eprintln!("report: {e}; the report is only available with /report");
-                    None
-                }
-            });
+        let report_schedule =
+            self.options
+                .report
+                .as_deref()
+                .and_then(|r| match schedule::parse(r) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        eprintln!("report: {e}; the report is only available with /report");
+                        None
+                    }
+                });
         let routines: Vec<(Routine, Schedule)> = self
             .options
             .routines
@@ -991,12 +1074,17 @@ impl<S: EventStore + 'static> ApiState<S> {
             return;
         }
         loop {
-            self.scheduler_tick(&routines, report_schedule.as_ref()).await;
+            self.scheduler_tick(&routines, report_schedule.as_ref())
+                .await;
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     }
 
-    async fn scheduler_tick(self: &Arc<Self>, routines: &[(Routine, Schedule)], report: Option<&Schedule>) {
+    async fn scheduler_tick(
+        self: &Arc<Self>,
+        routines: &[(Routine, Schedule)],
+        report: Option<&Schedule>,
+    ) {
         let now = chrono::Local::now();
         for (routine, schedule) in routines {
             let anchor = lock(&self.routine_state)
@@ -1011,7 +1099,9 @@ impl<S: EventStore + 'static> ApiState<S> {
                 Ok(reply) => reply,
                 Err(e) => {
                     let mut state = lock(&self.routine_state);
-                    state.last_fired.insert(routine.name.clone(), routines::now_ms());
+                    state
+                        .last_fired
+                        .insert(routine.name.clone(), routines::now_ms());
                     self.save_routine_state(&state);
                     format!("⏰ routine {} could not start: {e}", routine.name)
                 }
@@ -1023,7 +1113,10 @@ impl<S: EventStore + 'static> ApiState<S> {
         if let Some(schedule) = report {
             let (anchor, since) = {
                 let state = lock(&self.routine_state);
-                (state.last_report.unwrap_or(self.started_at), state.last_report)
+                (
+                    state.last_report.unwrap_or(self.started_at),
+                    state.last_report,
+                )
             };
             if routines::due(schedule, anchor, now).is_some() {
                 let text = self.report(since).await;
@@ -1254,13 +1347,16 @@ impl<S: EventStore + 'static> ApiState<S> {
     /// 200 KiB.
     pub async fn diff(&self, run_id: RunId) -> Result<String, ApiError> {
         let log = self.store.read(run_id, Seq(0)).await?;
-        let repo = run_spec(&log)
+        let spec = run_spec(&log);
+        let workspace = spec.as_ref().map_or(run_id, |s| s.workspace_run(run_id));
+        let repo = spec
             .and_then(|spec| match spec.runtime {
                 Runtime::Harness(h) => h.repo,
                 Runtime::Native => None,
             })
             .ok_or_else(|| ApiError::NotFound("this run has no repository".into()))?;
-        let range = format!("HEAD...{}", branch_for(run_id));
+        // A follow-up's branch is the one it continues.
+        let range = format!("HEAD...{}", branch_for(workspace));
         let out = tokio::process::Command::new("git")
             .arg("-C")
             .arg(&repo)
@@ -1287,6 +1383,140 @@ impl<S: EventStore + 'static> ApiState<S> {
     }
 
     /// Asks a run to stop. The worker closes it at its next step.
+    /// The owner writes to a run: the message is appended without a lease
+    /// and the run is driven if that made it runnable (a parked run wakes;
+    /// a run being worked on reads it at its next turn, a harness when its
+    /// process finishes, by resuming the session with it). With `key`, a
+    /// repeat returns where the first one landed (`Ok((ack, false))`).
+    pub async fn send_message(
+        self: &Arc<Self>,
+        run_id: RunId,
+        text: &str,
+        key: Option<String>,
+    ) -> Result<(MessageAck, bool), ApiError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(ApiError::BadRequest("the message is empty".into()));
+        }
+        let mut keys = self.message_keys.lock().await;
+        if let Some(ack) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
+            return Ok((*ack, false));
+        }
+        let events = match self
+            .store
+            .append_external(
+                run_id,
+                vec![Payload::UserMessage {
+                    author: "owner".into(),
+                    content: text.to_owned(),
+                }],
+            )
+            .await
+        {
+            Ok(events) => events,
+            Err(StoreError::RunClosed(_)) => {
+                return Err(ApiError::Conflict(
+                    "the run has finished; it no longer accepts messages".into(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let ack = MessageAck {
+            seq: events.last().map_or(0, |e| e.seq.0),
+        };
+        if let Some(k) = key {
+            keys.insert((run_id, k), ack);
+        }
+        drop(keys);
+        // A parked run is runnable again; an open one that nobody drives
+        // (after a restart, say) is picked up so the message is answered.
+        if matches!(self.run_view(run_id).await?.status, RunStatus::Open) {
+            self.spawn_drive(run_id);
+            self.work_notify.notify_waiters();
+        }
+        Ok((ack, true))
+    }
+
+    /// Follows up on a finished harness run: starts a run that continues
+    /// it on the same worktree and branch, resuming its harness session
+    /// with `text` as the prompt (`docs/design/desk.md` R9). The finished
+    /// run stays closed. With `key`, a repeat returns the run the first
+    /// one started (`Ok((run, false))`).
+    pub async fn follow_up(
+        self: &Arc<Self>,
+        run_id: RunId,
+        text: &str,
+        key: Option<String>,
+    ) -> Result<(RunId, bool), ApiError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(ApiError::BadRequest("the message is empty".into()));
+        }
+        let mut keys = self.follow_up_keys.lock().await;
+        if let Some(run) = key.as_ref().and_then(|k| keys.get(&(run_id, k.clone()))) {
+            return Ok((*run, false));
+        }
+        let log = self.store.read(run_id, Seq(0)).await?;
+        if !log.last().is_some_and(|e| e.payload.is_terminal()) {
+            return Err(ApiError::Conflict(
+                "the run is still open; send it a message instead".into(),
+            ));
+        }
+        let original = run_spec(&log)
+            .ok_or_else(|| ApiError::Internal("the run has no spec".into()))?;
+        if matches!(original.runtime, Runtime::Native) {
+            return Err(ApiError::Conflict(
+                "only Claude Code and Codex runs can be followed up; start a new task instead"
+                    .into(),
+            ));
+        }
+        let workspace = original.workspace_run(run_id);
+        // Two runs in one worktree would edit the same files.
+        if let Some(busy) = self.open_run_in(workspace).await? {
+            return Err(ApiError::Conflict(format!(
+                "run {} is still working on this branch; wait for it or send it a message",
+                &busy.to_string()[..8]
+            )));
+        }
+        let session = log
+            .iter()
+            .rev()
+            .find_map(|e| match &*e.payload {
+                Payload::HarnessSessionStarted { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .or_else(|| original.origin.as_ref().and_then(|o| o.session.clone()));
+        let spec = RunSpec {
+            task: text.to_owned(),
+            origin: Some(Origin {
+                run: run_id,
+                seq: Seq(log.len().saturating_sub(1) as u64),
+                workspace,
+                session,
+            }),
+            ..original
+        };
+        let run = self.start_run(spec).await?;
+        if let Some(k) = key {
+            keys.insert((run_id, k), run);
+        }
+        Ok((run, true))
+    }
+
+    /// An unfinished run working in `workspace`'s worktree, if any.
+    async fn open_run_in(&self, workspace: RunId) -> Result<Option<RunId>, ApiError> {
+        for run in self.store.list_runs().await? {
+            let log = self.store.read(run, Seq(0)).await?;
+            if log.last().is_some_and(|e| e.payload.is_terminal()) {
+                continue;
+            }
+            if run_spec(&log).is_some_and(|s| s.workspace_run(run) == workspace) {
+                return Ok(Some(run));
+            }
+        }
+        Ok(None)
+    }
+
     pub async fn cancel(&self, run_id: RunId, by: &str, reason: &str) -> Result<(), ApiError> {
         match self
             .store
@@ -1489,6 +1719,15 @@ impl<S: EventStore + 'static> ApiState<S> {
                 }
             }
             lock(&state.active).remove(&run_id);
+            // A message that arrived while this drive was ending found the
+            // run still active and did not start another; look again now
+            // that it is not.
+            if let Ok(log) = state.store.read(run_id, Seq(0)).await
+                && wake_reason(&log).is_some()
+            {
+                state.spawn_drive(run_id);
+                return;
+            }
             state.after_run(run_id).await;
         });
     }
@@ -1564,6 +1803,11 @@ fn repo_label(repos: &BTreeMap<String, PathBuf>, log: &[Event]) -> Option<String
 }
 
 fn view_of(run_id: RunId, log: &[Event]) -> RunView {
+    let spec = run_spec(log);
+    let harness = spec.as_ref().and_then(|s| match &s.runtime {
+        Runtime::Harness(h) => Some(h.clone()),
+        Runtime::Native => None,
+    });
     let task = match log.first().map(|e| &*e.payload) {
         Some(Payload::RunCreated { spec }) => spec["task"].as_str().unwrap_or_default().to_owned(),
         _ => String::new(),
@@ -1584,7 +1828,25 @@ fn view_of(run_id: RunId, log: &[Event]) -> RunView {
         updated_at: log.last().map_or(0, |e| e.recorded_at.0),
         worker,
         machine,
+        origin: spec.as_ref().and_then(|s| s.origin.as_ref()).map(|o| o.run),
+        created_at: log.first().map_or(0, |e| e.recorded_at.0),
+        runtime: spec.as_ref().map(|s| match &s.runtime {
+            Runtime::Harness(h) => h.harness.name().to_owned(),
+            Runtime::Native => s.agent.model.clone(),
+        }),
+        repo: harness
+            .as_ref()
+            .and_then(|h| h.repo_label.clone().or_else(|| dir_name(h.repo.as_deref()?))),
+        branch: harness
+            .as_ref()
+            .filter(|h| h.repo.is_some())
+            .and(spec.as_ref())
+            .map(|s| branch_for(s.workspace_run(run_id))),
     }
+}
+
+fn dir_name(path: &std::path::Path) -> Option<String> {
+    path.file_name().map(|n| n.to_string_lossy().into_owned())
 }
 
 /// One line describing an event, for logs and phone messages.
@@ -1594,7 +1856,9 @@ pub fn describe(ev: &Event) -> String {
         Payload::LeaseAcquired { worker, .. } => {
             format!("lease acquired by {} (epoch {})", worker.0, ev.epoch.0)
         }
-        Payload::ModelResponseRecorded { model, response } => {
+        Payload::ModelResponseRecorded {
+            model, response, ..
+        } => {
             let text: Vec<&str> = response["content"]
                 .as_array()
                 .into_iter()
@@ -1669,7 +1933,11 @@ pub fn describe(ev: &Event) -> String {
         Payload::SecretRedacted { name, count } => {
             format!("redacted secret {name} ({count} occurrence(s))")
         }
-        Payload::MailSent { to, subject, .. } => format!("mail sent to {}: {subject}", to.join(", ")),
+        Payload::MailSent { to, subject, .. } => {
+            format!("mail sent to {}: {subject}", to.join(", "))
+        }
+        Payload::RunParked { waiting_for, .. } => format!("parked, waiting for {waiting_for}"),
+        Payload::RunWoken { reason } => format!("woken by {reason}"),
         Payload::RunCompleted { output } => format!("completed: {}", one_line(output, 140)),
         Payload::RunFailed { reason } => format!("failed: {reason}"),
         Payload::RunCancelled { reason } => format!("cancelled: {reason}"),
@@ -1694,14 +1962,23 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
             get(list_events::<S>).post(append_events::<S>),
         )
         .route("/v1/runs/{id}/events/stream", get(stream_events::<S>))
+        .route("/v1/events/stream", get(office_events::<S>))
         .route("/v1/runs/{id}/resume", post(resume_run::<S>))
         .route("/v1/runs/{id}/cancel", post(cancel_run::<S>))
+        .route("/v1/runs/{id}/messages", post(post_message::<S>))
+        .route("/v1/runs/{id}/follow-up", post(post_follow_up::<S>))
         .route("/v1/runs/{id}/lease", post(acquire_lease::<S>))
         .route("/v1/runs/{id}/lease/renew", post(renew_lease::<S>))
         .route("/v1/machines", get(machines_list::<S>))
         .route("/v1/machines/enrollments", post(create_enrollment::<S>))
-        .route("/v1/machines/{name}", axum::routing::delete(revoke_machine::<S>))
-        .route("/v1/machines/{name}/heartbeat", post(machine_heartbeat::<S>))
+        .route(
+            "/v1/machines/{name}",
+            axum::routing::delete(revoke_machine::<S>),
+        )
+        .route(
+            "/v1/machines/{name}/heartbeat",
+            post(machine_heartbeat::<S>),
+        )
         .route("/v1/machines/{name}/work", get(machine_work::<S>))
         .route("/v1/runs/{id}/permissions", post(permission::<S>))
         .route(
@@ -1733,14 +2010,13 @@ pub fn router<S: EventStore + 'static>(state: Arc<ApiState<S>>) -> Router {
         .route("/v1/machines/enroll", post(enroll_machine::<S>))
         .route("/", get(ui_index))
         .route("/ui", get(ui_index))
-        .route("/ui/app.js", get(ui_js))
-        .route("/ui/app.css", get(ui_css))
+        .route("/ui/{*path}", get(ui_file))
         .merge(authenticated)
         .with_state(state)
 }
 
-// The dashboard: three static files compiled into the binary. The page
-// itself is public; everything it shows comes from authenticated calls.
+// The dashboard: static files compiled into the binary. The page itself
+// is public; everything it shows comes from authenticated calls.
 async fn ui_index() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -1748,18 +2024,53 @@ async fn ui_index() -> impl IntoResponse {
     )
 }
 
-async fn ui_js() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../ui/app.js"),
-    )
-}
+/// Every file under `ui/` the page loads, by its path below `/ui/`.
+/// `tests/dashboard.rs` checks this list against the directory.
+pub const UI_FILES: &[(&str, &str)] = &[
+    ("app.css", include_str!("../ui/app.css")),
+    ("app.js", include_str!("../ui/app.js")),
+    ("core.js", include_str!("../ui/core.js")),
+    ("describe.js", include_str!("../ui/describe.js")),
+    ("keys.js", include_str!("../ui/keys.js")),
+    ("office.js", include_str!("../ui/office.js")),
+    ("stream.js", include_str!("../ui/stream.js")),
+    ("views/diff.js", include_str!("../ui/views/diff.js")),
+    ("views/log.js", include_str!("../ui/views/log.js")),
+    ("views/run.js", include_str!("../ui/views/run.js")),
+    ("views/runs.js", include_str!("../ui/views/runs.js")),
+    ("views/side.js", include_str!("../ui/views/side.js")),
+];
 
-async fn ui_css() -> impl IntoResponse {
+/// The dashboard's fonts (`ui/fonts/`, Latin subsets of the brand fonts
+/// in `assets/brand/fonts`), served from the binary like the code.
+pub const UI_FONTS: &[(&str, &[u8])] = &[
+    ("fonts/inter.woff2", include_bytes!("../ui/fonts/inter.woff2")),
     (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_str!("../ui/app.css"),
-    )
+        "fonts/bricolage.woff2",
+        include_bytes!("../ui/fonts/bricolage.woff2"),
+    ),
+];
+
+async fn ui_file(Path(path): Path<String>) -> Response {
+    if let Some((_, body)) = UI_FONTS.iter().find(|(name, _)| *name == path) {
+        return (
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=604800"),
+            ],
+            *body,
+        )
+            .into_response();
+    }
+    let Some((_, body)) = UI_FILES.iter().find(|(name, _)| *name == path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let content_type = match path.rsplit('.').next() {
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+    ([(header::CONTENT_TYPE, content_type)], *body).into_response()
 }
 
 async fn diff_run<S: EventStore + 'static>(
@@ -1835,9 +2146,15 @@ async fn create_run<S: EventStore + 'static>(
     let machine = body.machine.clone();
     let spec = match (&body.role, &body.employee) {
         (Some(role), _) => {
-            let repo = body.repo.as_deref().map(|r| state.repo_for(r)).transpose()?;
+            let repo = body
+                .repo
+                .as_deref()
+                .map(|r| state.repo_for(r))
+                .transpose()?;
             let (runtime, agent, _) = state.assign_role(role, repo, body.isolation.as_deref())?;
             RunSpec {
+                origin: None,
+                park_on_answer: false,
                 task: body.task,
                 agent,
                 runtime,
@@ -1853,6 +2170,8 @@ async fn create_run<S: EventStore + 'static>(
             let (runtime, agent, _) =
                 state.assign_with(employee, repo, body.isolation.as_deref())?;
             RunSpec {
+                origin: None,
+                park_on_answer: false,
                 task: body.task,
                 agent,
                 runtime,
@@ -1870,6 +2189,8 @@ async fn create_run<S: EventStore + 'static>(
                     .map_err(ApiError::BadRequest)?;
             }
             RunSpec {
+                origin: None,
+                park_on_answer: false,
                 task: body.task,
                 agent: body.agent.unwrap_or_else(|| state.default_agent.clone()),
                 runtime,
@@ -1921,7 +2242,9 @@ async fn renew_lease<S: EventStore + 'static>(
     if body.lease.run_id != run_id {
         return Err(ApiError::BadRequest("the lease is for another run".into()));
     }
-    Ok(Json(state.store.renew_lease(&body.lease, body.ttl_ms).await?))
+    Ok(Json(
+        state.store.renew_lease(&body.lease, body.ttl_ms).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -2133,9 +2456,7 @@ async fn report<S: EventStore + 'static>(
     Ok(state.report(None).await)
 }
 
-async fn roles<S: EventStore + 'static>(
-    State(state): State<Arc<ApiState<S>>>,
-) -> Json<Vec<Role>> {
+async fn roles<S: EventStore + 'static>(State(state): State<Arc<ApiState<S>>>) -> Json<Vec<Role>> {
     Json(state.roles().to_vec())
 }
 
@@ -2177,7 +2498,10 @@ async fn create_plan<S: EventStore + 'static>(
     let run_id = state
         .start_plan(&body.repo, &body.goal, body.role.as_deref())
         .await?;
-    Ok((StatusCode::CREATED, Json(json!({ "plan": run_id, "run": run_id }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "plan": run_id, "run": run_id })),
+    ))
 }
 
 async fn plans_list<S: EventStore + 'static>(
@@ -2241,6 +2565,44 @@ async fn resume_run<S: EventStore + 'static>(
     state.spawn_drive(run_id);
     state.work_notify.notify_waiters();
     Ok((StatusCode::ACCEPTED, Json(current)))
+}
+
+async fn post_message<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<MessageBody>,
+) -> Result<(StatusCode, Json<MessageAck>), ApiError> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let (ack, new) = state.send_message(parse_run(&id)?, &body.text, key).await?;
+    let code = if new {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((code, Json(ack)))
+}
+
+async fn post_follow_up<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<MessageBody>,
+) -> Result<(StatusCode, Json<RunView>), ApiError> {
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let (run, new) = state.follow_up(parse_run(&id)?, &body.text, key).await?;
+    let code = if new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((code, Json(state.run_view(run).await?)))
 }
 
 async fn cancel_run<S: EventStore + 'static>(
@@ -2401,6 +2763,142 @@ impl<S: EventStore> Feed<S> {
                 () = tokio::time::sleep(Duration::from_secs(2)) => {}
             }
         }
+    }
+}
+
+/// The office-wide stream: a `run` frame with the run's view whenever a run
+/// is created or gets new events, after a first pass over every run (or,
+/// with `Last-Event-ID`, every run updated since then) closed by one
+/// `ready` frame. Frame ids are the view's `updated_at`; a reconnect may
+/// repeat a run, never miss one. Views are snapshots, so a client keeps
+/// the latest per run id.
+async fn office_events<S: EventStore + 'static>(
+    State(state): State<Arc<ApiState<S>>>,
+    headers: HeaderMap,
+) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
+    let since = match headers.get("last-event-id").and_then(|v| v.to_str().ok()) {
+        Some(last) => Some(last.trim().parse::<u64>().map_err(|_| {
+            ApiError::BadRequest("Last-Event-ID must be an updated_at from this stream".into())
+        })?),
+        None => None,
+    };
+    // Subscribe before the first scan, so no write can slip in between.
+    let feed = OfficeFeed {
+        changes: state.store.subscribe_all(),
+        store: Arc::clone(&state.store),
+        sent: HashMap::new(),
+        pending: VecDeque::new(),
+        since,
+        scanned: false,
+        ready_sent: false,
+    };
+    let stream = futures_util::stream::unfold(feed, |mut feed| async move {
+        let frame = match feed.next_frame().await? {
+            OfficeFrame::Ready => SseEvent::default().event("ready").data("{}"),
+            OfficeFrame::Run(view) => SseEvent::default()
+                .event("run")
+                .id(view.updated_at.to_string())
+                .json_data(&view)
+                .unwrap_or_else(|e| SseEvent::default().event("error").data(e.to_string())),
+        };
+        Some((Ok(frame), feed))
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+enum OfficeFrame {
+    Run(Box<RunView>),
+    Ready,
+}
+
+/// Turns the store's "this run changed" hints into run views, sending a
+/// run only when its log grew since it was last sent.
+struct OfficeFeed<S> {
+    store: Arc<Notifying<S>>,
+    changes: tokio::sync::broadcast::Receiver<RunId>,
+    /// The `next_seq` of each run as last sent (or skipped by `since`).
+    sent: HashMap<RunId, u64>,
+    pending: VecDeque<RunView>,
+    since: Option<u64>,
+    scanned: bool,
+    ready_sent: bool,
+}
+
+impl<S: EventStore> OfficeFeed<S> {
+    async fn next_frame(&mut self) -> Option<OfficeFrame> {
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            if let Some(view) = self.pending.pop_front() {
+                return Some(OfficeFrame::Run(Box::new(view)));
+            }
+            if !self.scanned {
+                self.scanned = true;
+                let since = self.since.take();
+                self.scan(None, since).await;
+                continue;
+            }
+            if !self.ready_sent {
+                self.ready_sent = true;
+                return Some(OfficeFrame::Ready);
+            }
+            tokio::select! {
+                first = self.changes.recv() => match first {
+                    Ok(run_id) => {
+                        // Writes come in bursts (a harness streaming its
+                        // turn); gather them briefly and send each run once.
+                        let mut ids = HashSet::from([run_id]);
+                        let window = tokio::time::sleep(Duration::from_millis(100));
+                        tokio::pin!(window);
+                        let mut lagged = false;
+                        loop {
+                            tokio::select! {
+                                next = self.changes.recv() => match next {
+                                    Ok(id) => { ids.insert(id); }
+                                    Err(RecvError::Lagged(_)) => { lagged = true; break; }
+                                    Err(RecvError::Closed) => return None,
+                                },
+                                () = &mut window => break,
+                            }
+                        }
+                        if lagged {
+                            self.scan(None, None).await;
+                        } else {
+                            self.scan(Some(ids), None).await;
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => self.scan(None, None).await,
+                    Err(RecvError::Closed) => return None,
+                },
+                // Writes by other processes (a `shiioo run` on the same
+                // store) are not announced; a periodic pass finds them.
+                () = tokio::time::sleep(Duration::from_secs(10)) => self.scan(None, None).await,
+            }
+        }
+    }
+
+    /// Queues the views of `only` (or of every run) whose log grew since
+    /// they were last sent, oldest change first. With `since`, runs last
+    /// updated before it are marked as sent instead.
+    async fn scan(&mut self, only: Option<HashSet<RunId>>, since: Option<u64>) {
+        let ids = match only {
+            Some(ids) => ids.into_iter().collect(),
+            None => self.store.list_runs().await.unwrap_or_default(),
+        };
+        let mut views = Vec::new();
+        for run_id in ids {
+            let Ok(log) = self.store.read(run_id, Seq(0)).await else {
+                continue;
+            };
+            let view = view_of(run_id, &log);
+            if self.sent.insert(run_id, view.next_seq) == Some(view.next_seq) {
+                continue;
+            }
+            if since.is_none_or(|t| view.updated_at >= t) {
+                views.push(view);
+            }
+        }
+        views.sort_by_key(|v| v.updated_at);
+        self.pending.extend(views);
     }
 }
 
